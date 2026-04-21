@@ -14,9 +14,6 @@
       "resizeMode": "contain",
       "backgroundColor": "#04090f"
     },
-    "ios": {
-      "supportsTablet": true
-    },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
