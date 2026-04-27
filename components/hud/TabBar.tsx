@@ -263,7 +263,7 @@ const s = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  iconWrapActive: { backgroundColor: Colors.skyDim },
+  iconWrapActive: { backgroundColor: Colors.skyDim, borderRadius: Radius.md },
   label: { fontSize: 9, color: Colors.dim, letterSpacing: 0.5 },
   labelActive: { color: Colors.sky },
   badge: {

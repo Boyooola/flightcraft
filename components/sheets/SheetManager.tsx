@@ -51,8 +51,6 @@ export default function SheetManager() {
     return ratios.map((r) => Math.round(availableH * r));
   }, [activeSheet, availableH]);
 
-  console.log("activeSheet", activeSheet);
-
   useEffect(() => {
     if (activeSheet) {
       const t = setTimeout(() => sheetRef.current?.snapToIndex(0), 30);

@@ -11,7 +11,13 @@ import { getCurrentUser, useAuth } from "@/hooks/useAuth";
 import { useTabBarHeight } from "@/hooks/useSheetLayout";
 import { fmtCash } from "@/lib/revenue";
 import { supabase } from "@/lib/supabase";
-import { useAirline, useDay, useGameStore, useIsAnonymous } from "@/store";
+import {
+  useAirline,
+  useDay,
+  useGameStore,
+  useIsAnonymous,
+  useLoadComplete,
+} from "@/store";
 import { Ionicons } from "@expo/vector-icons";
 import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import { useEffect, useState } from "react";
@@ -125,6 +131,7 @@ export default function SettingsSheet() {
   const [userEmail, setUserEmail] = useState<string | null>(null);
 
   const isAnonymous = useIsAnonymous();
+  const loadComplete = useLoadComplete();
   const { linkGoogleAccount } = useAuth();
   const color = airline?.color ?? Colors.sky;
 
@@ -266,7 +273,18 @@ export default function SettingsSheet() {
 
       {/* ACCOUNT */}
       <SectionHeader label="ACCOUNT" />
-      {isAnonymous ? (
+
+      {/* Loading — session not yet confirmed */}
+      {!loadComplete && (
+        <SettingRow
+          icon="person-circle-outline"
+          label="Loading account..."
+          sublabel=""
+        />
+      )}
+
+      {/* Guest — show sync option */}
+      {loadComplete && isAnonymous && (
         <>
           <SettingRow
             icon="person-outline"
@@ -276,8 +294,8 @@ export default function SettingsSheet() {
           <Divider />
           <SettingRow
             icon="logo-google"
-            label={linking ? "Linking..." : "Link Google Account"}
-            sublabel="Sync progress across devices · enables purchases"
+            label={linking ? "Connecting..." : "Sync with Google"}
+            sublabel="Save progress across devices · required for purchases"
             onPress={linking ? undefined : handleLinkGoogle}
             right={
               linking ? (
@@ -289,7 +307,11 @@ export default function SettingsSheet() {
           />
           {linkError && (
             <View
-              style={{ paddingHorizontal: Spacing.lg, marginTop: -Spacing.sm }}
+              style={{
+                paddingHorizontal: Spacing.lg,
+                marginTop: -Spacing.sm,
+                marginBottom: Spacing.sm,
+              }}
             >
               <Text style={{ fontSize: 10, color: Colors.red }}>
                 {linkError}
@@ -297,13 +319,18 @@ export default function SettingsSheet() {
             </View>
           )}
         </>
-      ) : (
+      )}
+
+      {/* Google account — show account info only */}
+      {loadComplete && !isAnonymous && (
         <SettingRow
-          icon="checkmark-circle-outline"
+          icon="logo-google"
           label="Google Account"
-          sublabel={userEmail ?? "Signed in · progress synced"}
+          sublabel={userEmail ?? "Signed in · progress synced across devices"}
+          right={<Ionicons name="checkmark-circle" size={16} color="#22c55e" />}
         />
       )}
+
       <Divider />
       <SettingRow
         icon="trash-outline"

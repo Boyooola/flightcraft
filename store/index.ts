@@ -271,7 +271,7 @@ export const useGameStore = create<GameStore>()(
   devtools(
     subscribeWithSelector((set, get) => ({
       // ── Initial state ────────────────────────────────────────────
-      isAnonymous: true,
+      isAnonymous: false, // set correctly by useGameLoader after session check
       loadSteps: INITIAL_LOAD_STEPS,
       loadComplete: false,
       loadError: null,

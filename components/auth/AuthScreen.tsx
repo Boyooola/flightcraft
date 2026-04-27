@@ -17,7 +17,7 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
-  View
+  View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -60,20 +60,6 @@ export default function AuthScreen() {
             </>
           )}
         </TouchableOpacity>
-
-        {/* Benefits of signing in */}
-        <View style={s.benefits}>
-          {[
-            { icon: "cloud-outline", text: "Progress saved across devices" },
-            { icon: "trophy-outline", text: "Global leaderboard ranking" },
-            { icon: "card-outline", text: "Required for in-app purchases" },
-          ].map(({ icon, text }) => (
-            <View key={icon} style={s.benefitRow}>
-              <Ionicons name={icon as any} size={14} color={Colors.sky} />
-              <Text style={s.benefitTxt}>{text}</Text>
-            </View>
-          ))}
-        </View>
 
         {/* Divider */}
         <View style={s.divider}>
