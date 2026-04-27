@@ -64,6 +64,7 @@ export default {
         },
       ],
       "@react-native-google-signin/google-signin",
+      "@sentry/react-native",
     ],
 
     experiments: {
