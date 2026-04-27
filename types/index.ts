@@ -20,6 +20,17 @@ export type GamePhase =
   | "playing";
 export type GameSpeed = 0 | 1 | 2 | 3;
 
+// Sheet names — drives which bottom sheet is visible
+export type ActiveSheet =
+  | null
+  | "airport"
+  | "fleet"
+  | "finance"
+  | "routes"
+  | "settings"
+  | "route-assign"
+  | "create-route";
+
 export interface LoadStep {
   key: string;
   label: string;
@@ -101,6 +112,8 @@ export interface Route {
   demand: Demand;
   plane: OwnedPlane;
   hub_iata: string;
+  via_iata: string | null; // connecting airport (null = direct)
+  total_dist_nm: number; // leg1+leg2 for connecting, dist_nm for direct
   active: boolean;
 }
 

@@ -1,0 +1,81 @@
+// app.config.js
+
+export default {
+  expo: {
+    name: "Flightcraft",
+    slug: "flightcraft",
+    version: "1.0.0",
+    orientation: "portrait",
+    icon: "./assets/images/icon.png",
+    scheme: "flightcraft",
+    userInterfaceStyle: "dark",
+
+    splash: {
+      image: "./assets/images/splash.png",
+      resizeMode: "contain",
+      backgroundColor: "#04090f",
+    },
+
+    assetBundlePatterns: ["**/*"],
+
+    ios: {
+      supportsTablet: false,
+      bundleIdentifier: "com.flightcraft.app",
+      buildNumber: "1",
+      infoPlist: {
+        NSLocationWhenInUseUsageDescription:
+          "Used to show your position on the map.",
+        ITSAppUsesNonExemptEncryption: false,
+      },
+    },
+
+    android: {
+      package: "com.flightcraft.app",
+      versionCode: 1,
+      adaptiveIcon: {
+        foregroundImage: "./assets/images/adaptive-icon.png",
+        backgroundColor: "#04090f",
+      },
+      permissions: [],
+    },
+
+    web: {
+      bundler: "metro",
+    },
+
+    plugins: [
+      "expo-router",
+      "expo-font",
+      [
+        "expo-splash-screen",
+        {
+          backgroundColor: "#04090f",
+          image: "./assets/images/splash.png",
+          resizeMode: "contain",
+        },
+      ],
+      "@rnmapbox/maps",
+      [
+        "@sentry/react-native/expo",
+        {
+          url: "https://sentry.io/",
+          project: "flightcraft",
+          organization: "flightcraft",
+        },
+      ],
+      "@react-native-google-signin/google-signin",
+    ],
+
+    experiments: {
+      typedRoutes: true,
+    },
+
+    // Fill in after: eas build:configure
+    extra: {
+      eas: {
+        projectId: "60965f1d-19cd-45fb-a5f1-fd3ad63766a1",
+      },
+    },
+    owner: "aidz0827",
+  },
+};

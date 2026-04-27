@@ -13,7 +13,7 @@ import { useGameStore } from "@/store";
 import { useCallback, useEffect, useRef } from "react";
 import { AppState, type AppStateStatus } from "react-native";
 
-const BASE_DAY_MS = 300_000; // 5 minutes = 1 game day at ×1
+const BASE_DAY_MS = 180_000; // 3 real minutes = 1 game day at ×1 (×2=90s, ×3=60s)
 
 export function useGameClock() {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);

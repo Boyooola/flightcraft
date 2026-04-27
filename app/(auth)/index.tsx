@@ -7,12 +7,12 @@ import { router } from "expo-router";
 import { useState } from "react";
 import {
   ActivityIndicator,
+  SafeAreaView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function AuthScreen() {
   const [loading, setLoading] = useState(false);
@@ -34,14 +34,12 @@ export default function AuthScreen() {
   return (
     <SafeAreaView style={s.root}>
       <View style={s.inner}>
-        {/* Logo */}
         <View style={s.logoBox}>
           <Text style={s.logoPlane}>✈</Text>
         </View>
         <Text style={s.wordmark}>FLIGHTCRAFT</Text>
         <Text style={s.tagline}>GLOBAL AVIATION TYCOON</Text>
 
-        {/* Guest button */}
         <TouchableOpacity
           style={[s.btn, loading && s.btnDisabled]}
           onPress={handleGuest}
@@ -65,7 +63,9 @@ export default function AuthScreen() {
           </View>
         )}
 
-        <Text style={s.soon}>Sign in & leaderboards coming soon</Text>
+        <Text style={s.soon}>
+          Compete on the global leaderboard · Sign in coming soon
+        </Text>
       </View>
     </SafeAreaView>
   );
@@ -79,8 +79,6 @@ const s = StyleSheet.create({
     justifyContent: "center",
     padding: Spacing.xl,
   },
-
-  // Logo
   logoBox: {
     width: 72,
     height: 72,
@@ -94,7 +92,7 @@ const s = StyleSheet.create({
   },
   logoPlane: { fontSize: 32, color: Colors.sky },
   wordmark: {
-    fontSize: 32,
+    fontSize: 34,
     color: Colors.text,
     letterSpacing: 8,
     fontWeight: "700",
@@ -106,8 +104,6 @@ const s = StyleSheet.create({
     letterSpacing: 4,
     marginBottom: Spacing.xxl * 1.5,
   },
-
-  // Button
   btn: {
     width: "100%",
     maxWidth: 320,
@@ -125,7 +121,6 @@ const s = StyleSheet.create({
     letterSpacing: 2.5,
     fontWeight: "700",
   },
-
   note: {
     fontSize: 10,
     color: Colors.dim,
@@ -133,8 +128,6 @@ const s = StyleSheet.create({
     textAlign: "center",
     marginBottom: Spacing.xxl,
   },
-
-  // Error
   errorBox: {
     width: "100%",
     maxWidth: 320,
@@ -146,7 +139,6 @@ const s = StyleSheet.create({
     marginBottom: Spacing.lg,
   },
   errorText: { fontSize: 11, color: Colors.red, textAlign: "center" },
-
   soon: {
     fontSize: 10,
     color: Colors.dim,

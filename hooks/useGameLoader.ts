@@ -1,6 +1,13 @@
+/**
+ * hooks/useGameLoader.ts
+ *
+ * Runs once when the game screen mounts.
+ * Fetches all data from Supabase in sequence and populates the store.
+ * Column mapping adapts to common schema variants.
+ */
+
 import { supabase } from "@/lib/supabase";
-import { useGameStore } from "@/store";
-import {
+import type {
   AirlineConfig,
   Airport,
   Demand,
@@ -12,23 +19,37 @@ import {
   OwnedPlane,
   PlaneModel,
   Route,
-} from "@/types";
+} from "@/store";
+import { useGameStore } from "@/store";
 import { useEffect, useRef } from "react";
 
+// ── Column mappers ────────────────────────────────────────────────
+ 
 function rowToAirport(row: any): Airport {
   return {
-    iata: row.iata,
-    icao: row.icao ?? "",
+    iata: row.iata_code ?? row.iata,
+    icao: row.icao_code ?? row.icao ?? "",
     name: row.name,
-    city: row.city ?? "",
-    country: row.country ?? "",
+    city: row.municipality ?? row.city ?? "",
+    country: row.iso_country ?? row.country ?? "",
     continent: row.continent ?? "",
-    lat: Number(row.lat),
-    lng: Number(row.lng),
-    tier: row.tier, // already 'major' | 'regional'
+    lat: parseFloat(row.latitude_deg ?? row.lat),
+    lng: parseFloat(row.longitude_deg ?? row.lng),
+    tier: (() => {
+      const t = (row.type ?? row.tier ?? "").toLowerCase();
+      if (t === "mega" || t === "mega_airport") return "mega";
+      if (t === "large" || t === "large_airport") return "large";
+      if (t === "major" || t === "major_airport") return "major";
+      if (t === "minor" || t === "minor_airport") return "minor";
+      if (t === "local" || t === "local_airport") return "local";
+      return "regional";
+    })(),
+    pax_annual_m:
+      row.pax_annual_m != null ? parseFloat(row.pax_annual_m) : null,
   };
 }
 
+ 
 function rowToPlaneModel(row: any): PlaneModel {
   return {
     id: String(row.id),
@@ -50,6 +71,7 @@ function rowToPlaneModel(row: any): PlaneModel {
   };
 }
 
+// ── Hook ──────────────────────────────────────────────────────────
 export function useGameLoader() {
   const hasRun = useRef(false);
 
@@ -79,7 +101,7 @@ export function useGameLoader() {
       data: { session },
     } = await supabase.auth.getSession();
     if (!session) {
-      setLoadError("No session found");
+      setPhase("auth");
       return;
     }
     const userId = session.user.id;
@@ -87,7 +109,12 @@ export function useGameLoader() {
     // ── 1. airports ────────────────────────────────────────────
     try {
       setLoadStep("airports", "loading");
-      const { data, error } = await supabase.from("game_airports").select("*");
+      const { data, error } = await supabase
+        .from("airports")
+        .select("*")
+        .in("type", ["large_airport", "medium_airport"])
+        .eq("scheduled_service", "yes")
+        .not("iata_code", "is", null);
 
       if (error) throw error;
       const airports: Airport[] = (data ?? [])
@@ -100,9 +127,16 @@ export function useGameLoader() {
       setAirports(airports);
       setLoadStep("airports", "done");
     } catch {
-      setLoadStep("airports", "error", "Could not load airports");
-      setLoadError("Could not load airport data");
-      return;
+      // Fall back to bundled JSON
+      try {
+        const json = require("@/data/airports.json");
+        setAirports(json as Airport[]);
+        setLoadStep("airports", "done");
+      } catch {
+        setLoadStep("airports", "error", "Could not load airports");
+        setLoadError("Could not load airport data");
+        return;
+      }
     }
 
     // ── 2. planes ──────────────────────────────────────────────
@@ -118,7 +152,13 @@ export function useGameLoader() {
       setPlanes((data ?? []).map(rowToPlaneModel));
       setLoadStep("planes", "done");
     } catch {
-      setLoadStep("planes", "error", "Could not load plane catalogue");
+      try {
+        const json = require("@/data/planes.json");
+        setPlanes((json as object[]).map(rowToPlaneModel));
+        setLoadStep("planes", "done");
+      } catch {
+        setLoadStep("planes", "error", "Could not load plane catalogue");
+      }
     }
 
     // ── 3. airline ─────────────────────────────────────────────
@@ -141,12 +181,29 @@ export function useGameLoader() {
           difficulty: data.difficulty ?? "normal",
           cash: Number(data.cash ?? 3_000_000),
           loan: Number(data.loan ?? 3_000_000),
+          loan_rate: Number(data.loan_rate ?? 5),
           day: Number(data.day ?? 1),
           speed: (data.speed ?? 1) as 0 | 1 | 2 | 3,
           reputation: Number(data.reputation ?? 0),
           demand_score: Number(data.demand_score ?? 0),
         };
+        // Store whether this is a guest/anonymous session
+        const isAnon = session.user.is_anonymous ?? false;
+        useGameStore.setState({ isAnonymous: isAnon });
         setAirline(airline);
+        // Load earned achievements and missions count from DB
+        if (data.achievements && typeof data.achievements === "object") {
+          const { useGameStore: gs } = await import("@/store");
+          const earnedAchievements: Record<string, number> = {};
+          Object.entries(data.achievements).forEach(([id, day]) => {
+            earnedAchievements[id] = Number(day);
+          });
+          gs.setState({ earnedAchievements });
+        }
+        if (data.missions_completed) {
+          const { useGameStore: gs } = await import("@/store");
+          gs.setState({ missionsCompleted: Number(data.missions_completed) });
+        }
         setLoadStep("airline", "done");
       } else {
         // New player — no airline yet
@@ -297,6 +354,8 @@ export function useGameLoader() {
               demand_id: string;
               plane_id: string;
               hub_iata: string;
+              via_iata?: string | null;
+              total_dist_nm?: number | null;
               active: boolean;
             }) => {
               const demand = demandMap.get(r.demand_id);
@@ -307,6 +366,8 @@ export function useGameLoader() {
                 demand,
                 plane,
                 hub_iata: r.hub_iata,
+                via_iata: r.via_iata ?? null,
+                total_dist_nm: r.total_dist_nm ?? demand.dist_nm,
                 active: r.active,
               };
             },

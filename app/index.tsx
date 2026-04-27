@@ -1,10 +1,10 @@
 /**
- * @file app/index.tsx
- * @description Entry-point screen rendered at the root route ("/").
+ * app/index.tsx
  *
- * This is the first screen users see after the app launches. Replace the
- * placeholder content with the actual home/loading screen once the
- * onboarding and auth flows are in place.
+ * Entry point — checks Supabase session and routes accordingly.
+ *
+ *   No session  → (auth)/index  (auth screen)
+ *   Has session → (game)/index  (map screen via loader)
  */
 
 import { Colors } from "@/constants/theme";
