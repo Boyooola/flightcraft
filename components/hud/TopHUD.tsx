@@ -113,7 +113,7 @@ export default function TopHUD() {
         Animated.timing(dayColor, {
           toValue: 1,
           duration: 150,
-          useNativeDriver: false,
+          useNativeDriver: true,
         }),
       ]),
       Animated.parallel([
@@ -126,7 +126,7 @@ export default function TopHUD() {
         Animated.timing(dayColor, {
           toValue: 0,
           duration: 250,
-          useNativeDriver: false,
+          useNativeDriver: true,
         }),
       ]),
     ]).start();
@@ -169,18 +169,18 @@ export default function TopHUD() {
         Animated.timing(revAnim, {
           toValue: 1,
           duration: 120,
-          useNativeDriver: false,
+          useNativeDriver: true,
         }),
         Animated.timing(revAnim, {
           toValue: 0,
           duration: 400,
-          useNativeDriver: false,
+          useNativeDriver: true,
         }),
       ]).start();
       Animated.timing(displayedRev, {
         toValue: todayRevenue,
         duration: 600,
-        useNativeDriver: false,
+        useNativeDriver: true,
       }).start();
       prevRev.current = todayRevenue;
     }

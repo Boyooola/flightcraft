@@ -221,7 +221,10 @@ export default function SettingsSheet() {
   return (
     <BottomSheetScrollView
       style={s.root}
-      contentContainerStyle={[s.content, { paddingBottom: tabBarH }]}
+      contentContainerStyle={[
+        s.content,
+        { paddingBottom: tabBarH + Spacing.xxl },
+      ]}
       showsVerticalScrollIndicator={false}
     >
       {/* Header */}

@@ -104,6 +104,7 @@ function estimateDailyNetRevenue(): number {
 }
 
 async function applyAwayEarnings(bgTimestamp: number, bgSpeed: number) {
+  useGameStore.getState().setIsApplyingAway(true);
   const now = Date.now();
   const elapsedMs = now - bgTimestamp;
   const msPerDay = BASE_DAY_MS / Math.max(1, bgSpeed);
@@ -124,6 +125,30 @@ async function applyAwayEarnings(bgTimestamp: number, bgSpeed: number) {
   for (let i = 0; i < cappedDays; i++) advanceDay();
 
   // Credit earnings
+  // Apply loan interest for away days
+  const { airline: latestAirline } = useGameStore.getState();
+  if (latestAirline && latestAirline.loan > 0) {
+    const { dailyInterest } = await import("@/lib/revenue");
+    const interestPerDay = dailyInterest(
+      latestAirline.loan,
+      latestAirline.loan_rate ?? 5,
+    );
+    const totalInterest = interestPerDay * cappedDays;
+    if (totalInterest > 0) {
+      useGameStore.getState().accrueInterest(totalInterest);
+      useGameStore.getState().addLedgerEntries([
+        {
+          id: `away-interest-${Date.now()}`,
+          day: latestAirline.day,
+          type: "interest",
+          label: `Loan interest (${cappedDays} days away)`,
+          amount: -totalInterest,
+          route_id: null,
+        },
+      ]);
+    }
+  }
+
   if (totalEarnings !== 0) {
     earnCash(totalEarnings);
     // Store for in-app toast display
@@ -143,6 +168,8 @@ async function applyAwayEarnings(bgTimestamp: number, bgSpeed: number) {
   }
 
   // In-app toast handled by AwayEarningsCard component
+  // Small delay then clear flag so useRevenueTick resumes normally
+  setTimeout(() => useGameStore.getState().setIsApplyingAway(false), 500);
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -241,6 +268,9 @@ export function useGameClock() {
               await applyAwayEarnings(bgTs, bgSpeed);
               await AsyncStorage.removeItem(BG_TIMESTAMP_KEY);
               await AsyncStorage.removeItem(BG_SPEED_KEY);
+            } else {
+              // No away earnings but ensure pax is reset if day changed while backgrounded
+              useGameStore.getState().resetDailyPax();
             }
           } catch {}
 

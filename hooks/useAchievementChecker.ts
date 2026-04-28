@@ -186,6 +186,11 @@ export function useAchievementChecker() {
       if (!achievement.check(state)) return;
 
       earnAchievement(achievement.id, airline.day);
+      // Accumulate for weekly challenge tracking
+      const wp = useGameStore.getState().weeklyProgress;
+      useGameStore
+        .getState()
+        .updateWeeklyProgress({ achEarned: wp.achEarned + achievement.points });
       emitAchievementToast({
         id: `ach-${achievement.id}-day-${airline.day}`,
         achievementId: achievement.id,

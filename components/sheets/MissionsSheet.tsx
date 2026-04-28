@@ -8,6 +8,10 @@
 
 import { Colors, Radius, Spacing } from "@/constants/theme";
 import { useTabBarHeight } from "@/hooks/useSheetLayout";
+import {
+  useWeeklyChallenge,
+  useWeeklyProgress,
+} from "@/hooks/useWeeklyChallenge";
 import type { Mission } from "@/lib/missions";
 import { fmtCash } from "@/lib/revenue";
 import {
@@ -300,6 +304,168 @@ const mc = StyleSheet.create({
   pendingNote: { fontSize: 9, color: Colors.dim },
 });
 
+// ─── Weekly Challenge Card ────────────────────────────────────────
+
+function WeeklyChallengeCard({
+  challenge,
+  color,
+  onComplete,
+  completing,
+}: {
+  challenge: import("@/hooks/useWeeklyChallenge").WeeklyChallenge;
+  color: string;
+  onComplete: () => void;
+  completing: boolean;
+}) {
+  const progress = useWeeklyProgress(challenge);
+  const pct = Math.round(progress * 100);
+  const accent = "#F59E0B"; // amber — weekly is special
+
+  return (
+    <View
+      style={[
+        wc.card,
+        challenge.completed && {
+          borderColor: "#22c55e44",
+          backgroundColor: "#22c55e06",
+        },
+      ]}
+    >
+      <View style={wc.stripe} />
+      <View style={wc.body}>
+        <View style={wc.hdr}>
+          <View
+            style={[
+              wc.badge,
+              { backgroundColor: accent + "18", borderColor: accent + "44" },
+            ]}
+          >
+            <Text style={[wc.badgeTxt, { color: accent }]}>
+              WEEKLY CHALLENGE
+            </Text>
+          </View>
+          {challenge.completed && (
+            <Ionicons name="checkmark-circle" size={16} color="#22c55e" />
+          )}
+        </View>
+        <View style={wc.titleRow}>
+          <View style={[wc.iconWrap, { backgroundColor: accent + "18" }]}>
+            <Ionicons name={challenge.icon as any} size={16} color={accent} />
+          </View>
+          <Text style={wc.title}>{challenge.title}</Text>
+        </View>
+        <Text style={wc.desc}>{challenge.desc}</Text>
+        <View style={wc.progRow}>
+          <View style={wc.progTrack}>
+            <View
+              style={[
+                wc.progFill,
+                { width: `${pct}%` as any, backgroundColor: accent },
+              ]}
+            />
+          </View>
+          <Text style={[wc.pct, { color: accent }]}>{pct}%</Text>
+        </View>
+        <View style={wc.footer}>
+          <View
+            style={[
+              wc.reward,
+              { backgroundColor: accent + "12", borderColor: accent + "33" },
+            ]}
+          >
+            <Ionicons name="cash-outline" size={11} color={accent} />
+            <Text style={[wc.rewardTxt, { color: accent }]}>
+              {fmtCash(challenge.reward)} reward
+            </Text>
+          </View>
+          {!challenge.completed && progress >= 1 && (
+            <TouchableOpacity
+              style={[wc.claimBtn, { backgroundColor: "#22c55e" }]}
+              onPress={onComplete}
+              disabled={completing}
+              activeOpacity={0.85}
+            >
+              <Text style={wc.claimTxt}>
+                {completing ? "Claiming..." : "Claim Reward"}
+              </Text>
+            </TouchableOpacity>
+          )}
+          {challenge.completed && (
+            <Text style={wc.earnedTxt}>✓ Earned this week</Text>
+          )}
+        </View>
+      </View>
+    </View>
+  );
+}
+
+const wc = StyleSheet.create({
+  card: {
+    flexDirection: "row",
+    borderRadius: Radius.xl,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    overflow: "hidden",
+    marginBottom: Spacing.md,
+  },
+  stripe: { width: 4, backgroundColor: "#F59E0B" },
+  body: { flex: 1, padding: Spacing.md, gap: Spacing.sm },
+  hdr: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  badge: {
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  badgeTxt: { fontSize: 7, fontWeight: "700", letterSpacing: 1.5 },
+  titleRow: { flexDirection: "row", alignItems: "center", gap: Spacing.sm },
+  iconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  title: { fontSize: 15, color: Colors.text, fontWeight: "700", flex: 1 },
+  desc: { fontSize: 11, color: Colors.muted, lineHeight: 16 },
+  progRow: { flexDirection: "row", alignItems: "center", gap: Spacing.sm },
+  progTrack: {
+    flex: 1,
+    height: 4,
+    backgroundColor: "rgba(255,255,255,.08)",
+    borderRadius: 2,
+    overflow: "hidden",
+  },
+  progFill: { height: "100%", borderRadius: 2 },
+  pct: { fontSize: 10, fontWeight: "700", minWidth: 32, textAlign: "right" },
+  footer: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  reward: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+  },
+  rewardTxt: { fontSize: 11, fontWeight: "700" },
+  claimBtn: {
+    borderRadius: Radius.md,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+  },
+  claimTxt: { fontSize: 11, fontWeight: "700", color: "#fff" },
+  earnedTxt: { fontSize: 10, color: "#22c55e", fontWeight: "600" },
+});
+
 // ─── Missions Sheet ───────────────────────────────────────────────
 
 export default function MissionsSheet() {
@@ -308,6 +474,11 @@ export default function MissionsSheet() {
   const airline = useAirline();
   const day = useDay();
   const closeSheet = useGameStore((s) => s.closeSheet);
+  const {
+    challenge: weekly,
+    completeWeekly,
+    completing,
+  } = useWeeklyChallenge();
   const tabBarH = useTabBarHeight();
 
   const color = airline?.color ?? Colors.sky;
@@ -317,7 +488,10 @@ export default function MissionsSheet() {
   return (
     <BottomSheetScrollView
       style={s.root}
-      contentContainerStyle={[s.content, { paddingBottom: tabBarH }]}
+      contentContainerStyle={[
+        s.content,
+        { paddingBottom: tabBarH + Spacing.xxl },
+      ]}
       showsVerticalScrollIndicator={false}
     >
       {/* Header */}
@@ -367,6 +541,16 @@ export default function MissionsSheet() {
       )}
 
       <View style={s.divider} />
+
+      {/* ── Weekly Challenge ── */}
+      {weekly && (
+        <WeeklyChallengeCard
+          challenge={weekly}
+          color={color}
+          onComplete={completeWeekly}
+          completing={completing}
+        />
+      )}
 
       {/* Mission cards */}
       {missions.length === 0 ? (

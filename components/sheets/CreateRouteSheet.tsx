@@ -31,7 +31,7 @@ import {
   useGameStore,
   useHubs,
   useOwnedPlanes,
-  useRouteCreation,
+  useRouteCreationWaypoints,
   useRoutes,
 } from "@/store";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
@@ -513,7 +513,7 @@ const pr = StyleSheet.create({
 // ─────────────────────────────────────────────────────────────────
 
 export default function CreateRouteSheet() {
-  const creation = useRouteCreation();
+  const creationWaypoints = useRouteCreationWaypoints();
   const hubs = useHubs();
   const ownedPlanes = useOwnedPlanes();
   const routes = useRoutes();
@@ -531,7 +531,7 @@ export default function CreateRouteSheet() {
   const [done, setDone] = useState(false);
 
   const color = airline?.color ?? Colors.sky;
-  const waypoints = creation.waypoints;
+  const waypoints = creationWaypoints;
 
   // ── Prompt state — not enough waypoints yet ──────────────────
   if (waypoints.length < 2) {
@@ -687,7 +687,10 @@ export default function CreateRouteSheet() {
   return (
     <BottomSheetScrollView
       style={s.root}
-      contentContainerStyle={[s.content, { paddingBottom: tabBarH }]}
+      contentContainerStyle={[
+        s.content,
+        { paddingBottom: tabBarH + Spacing.xxl },
+      ]}
       showsVerticalScrollIndicator={false}
     >
       {/* Header */}

@@ -152,6 +152,18 @@ export interface GameStore {
   boughtPlaneToday: boolean;
   dailyEvent: DailyEvent | null;
   awayEarnings: { days: number; amount: number } | null;
+  isApplyingAwayEarnings: boolean;
+  weeklyProgress: {
+    weekNumber: number;
+    paxTotal: number; // total pax delivered this week
+    revenueTotal: number; // total net revenue this week
+    loginDays: number; // days logged in this week
+    perfectDays: number; // days with all missions complete
+    profitDays: number; // days all routes were profitable
+    speedDays: number; // days played at 3× speed
+    achEarned: number; // achievements earned this week
+    rankImproved: number; // positions rank improved
+  };
 
   // Load
   loadSteps: LoadStep[];
@@ -203,6 +215,9 @@ export interface GameStore {
   setBoughtPlaneToday: (val: boolean) => void;
   setDailyEvent: (event: DailyEvent | null) => void;
   setAwayEarnings: (data: { days: number; amount: number } | null) => void;
+  setIsApplyingAway: (v: boolean) => void;
+  updateWeeklyProgress: (update: Partial<GameStore["weeklyProgress"]>) => void;
+  resetWeeklyProgress: (weekNumber: number) => void;
   setAirline: (airline: AirlineConfig) => void;
   updateAirline: (patch: Partial<AirlineConfig>) => void;
 
@@ -283,7 +298,19 @@ export const useGameStore = create<GameStore>()(
       isAnonymous: false,
       boughtPlaneToday: false,
       dailyEvent: null,
-      awayEarnings: null, // set correctly by useGameLoader after session check
+      awayEarnings: null,
+      isApplyingAwayEarnings: false,
+      weeklyProgress: {
+        weekNumber: 0,
+        paxTotal: 0,
+        revenueTotal: 0,
+        loginDays: 0,
+        perfectDays: 0,
+        profitDays: 0,
+        speedDays: 0,
+        achEarned: 0,
+        rankImproved: 0,
+      }, // set correctly by useGameLoader after session check
       loadSteps: INITIAL_LOAD_STEPS,
       loadComplete: false,
       loadError: null,
@@ -334,6 +361,34 @@ export const useGameStore = create<GameStore>()(
         set({ dailyEvent: event }, false, "setDailyEvent"),
       setAwayEarnings: (data) =>
         set({ awayEarnings: data }, false, "setAwayEarnings"),
+      setIsApplyingAway: (v) =>
+        set({ isApplyingAwayEarnings: v }, false, "setIsApplyingAway"),
+      updateWeeklyProgress: (update) =>
+        set(
+          (s) => ({
+            weeklyProgress: { ...s.weeklyProgress, ...update },
+          }),
+          false,
+          "updateWeeklyProgress",
+        ),
+      resetWeeklyProgress: (weekNumber) =>
+        set(
+          {
+            weeklyProgress: {
+              weekNumber,
+              paxTotal: 0,
+              revenueTotal: 0,
+              loginDays: 0,
+              perfectDays: 0,
+              profitDays: 0,
+              speedDays: 0,
+              achEarned: 0,
+              rankImproved: 0,
+            },
+          },
+          false,
+          "resetWeeklyProgress",
+        ),
       setAirline: (airline) => set({ airline }, false, "setAirline"),
       updateAirline: (patch) =>
         set(

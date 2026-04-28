@@ -52,6 +52,9 @@ export function useRevenueTick() {
     if (airline.day === lastDay.current) return;
     lastDay.current = airline.day;
 
+    // Skip processing during away earnings — interest already handled there
+    if (useGameStore.getState().isApplyingAwayEarnings) return;
+
     if (prevDemandScore.current === -1) {
       prevDemandScore.current = airline.demand_score ?? 0;
     }
@@ -184,7 +187,7 @@ export function useRevenueTick() {
         day: airline.day,
         type: "revenue",
         label: `${route.demand.origin.iata}${via} → ${route.demand.dest.iata} · ${deliveredPax} pax`,
-        amount: finalRevenue, // net after operating costs
+        amount: finalRevenue, // summary — cash already credited live in RouteLayer
         route_id: route.id,
       });
     });
@@ -213,7 +216,62 @@ export function useRevenueTick() {
     if (interest > 0) accrueInterest(interest);
     if (entries.length) addLedgerEntries(entries);
 
-    // ── 6. Day summary card ───────────────────────────────────────
+    // ── 6. Weekly progress accumulation ──────────────────────────
+    {
+      const {
+        weeklyProgress,
+        updateWeeklyProgress,
+        resetWeeklyProgress,
+        dailyMissions: dMissions,
+        airline: la,
+      } = useGameStore.getState();
+
+      const now7 = new Date();
+      const d7 = new Date(
+        Date.UTC(now7.getFullYear(), now7.getMonth(), now7.getDate()),
+      );
+      const dow = d7.getUTCDay() || 7;
+      d7.setUTCDate(d7.getUTCDate() + 4 - dow);
+      const yr = new Date(Date.UTC(d7.getUTCFullYear(), 0, 1));
+      const weekNum = Math.ceil(
+        ((d7.getTime() - yr.getTime()) / 86400000 + 1) / 7,
+      );
+
+      if (weeklyProgress.weekNumber !== weekNum) resetWeeklyProgress(weekNum);
+
+      const allMissionsDone =
+        dMissions.length > 0 && dMissions.every((m) => m.completed);
+      const allRoutesProfit = routes
+        .filter((r) => r.active)
+        .every((r) => {
+          const dem = demands.find((d) => d.id === r.demand.id);
+          const hub = hubs.find((h) => h.airport.iata === r.hub_iata);
+          const p = r.plane.plane_model;
+          if (!dem) return true;
+          return (
+            calcRouteRevenue({
+              distNm: r.total_dist_nm ?? dem.dist_nm,
+              speedKts: p.speed_kts,
+              trustPct: hub?.trust ?? 0,
+              deliveredPax: dem.pax_day,
+              paxDay: dem.pax_day,
+              costPerSector: p.cost_per_sector ?? 500,
+              fuelPerNm: p.fuel_per_nm ?? 2.0,
+            }).net >= 0
+          );
+        });
+
+      updateWeeklyProgress({
+        paxTotal: weeklyProgress.paxTotal + totalPaxToday,
+        revenueTotal: weeklyProgress.revenueTotal + totalRev,
+        loginDays: weeklyProgress.loginDays + 1,
+        perfectDays: weeklyProgress.perfectDays + (allMissionsDone ? 1 : 0),
+        profitDays: weeklyProgress.profitDays + (allRoutesProfit ? 1 : 0),
+        speedDays: weeklyProgress.speedDays + (la?.speed === 3 ? 1 : 0),
+      });
+    }
+
+    // ── 7. Day summary card ───────────────────────────────────────
     const {
       dailyMissions,
       missionsCompleted,

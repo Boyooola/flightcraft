@@ -48,6 +48,9 @@ export function useNotifications() {
         if (data?.type === "away_earnings") {
           openSheet("routes");
         }
+        if (data?.type === "rank_up") {
+          openSheet("leaderboard");
+        }
       },
     );
 

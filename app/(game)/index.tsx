@@ -22,8 +22,10 @@ import { useAchievementChecker } from "@/hooks/useAchievementChecker";
 import { useDailyEvents } from "@/hooks/useDailyEvents";
 import { useGameClock } from "@/hooks/useGameClock";
 import { useGameLoader } from "@/hooks/useGameLoader";
+import { useLeaderboardPush } from "@/hooks/useLeaderboardPush";
 import { useMissionChecker } from "@/hooks/useMissionChecker";
 import { useNotifications } from "@/hooks/useNotifications";
+import { useRateUs } from "@/hooks/useRateUs";
 import { useRevenueTick } from "@/hooks/useRevenueTick";
 import { useAirline, useLoadComplete, useLoadSteps, usePhase } from "@/store";
 import { useEffect, useState } from "react";
@@ -41,6 +43,8 @@ function GameContent() {
   useAchievementChecker();
   useDailyEvents();
   useNotifications();
+  useRateUs();
+  useLeaderboardPush();
 
   const loadComplete = useLoadComplete();
   const loadSteps = useLoadSteps();
