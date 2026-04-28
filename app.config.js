@@ -46,6 +46,8 @@ export default {
     plugins: [
       "expo-router",
       "expo-font",
+      "expo-audio",
+      "expo-web-browser",
       [
         "expo-splash-screen",
         {
@@ -65,7 +67,6 @@ export default {
       ],
       "@react-native-google-signin/google-signin",
       "@sentry/react-native",
-      "expo-audio",
     ],
 
     experiments: {
