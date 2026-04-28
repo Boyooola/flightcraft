@@ -165,75 +165,77 @@ export function simulatePaxDay(
   dest: Airport,
   dist: number,
 ): number {
+  // Annual pax at each airport (millions)
   const oPax = origin.pax_annual_m ?? estimatePaxAnnual(origin);
   const dPax = dest.pax_annual_m ?? estimatePaxAnnual(dest);
 
   const distNm = Math.max(dist, 100);
-
-  // Base demand from both airport sizes.
-  // Geometric mean prevents ATL → tiny airport from becoming too huge.
   const airportPower = Math.sqrt(oPax * dPax);
 
-  // Distance curve:
-  // short routes strong, medium routes viable, long-haul still possible.
-  const distanceFactor =
-    distNm < 500 ? 1.35 : distNm < 1500 ? 1.0 : distNm < 3500 ? 0.72 : 0.48;
+  // Smooth distance decay — no cliff edges at arbitrary thresholds
+  // Short routes stay strong, long haul tapers gradually
+  const distanceFactor = 1 / Math.pow(distNm / 1000, 0.35);
 
-  // Big airports create both origin/destination and connection demand.
+  // Hub connectivity — large airports attract connecting passengers
+  const maxPax = Math.max(oPax, dPax);
   const hubFactor =
-    Math.max(oPax, dPax) >= 60
-      ? 1.35
-      : Math.max(oPax, dPax) >= 30
-        ? 1.22
-        : Math.max(oPax, dPax) >= 10
-          ? 1.1
-          : 1.0;
+    maxPax >= 60 ? 1.35 : maxPax >= 30 ? 1.22 : maxPax >= 10 ? 1.1 : 1.0;
 
-  const continentFactor = continentPairBonus(origin.continent, dest.continent);
-
-  // Domestic routes are naturally stronger, especially short/medium haul.
+  // Domestic routes naturally stronger (shorter distances, frequent service)
   const domesticFactor =
     origin.country === dest.country ? (distNm < 800 ? 1.45 : 1.2) : 1.0;
 
-  // International capital / hub routes should feel important.
-  const internationalFactor =
+  // International routes between real airports get a mild boost
+  const intlFactor =
     origin.country !== dest.country && Math.min(oPax, dPax) >= 5 ? 1.18 : 1.0;
 
-  // Deterministic variance so demand does NOT randomly change every render.
+  // Continent-pair bonus — denser regional corridors
+  const contFactor = continentPairBonus(origin.continent, dest.continent);
+
+  // Deterministic variance — SEEDED on route pair so demand never
+  // randomly changes between renders or hub purchases.
   const variance = seededVariance(origin.iata, dest.iata);
 
   const raw =
     airportPower *
     distanceFactor *
     hubFactor *
-    continentFactor *
     domesticFactor *
-    internationalFactor *
+    intlFactor *
+    contFactor *
     variance *
-    18;
+    22;
 
-  // Route caps by market type.
-  const cap =
+  // Floor scales with airport pair size — ensures even tiny airports
+  // always have enough pax for a small plane to break even
+  const minPax = Math.max(50, Math.round(Math.sqrt(oPax * dPax) * 6));
+
+  // Cap: airport-size aware so big hub pairs can't exceed realistic volumes
+  const baseCap = Math.round(Math.sqrt(oPax * dPax) * 20);
+  const distCap =
     origin.country === dest.country
       ? distNm < 500
-        ? 650
-        : 900
+        ? 700
+        : 1000
       : distNm < 1500
-        ? 850
-        : 1200;
+        ? 900
+        : 1400;
+  const cap = Math.min(baseCap, distCap);
 
-  return Math.max(15, Math.min(cap, Math.round(raw)));
+  return Math.max(minPax, Math.min(cap, Math.round(raw)));
 }
 
+/**
+ * Deterministic variance per route pair.
+ * Returns a stable multiplier 0.85–1.15 seeded on the IATA codes.
+ * Demand never changes randomly — same route always produces same pax.
+ */
 function seededVariance(originIata: string, destIata: string): number {
   const key = `${originIata}-${destIata}`;
   let hash = 0;
-
   for (let i = 0; i < key.length; i++) {
-    hash = (hash * 31 + key.charCodeAt(i)) % 100000;
+    hash = (hash * 31 + key.charCodeAt(i)) % 100_000;
   }
-
-  // 0.85 to 1.15 stable variance
   return 0.85 + (hash % 31) / 100;
 }
 

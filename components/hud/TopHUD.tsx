@@ -113,7 +113,7 @@ export default function TopHUD() {
         Animated.timing(dayColor, {
           toValue: 1,
           duration: 150,
-          useNativeDriver: true,
+          useNativeDriver: false,
         }),
       ]),
       Animated.parallel([
@@ -126,7 +126,7 @@ export default function TopHUD() {
         Animated.timing(dayColor, {
           toValue: 0,
           duration: 250,
-          useNativeDriver: true,
+          useNativeDriver: false,
         }),
       ]),
     ]).start();
@@ -137,45 +137,66 @@ export default function TopHUD() {
     outputRange: [Colors.text, color],
   });
 
+  // ── Yesterday's cash — for % change display ────────────────────
+  const yesterdayCash = useRef<number>(cash);
+  const prevDayRef = useRef<number>(day);
+
+  useEffect(() => {
+    if (day !== prevDayRef.current) {
+      // Day just advanced — snapshot cash before new day starts
+      yesterdayCash.current = cash;
+      prevDayRef.current = day;
+    }
+  }, [day]);
+
+  const cashDelta = cash - yesterdayCash.current;
+  const cashPct =
+    yesterdayCash.current !== 0
+      ? Math.round((cashDelta / Math.abs(yesterdayCash.current)) * 100)
+      : 0;
+  const showCashPct = Math.abs(cashPct) > 0 && day > 1;
+
   // ── Today's revenue ticker animation ────────────────────────────
-  // Flashes bright green briefly each time revenue increases
   const revAnim = useRef(new Animated.Value(0)).current;
   const prevRev = useRef(0);
   const displayedRev = useRef(new Animated.Value(0)).current;
   const [displayedRevVal, setDisplayedRevVal] = useState(0);
 
   useEffect(() => {
-    if (todayRevenue > prevRev.current) {
-      // Flash animation
+    if (todayRevenue !== prevRev.current) {
+      // Flash — green for positive, red for negative
       Animated.sequence([
         Animated.timing(revAnim, {
           toValue: 1,
           duration: 120,
-          useNativeDriver: true,
+          useNativeDriver: false,
         }),
         Animated.timing(revAnim, {
           toValue: 0,
           duration: 400,
-          useNativeDriver: true,
+          useNativeDriver: false,
         }),
       ]).start();
-      // Count up animation — from previous value to new value
       Animated.timing(displayedRev, {
         toValue: todayRevenue,
         duration: 600,
-        useNativeDriver: true,
+        useNativeDriver: false,
       }).start();
       prevRev.current = todayRevenue;
-    } else if (todayRevenue === 0) {
-      // Day reset
+    }
+    if (todayRevenue === 0) {
       prevRev.current = 0;
       displayedRev.setValue(0);
+      setDisplayedRevVal(0);
     }
   }, [todayRevenue]);
 
+  const isNegRev = todayRevenue < 0;
   const animatedRevColor = revAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: ["#4ade80", "#ffffff"], // green → flash white
+    outputRange: isNegRev
+      ? ["#ef4444", "#ffffff"] // red → flash white for losses
+      : ["#4ade80", "#ffffff"], // green → flash white for gains
   });
 
   const animatedRevScale = revAnim.interpolate({
@@ -193,11 +214,24 @@ export default function TopHUD() {
           <Text style={[st.airlineName, { color }]} numberOfLines={1}>
             {airline?.name ?? "FlightCraft"}
           </Text>
-          <Text
-            style={[st.cash, { color: lowCash ? Colors.red : Colors.text }]}
-          >
-            {fmtCash(cash)}
-          </Text>
+          <View style={st.cashRow}>
+            <Text
+              style={[st.cash, { color: lowCash ? Colors.red : Colors.text }]}
+            >
+              {fmtCash(cash)}
+            </Text>
+            {showCashPct && (
+              <Text
+                style={[
+                  st.cashPct,
+                  { color: cashDelta >= 0 ? "#4ade80" : "#ef4444" },
+                ]}
+              >
+                {cashDelta >= 0 ? "▲" : "▼"}
+                {Math.abs(cashPct)}%
+              </Text>
+            )}
+          </View>
         </View>
 
         {/* ── Centre — day + pax ── */}
@@ -216,7 +250,7 @@ export default function TopHUD() {
         {/* ── Today revenue ticker ── */}
         <View style={st.revWrap}>
           <Text style={st.revLabel}>TODAY</Text>
-          {todayRevenue > 0 ? (
+          {todayRevenue !== 0 ? (
             <Animated.Text
               style={[
                 st.revAmount,
@@ -226,10 +260,10 @@ export default function TopHUD() {
                 },
               ]}
             >
-              +$
-              {displayedRevVal > 0
-                ? displayedRevVal.toLocaleString()
-                : todayRevenue.toLocaleString()}
+              {todayRevenue >= 0 ? "+" : "-"}$
+              {Math.abs(
+                displayedRevVal !== 0 ? displayedRevVal : todayRevenue,
+              ).toLocaleString()}
             </Animated.Text>
           ) : (
             <Text style={st.revZero}>$0</Text>
@@ -289,7 +323,9 @@ const st = StyleSheet.create({
   // Left
   left: { flex: 1, minWidth: 0, gap: 1 },
   airlineName: { fontSize: 11, fontWeight: "700", letterSpacing: 0.3 },
+  cashRow: { flexDirection: "row", alignItems: "center", gap: 4 },
   cash: { fontSize: 15, fontWeight: "700", letterSpacing: 0.3 },
+  cashPct: { fontSize: 9, fontWeight: "700" },
 
   // Centre
   centre: { alignItems: "center" },

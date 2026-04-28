@@ -17,7 +17,11 @@ import { useTabBarHeight } from "@/hooks/useSheetLayout";
 import { Colors, MIN_TOUCH, Radius, Spacing } from "@/constants/theme";
 import { useGameSounds } from "@/hooks/useGameSounds";
 import { useHaptics } from "@/hooks/useHaptics";
-import { useBuyHub, useSellHub } from "@/hooks/useSupabaseWrite";
+import {
+  useBuyHub,
+  useRefreshDemands,
+  useSellHub,
+} from "@/hooks/useSupabaseWrite";
 import {
   airportClassification,
   allDemandsServed,
@@ -443,6 +447,9 @@ export default function AirportSheet() {
   const sounds = useGameSounds();
   const buyHub = useBuyHub();
   const sellHub = useSellHub();
+  const refreshDemands = useRefreshDemands();
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const ownedPlanes = useOwnedPlanes();
   const [selling, setSelling] = useState(false);
 
@@ -506,6 +513,21 @@ export default function AirportSheet() {
   );
   const servedCount = hubDemands.filter((d) => d.status === "served").length;
   const pendingCount = hubDemands.filter((d) => d.status === "pending").length;
+
+  const handleRefresh = async () => {
+    if (!hub) return;
+    haptics.confirm();
+    setRefreshing(true);
+    setRefreshError(null);
+    const { error } = await refreshDemands(hub.airport.iata);
+    setRefreshing(false);
+    if (error) {
+      setRefreshError(error);
+      haptics.error();
+    } else {
+      haptics.success();
+    }
+  };
 
   const handleSell = () => {
     const hubRouteCount = routes.filter(
@@ -1132,4 +1154,26 @@ const s = StyleSheet.create({
     marginBottom: Spacing.sm,
   },
   sellHubTxt: { fontSize: 11, color: Colors.red, fontWeight: "600" },
+  refreshDemandBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    backgroundColor: Colors.sky + "0a",
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.sm,
+  },
+  refreshDemandBody: { flex: 1 },
+  refreshDemandTxt: { fontSize: 12, color: Colors.sky, fontWeight: "600" },
+  refreshDemandCost: { fontSize: 9, color: Colors.dim },
+  refreshError: {
+    fontSize: 10,
+    color: Colors.red,
+    paddingHorizontal: Spacing.lg,
+    marginTop: -Spacing.sm,
+    marginBottom: Spacing.sm,
+  },
 });

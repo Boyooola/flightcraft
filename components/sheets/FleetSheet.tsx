@@ -124,9 +124,11 @@ const qs = StyleSheet.create({
 function OwnedPlaneRow({
   plane,
   route,
+  onAssign,
 }: {
   plane: OwnedPlane;
-  route: string | null; // route description or null if idle
+  route: string | null;
+  onAssign?: () => void;
 }) {
   const fc = FAMILY_COLOR[plane.plane_model.family] ?? Colors.dim;
   return (
@@ -140,10 +142,22 @@ function OwnedPlaneRow({
           {route ?? "Idle — not assigned to a route"}
         </Text>
       </View>
-      <View style={[op.badge, { backgroundColor: fc + "18" }]}>
-        <Text style={[op.badgeTxt, { color: fc }]}>
-          {plane.plane_model.pax_capacity} pax
-        </Text>
+      <View style={op.rightCol}>
+        <View style={[op.badge, { backgroundColor: fc + "18" }]}>
+          <Text style={[op.badgeTxt, { color: fc }]}>
+            {plane.plane_model.pax_capacity} pax
+          </Text>
+        </View>
+        {onAssign && (
+          <TouchableOpacity
+            style={[op.assignBtn, { borderColor: fc + "55" }]}
+            onPress={onAssign}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="add-circle-outline" size={11} color={fc} />
+            <Text style={[op.assignTxt, { color: fc }]}>Assign</Text>
+          </TouchableOpacity>
+        )}
       </View>
     </View>
   );
@@ -170,6 +184,17 @@ const op = StyleSheet.create({
     borderRadius: Radius.full,
   },
   badgeTxt: { fontSize: 10, fontWeight: "700" },
+  rightCol: { alignItems: "flex-end", gap: 4, marginRight: Spacing.md },
+  assignBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  assignTxt: { fontSize: 9, fontWeight: "700" },
 });
 
 // ─────────────────────────────────────────────────────────────────
@@ -434,6 +459,8 @@ export default function FleetSheet() {
   const closeSheet = useGameStore((s) => s.closeSheet);
   const tabBarH = useTabBarHeight();
 
+  const startCreation = useGameStore((s) => s.startRouteCreation);
+  const haptics = useHaptics();
   const color = airline?.color ?? Colors.sky;
   const demandScore = airline?.demand_score ?? 0;
 
@@ -466,6 +493,13 @@ export default function FleetSheet() {
   }, [planes]);
 
   const idleCount = ownedPlanes.filter((p) => !planeRouteMap.has(p.id)).length;
+
+  const handleAssign = () => {
+    haptics.confirm();
+    closeSheet();
+    // Short delay so sheet closes before map activates
+    setTimeout(() => startCreation(), 150);
+  };
 
   return (
     <BottomSheetScrollView
@@ -522,6 +556,9 @@ export default function FleetSheet() {
                 key={plane.id}
                 plane={plane}
                 route={planeRouteMap.get(plane.id) ?? null}
+                onAssign={
+                  !planeRouteMap.has(plane.id) ? handleAssign : undefined
+                }
               />
             ))}
           </View>

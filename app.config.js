@@ -68,6 +68,13 @@ export default {
       ],
       "@react-native-google-signin/google-signin",
       "@sentry/react-native",
+      [
+        "expo-notifications",
+        {
+          color: "#0ea5e9",
+          androidMode: "default",
+        },
+      ],
     ],
 
     experiments: {

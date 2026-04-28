@@ -266,7 +266,7 @@ const s = StyleSheet.create({
     position: "absolute",
     left: Spacing.md,
     right: Spacing.md,
-    zIndex: 55,
+    zIndex: 65,
   },
   card: {
     backgroundColor: "rgba(8,15,30,0.98)",
@@ -280,7 +280,7 @@ const s = StyleSheet.create({
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.5,
     shadowRadius: 16,
-    elevation: 12,
+    elevation: 13,
     overflow: "hidden",
   },
   header: {

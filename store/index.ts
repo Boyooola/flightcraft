@@ -5,6 +5,7 @@
  * Drives both the map and all bottom sheets.
  */
 
+import type { DailyEvent } from "@/hooks/useDailyEvents";
 import type { Mission } from "@/lib/missions";
 import { create } from "zustand";
 import { devtools, subscribeWithSelector } from "zustand/middleware";
@@ -148,7 +149,8 @@ export interface LoadStep {
 export interface GameStore {
   // Auth
   isAnonymous: boolean;
-  boughtPlaneToday: boolean; // set when plane purchased, reset at day tick
+  boughtPlaneToday: boolean;
+  dailyEvent: DailyEvent | null; // current day's event
 
   // Load
   loadSteps: LoadStep[];
@@ -198,6 +200,7 @@ export interface GameStore {
   // Session
   setPhase: (phase: GamePhase) => void;
   setBoughtPlaneToday: (val: boolean) => void;
+  setDailyEvent: (event: DailyEvent | null) => void;
   setAirline: (airline: AirlineConfig) => void;
   updateAirline: (patch: Partial<AirlineConfig>) => void;
 
@@ -276,7 +279,8 @@ export const useGameStore = create<GameStore>()(
     subscribeWithSelector((set, get) => ({
       // ── Initial state ────────────────────────────────────────────
       isAnonymous: false,
-      boughtPlaneToday: false, // set correctly by useGameLoader after session check
+      boughtPlaneToday: false,
+      dailyEvent: null, // set correctly by useGameLoader after session check
       loadSteps: INITIAL_LOAD_STEPS,
       loadComplete: false,
       loadError: null,
@@ -323,6 +327,8 @@ export const useGameStore = create<GameStore>()(
       setPhase: (phase) => set({ phase }, false, "setPhase"),
       setBoughtPlaneToday: (val) =>
         set({ boughtPlaneToday: val }, false, "setBoughtPlaneToday"),
+      setDailyEvent: (event) =>
+        set({ dailyEvent: event }, false, "setDailyEvent"),
       setAirline: (airline) => set({ airline }, false, "setAirline"),
       updateAirline: (patch) =>
         set(
@@ -629,6 +635,7 @@ export const usePhase = () => useGameStore((s) => s.phase);
 export const useIsAnonymous = () => useGameStore((s) => s.isAnonymous);
 export const useBoughtPlaneToday = () =>
   useGameStore((s) => s.boughtPlaneToday);
+export const useDailyEvent = () => useGameStore((s) => s.dailyEvent);
 export const useLoadSteps = () => useGameStore((s) => s.loadSteps);
 export const useLoadComplete = () => useGameStore((s) => s.loadComplete);
 

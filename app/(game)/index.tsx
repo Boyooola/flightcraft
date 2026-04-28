@@ -10,15 +10,19 @@ import TabBar from "@/components/hud/TabBar";
 import TopHUD from "@/components/hud/TopHUD";
 import GameMap from "@/components/map/GameMap";
 import SheetManager from "@/components/sheets/SheetManager";
+import DailyEventCard from "@/components/ui/DailyEventCard";
 import DaySummaryCard from "@/components/ui/DaySummaryCard";
+import GoalsOverlay from "@/components/ui/GoalsOverlay";
 import LoadingScreen from "@/components/ui/LoadingScreen";
 import MissionsPill from "@/components/ui/MissionsPill";
 import RouteCreationBanner from "@/components/ui/RouteCreationBanner";
 import ToastStack from "@/components/ui/ToastStack";
 import { useAchievementChecker } from "@/hooks/useAchievementChecker";
+import { useDailyEvents } from "@/hooks/useDailyEvents";
 import { useGameClock } from "@/hooks/useGameClock";
 import { useGameLoader } from "@/hooks/useGameLoader";
 import { useMissionChecker } from "@/hooks/useMissionChecker";
+import { useNotifications } from "@/hooks/useNotifications";
 import { useRevenueTick } from "@/hooks/useRevenueTick";
 import { useAirline, useLoadComplete, useLoadSteps, usePhase } from "@/store";
 import { useEffect, useState } from "react";
@@ -34,6 +38,8 @@ function GameContent() {
   useRevenueTick();
   useMissionChecker();
   useAchievementChecker();
+  useDailyEvents();
+  useNotifications();
 
   const loadComplete = useLoadComplete();
   const loadSteps = useLoadSteps();
@@ -70,9 +76,11 @@ function GameContent() {
       {!mapReady && <LoadingScreen steps={loadSteps} overlay />}
       <SheetManager />
       {phase === "playing" && <MissionsPill />}
+      {phase === "playing" && <GoalsOverlay />}
+      {phase === "playing" && <DailyEventCard />}
       {phase === "playing" && <DaySummaryCard />}
       {phase === "playing" && <ToastStack />}
-      {phase === "playing" && <RouteCreationBanner />}
+      {(phase === "playing" || phase === "tutorial") && <RouteCreationBanner />}
       {phase === "tutorial" && mapReady && <TutorialScreen />}
     </View>
   );

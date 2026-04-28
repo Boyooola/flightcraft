@@ -39,8 +39,6 @@ export default function RouteCreationBanner() {
 
   const color = airline?.color ?? Colors.sky;
 
-  console.log("active", active);
-
   // Slide in/out
   const slideY = useRef(new Animated.Value(-100)).current;
   useEffect(() => {

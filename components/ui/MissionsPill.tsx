@@ -21,7 +21,7 @@ import {
 } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
 import { useMemo } from "react";
-import { StyleSheet, Text, TouchableOpacity } from "react-native";
+import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
 function computeLiveComplete(
   mission: Mission,
@@ -94,9 +94,11 @@ function computeLiveComplete(
         );
       });
 
+    case "plane_buy":
+      return boughtPlane || mission.completed;
+
     case "no_crowding":
     case "clear_crowding":
-    case "plane_buy":
       return mission.completed;
 
     default:
@@ -152,11 +154,34 @@ export default function MissionsPill() {
       onPress={() => openSheet("missions")}
       activeOpacity={0.85}
     >
-      <Ionicons name="flag-outline" size={13} color={accent} />
-      <Text style={[s.txt, { color: accent }]}>
-        {liveCount}/{total}
-      </Text>
-      {allDone && <Ionicons name="checkmark-circle" size={11} color={accent} />}
+      <Ionicons name="flag-outline" size={12} color={accent} />
+
+      <View style={s.textWrap}>
+        <Text style={[s.label, { color: accent }]}>
+          {allDone ? "Missions Done!" : "Missions"}
+        </Text>
+        {!allDone && (
+          <Text style={[s.count, { color: accent }]}>
+            {liveCount} of {total} complete
+          </Text>
+        )}
+      </View>
+
+      {allDone ? (
+        <Ionicons name="checkmark-circle" size={13} color={accent} />
+      ) : (
+        <View style={s.dotsRow}>
+          {Array.from({ length: total }).map((_, i) => (
+            <View
+              key={i}
+              style={[
+                s.dot,
+                { backgroundColor: i < liveCount ? accent : accent + "33" },
+              ]}
+            />
+          ))}
+        </View>
+      )}
     </TouchableOpacity>
   );
 }
@@ -168,9 +193,9 @@ const s = StyleSheet.create({
     zIndex: 30,
     flexDirection: "row",
     alignItems: "center",
-    gap: 5,
-    paddingHorizontal: Spacing.sm + 2,
-    paddingVertical: Spacing.xs + 1,
+    gap: 6,
+    paddingHorizontal: Spacing.sm + 4,
+    paddingVertical: Spacing.xs + 2,
     borderRadius: Radius.full,
     borderWidth: 1,
     shadowColor: "#000",
@@ -179,5 +204,9 @@ const s = StyleSheet.create({
     shadowRadius: 6,
     elevation: 6,
   },
-  txt: { fontSize: 11, fontWeight: "700" },
+  textWrap: { gap: 1 },
+  label: { fontSize: 11, fontWeight: "700", lineHeight: 13 },
+  count: { fontSize: 8, opacity: 0.8, lineHeight: 10 },
+  dotsRow: { flexDirection: "row", gap: 3, alignItems: "center" },
+  dot: { width: 5, height: 5, borderRadius: 3 },
 });

@@ -22,7 +22,7 @@ import { useHaptics } from "@/hooks/useHaptics";
 import { useTabBarHeight } from "@/hooks/useSheetLayout";
 import { useCreateCustomRoute } from "@/hooks/useSupabaseWrite";
 import { haulClass, simulatePaxDay } from "@/lib/demands";
-import { fmtCash } from "@/lib/revenue";
+import { calcRouteRevenue, fmtCash } from "@/lib/revenue";
 import { distNm, estimateRouteRevenue } from "@/lib/routing";
 import type { Airport, OwnedPlane } from "@/store";
 import {
@@ -31,7 +31,7 @@ import {
   useGameStore,
   useHubs,
   useOwnedPlanes,
-  useRouteCreationWaypoints,
+  useRouteCreation,
   useRoutes,
 } from "@/store";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
@@ -513,7 +513,7 @@ const pr = StyleSheet.create({
 // ─────────────────────────────────────────────────────────────────
 
 export default function CreateRouteSheet() {
-  const creationWaypoints = useRouteCreationWaypoints();
+  const creation = useRouteCreation();
   const hubs = useHubs();
   const ownedPlanes = useOwnedPlanes();
   const routes = useRoutes();
@@ -531,7 +531,7 @@ export default function CreateRouteSheet() {
   const [done, setDone] = useState(false);
 
   const color = airline?.color ?? Colors.sky;
-  const waypoints = creationWaypoints;
+  const waypoints = creation.waypoints;
 
   // ── Prompt state — not enough waypoints yet ──────────────────
   if (waypoints.length < 2) {
@@ -608,7 +608,6 @@ export default function CreateRouteSheet() {
   );
 
   // Plane classification
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   const busyIds = new Set(
     routes.filter((r) => r.active).map((r) => r.plane.id),
   );
@@ -627,21 +626,20 @@ export default function CreateRouteSheet() {
         let dailyRev = 0;
         let fillPct = 0;
         if (canServe) {
-          const res = estimateRouteRevenue(
+          const p = plane.plane_model;
+          const res = calcRouteRevenue({
+            distNm: totalDist,
+            speedKts: p.speed_kts,
+            trustPct: originHub?.trust ?? 0,
+            deliveredPax: Math.min(paxDay, p.pax_capacity),
             paxDay,
-            {
-              type: "direct",
-              distNm: totalDist,
-              maxLegNm: maxLeg,
-              dailyFlights: 0,
-            },
-            plane.plane_model.pax_capacity,
-            plane.plane_model.speed_kts,
-            originHub?.trust ?? 0,
-            haul,
+            costPerSector: p.cost_per_sector ?? 500,
+            fuelPerNm: p.fuel_per_nm ?? 2.0,
+          });
+          dailyRev = res.net;
+          fillPct = Math.round(
+            (Math.min(paxDay, p.pax_capacity) / paxDay) * 100,
           );
-          dailyRev = res.dailyRev;
-          fillPct = res.fillPct;
         }
         return { plane, busy, canServe, reason, dailyRev, fillPct };
       })
@@ -649,7 +647,7 @@ export default function CreateRouteSheet() {
         if (a.canServe !== b.canServe) return a.canServe ? -1 : 1;
         return b.dailyRev - a.dailyRev;
       });
-  }, [ownedPlanes, busyIds, maxLeg, paxDay, totalDist, haul, originHub?.trust]);
+  }, [ownedPlanes, busyIds, maxLeg, paxDay, totalDist, originHub?.trust]);
 
   const selectedPlane = ownedPlanes.find((p) => p.id === selectedId) ?? null;
   const eligibleCount = classified.filter((p) => p.canServe).length;

@@ -92,7 +92,8 @@ function useMissionProgress(mission: Mission): {
               !e.label.startsWith("Mission:"),
           )
           .reduce((s, e) => s + e.amount, 0);
-        const prog = Math.min(1, rev / (t.revenueTarget ?? 1));
+        // Floor at 0 — negative net revenue doesn't drain the bar
+        const prog = Math.max(0, Math.min(1, rev / (t.revenueTarget ?? 1)));
         return { progress: prog, liveComplete: prog >= 1 };
       }
 
@@ -140,16 +141,13 @@ function useMissionProgress(mission: Mission): {
         return { progress: 0, liveComplete: false };
     }
   }, [
-    mission.completed,
-    mission.target,
-    mission.type,
-    boughtPlane,
-    routes,
+    mission,
     demands,
-    airline?.day,
-    airline?.loan,
-    ledger,
+    routes,
     hubs,
+    airline?.loan,
+    ledger.length,
+    boughtPlane,
   ]);
 }
 

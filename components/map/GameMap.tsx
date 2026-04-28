@@ -13,7 +13,7 @@
  */
 
 import type { Airport } from "@/store";
-import { useAirline, useGameStore, useHubs } from "@/store";
+import { useAirline, useGameStore } from "@/store";
 import MapboxGL from "@rnmapbox/maps";
 import { useCallback, useRef } from "react";
 import { StyleSheet, View } from "react-native";
@@ -37,47 +37,46 @@ interface GameMapProps {
 
 export default function GameMap({ airlineColor, onMapReady }: GameMapProps) {
   const airline = useAirline();
-  const hubs = useHubs();
   const mapRef = useRef<MapboxGL.MapView>(null);
-
-  const openSheet = useGameStore((s) => s.openSheet);
-  const addWaypoint = useGameStore((s) => s.addWaypoint);
-  const creationWaypoints = useGameStore((s) => s.creationWaypoints);
   const routeCreationMode = useGameStore((s) => s.routeCreationMode);
+  const creationWaypoints = useGameStore((s) => s.creationWaypoints);
 
   const color = airline?.color ?? "#38BDF8";
   const speed = airline?.speed ?? 1;
 
   // ── Airport tap handler ──────────────────────────────────────────
-  const handleAirportPress = useCallback(
-    (airport: Airport) => {
-      if (routeCreationMode) {
-        // Route creation: add waypoint
-        // If no waypoints yet, first tap should be a hub the player owns
-        if (creationWaypoints.length === 0) {
-          const isOwnedHub = hubs.some((h) => h.airport.iata === airport.iata);
-          if (!isOwnedHub) {
-            // Tap on non-hub first — still add it, CreateRouteSheet will validate
-            addWaypoint(airport);
-            return;
-          }
-        }
+  const handleAirportPress = useCallback((airport: Airport) => {
+    // Read fresh from store — never use closure state inside callbacks
+    // that trigger store updates (causes infinite re-render loops)
+    const {
+      routeCreationMode: isCreating,
+      creationWaypoints: waypoints,
+      hubs: currentHubs,
+      addWaypoint: addWpt,
+      openSheet: open,
+    } = useGameStore.getState();
 
-        addWaypoint(airport);
-
-        // After 2 waypoints open the CreateRouteSheet
-        const newLength = creationWaypoints.length + 1;
-        if (newLength >= 2) {
-          openSheet("create-route");
+    if (isCreating) {
+      if (waypoints.length === 0) {
+        const isOwnedHub = currentHubs.some(
+          (h) => h.airport.iata === airport.iata,
+        );
+        if (!isOwnedHub) {
+          addWpt(airport);
+          return;
         }
-        return;
       }
+      addWpt(airport);
+      // Check new length after adding
+      if (waypoints.length + 1 >= 2) {
+        open("create-route");
+      }
+      return;
+    }
 
-      // Normal mode — open airport sheet
-      openSheet("airport", airport);
-    },
-    [routeCreationMode, creationWaypoints, hubs, addWaypoint, openSheet],
-  );
+    // Normal mode
+    useGameStore.getState().openSheet("airport", airport);
+  }, []); // no deps — always reads fresh from store
 
   const waypointIatas = creationWaypoints.map((a) => a.iata);
 
@@ -107,17 +106,31 @@ export default function GameMap({ airlineColor, onMapReady }: GameMapProps) {
           waypointIatas={waypointIatas}
         />
 
-        <MapboxGL.StyleImport
-          id="basemap"
-          existing
-          config={{
-            showPlaceLabels: "No",
-            showPointOfInterestLabels: "No",
-            showTransitLabels: "No",
-            showAirportLabels: "No",
-            showRoadLabels: "No",
-          }}
-        />
+        {/* Hide Mapbox default city/place dots and labels */}
+        {[
+          "settlement-label",
+          "settlement-subdivision-label",
+          "place-label",
+          "place-city-label",
+          "place-town-label",
+          "place-village-label",
+          "poi-label",
+          "transit-label",
+          "airport-label",
+          "water-point-label",
+          "natural-point-label",
+          "settlement-minor-label",
+          "settlement-major-label",
+        ].map((id) => (
+          <MapboxGL.SymbolLayer
+            key={id}
+            id={`hide-${id}`}
+            sourceID="composite"
+            sourceLayerID={id}
+            existing
+            style={{ visibility: "none" }}
+          />
+        ))}
 
         <RouteLayer airlineColor={color} speed={speed} paused={speed === 0} />
       </MapboxGL.MapView>

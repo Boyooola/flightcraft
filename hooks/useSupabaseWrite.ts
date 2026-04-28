@@ -251,6 +251,100 @@ export function useSellHub() {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────
+// REFRESH DEMANDS — adds a new demand at an owned hub ($50K)
+// ─────────────────────────────────────────────────────────────────
+
+export function useRefreshDemands() {
+  return useCallback(
+    async (hubIata: string): Promise<{ error: string | null }> => {
+      const {
+        airline,
+        airports,
+        demands,
+        hubs,
+        addDemands,
+        spendCash,
+        addLedgerEntries,
+      } = useGameStore.getState();
+      if (!airline) return { error: "No airline" };
+
+      const hub = hubs.find((h) => h.airport.iata === hubIata);
+      if (!hub) return { error: "Hub not found" };
+
+      const REFRESH_COST = 50_000;
+      if (airline.cash < REFRESH_COST) {
+        return { error: `Need $50K to unlock a new route demand` };
+      }
+
+      const existingDests = demands
+        .filter((d) => d.hub_iata === hubIata)
+        .map((d) => d.dest.iata);
+
+      const newDemands = generateDemands(
+        hub.airport,
+        airports,
+        1,
+        existingDests,
+        airline.demand_score,
+        true,
+      );
+
+      if (newDemands.length === 0) {
+        return { error: "No new destinations available right now" };
+      }
+
+      spendCash(REFRESH_COST);
+      addLedgerEntries([
+        {
+          id: `led-refresh-${Date.now()}`,
+          day: airline.day,
+          type: "purchase",
+          label: `New route demand — ${hubIata}`,
+          amount: -REFRESH_COST,
+          route_id: null,
+        },
+      ]);
+
+      try {
+        const d = newDemands[0];
+        const { data } = await supabase
+          .from("demands")
+          .insert({
+            airline_id: airline.id,
+            hub_iata: hubIata,
+            origin_iata: d.origin.iata,
+            dest_iata: d.dest.iata,
+            dist_nm: d.dist_nm,
+            haul: d.haul,
+            pax_day: d.pax_day,
+            status: "pending",
+          })
+          .select()
+          .single();
+
+        if (data) {
+          addDemands([
+            {
+              ...d,
+              id: data.id,
+              airline_id: airline.id,
+              hub_iata: hubIata,
+              delivered_pax_today: 0,
+            },
+          ]);
+        }
+        return { error: null };
+      } catch (err) {
+        return {
+          error: err instanceof Error ? err.message : "Failed to add demand",
+        };
+      }
+    },
+    [],
+  );
+}
+
 export function useCreateRoute() {
   const store = useGameStore.getState;
 

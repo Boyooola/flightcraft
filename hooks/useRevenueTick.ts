@@ -140,6 +140,10 @@ export function useRevenueTick() {
     });
 
     // ── 3. Passenger simulation per route ────────────────────────
+    // Daily event multiplier — applies to all routes this day
+    const eventMultiplier =
+      useGameStore.getState().dailyEvent?.revenueMultiplier ?? 1.0;
+
     routes.forEach((route) => {
       if (!route.active) return;
       const hub = hubs.find((h) => h.airport.iata === route.hub_iata);
@@ -150,12 +154,13 @@ export function useRevenueTick() {
       const demand = route.demand;
       const deliveredPax = paxSnapshot.get(demand.id) ?? 0;
       const routeCrowding = crowdingByHub.get(route.hub_iata);
-      const revMultiplier =
+      const crowdMultiplier =
         routeCrowding?.level === "crisis"
           ? 0.8
           : routeCrowding?.level === "overcrowded"
             ? 0.9
             : 1.0;
+      const revMultiplier = crowdMultiplier * eventMultiplier;
       const routeDist = route.total_dist_nm ?? demand.dist_nm;
       const plane = route.plane.plane_model;
       const res = calcRouteRevenue({
