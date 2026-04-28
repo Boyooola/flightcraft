@@ -126,6 +126,10 @@ async function applyAwayEarnings(bgTimestamp: number, bgSpeed: number) {
   // Credit earnings
   if (totalEarnings !== 0) {
     earnCash(totalEarnings);
+    // Store for in-app toast display
+    useGameStore
+      .getState()
+      .setAwayEarnings({ days: cappedDays, amount: totalEarnings });
     addLedgerEntries([
       {
         id: `away-earnings-${Date.now()}`,
@@ -138,23 +142,7 @@ async function applyAwayEarnings(bgTimestamp: number, bgSpeed: number) {
     ]);
   }
 
-  // Show local notification summarising what happened
-  if (Notifications) {
-    try {
-      await Notifications.presentNotificationAsync?.({
-        title:
-          totalEarnings >= 0
-            ? `✈ Welcome back! +${fmtCash(totalEarnings)}`
-            : `✈ Welcome back!`,
-        body: `${cappedDays} game-day${cappedDays !== 1 ? "s" : ""} passed while you were away.${
-          totalEarnings !== 0
-            ? ` ${totalEarnings >= 0 ? "Earned" : "Lost"} ${fmtCash(Math.abs(totalEarnings))}.`
-            : ""
-        }`,
-        data: { type: "away_return" },
-      });
-    } catch {}
-  }
+  // In-app toast handled by AwayEarningsCard component
 }
 
 // ─────────────────────────────────────────────────────────────────

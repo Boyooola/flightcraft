@@ -10,6 +10,7 @@ import TabBar from "@/components/hud/TabBar";
 import TopHUD from "@/components/hud/TopHUD";
 import GameMap from "@/components/map/GameMap";
 import SheetManager from "@/components/sheets/SheetManager";
+import AwayEarningsCard from "@/components/ui/AwayEarningsCard";
 import DailyEventCard from "@/components/ui/DailyEventCard";
 import DaySummaryCard from "@/components/ui/DaySummaryCard";
 import GoalsOverlay from "@/components/ui/GoalsOverlay";
@@ -77,6 +78,7 @@ function GameContent() {
       <SheetManager />
       {phase === "playing" && <MissionsPill />}
       {phase === "playing" && <GoalsOverlay />}
+      {phase === "playing" && <AwayEarningsCard />}
       {phase === "playing" && <DailyEventCard />}
       {phase === "playing" && <DaySummaryCard />}
       {phase === "playing" && <ToastStack />}

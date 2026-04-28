@@ -150,7 +150,8 @@ export interface GameStore {
   // Auth
   isAnonymous: boolean;
   boughtPlaneToday: boolean;
-  dailyEvent: DailyEvent | null; // current day's event
+  dailyEvent: DailyEvent | null;
+  awayEarnings: { days: number; amount: number } | null;
 
   // Load
   loadSteps: LoadStep[];
@@ -201,6 +202,7 @@ export interface GameStore {
   setPhase: (phase: GamePhase) => void;
   setBoughtPlaneToday: (val: boolean) => void;
   setDailyEvent: (event: DailyEvent | null) => void;
+  setAwayEarnings: (data: { days: number; amount: number } | null) => void;
   setAirline: (airline: AirlineConfig) => void;
   updateAirline: (patch: Partial<AirlineConfig>) => void;
 
@@ -280,7 +282,8 @@ export const useGameStore = create<GameStore>()(
       // ── Initial state ────────────────────────────────────────────
       isAnonymous: false,
       boughtPlaneToday: false,
-      dailyEvent: null, // set correctly by useGameLoader after session check
+      dailyEvent: null,
+      awayEarnings: null, // set correctly by useGameLoader after session check
       loadSteps: INITIAL_LOAD_STEPS,
       loadComplete: false,
       loadError: null,
@@ -329,6 +332,8 @@ export const useGameStore = create<GameStore>()(
         set({ boughtPlaneToday: val }, false, "setBoughtPlaneToday"),
       setDailyEvent: (event) =>
         set({ dailyEvent: event }, false, "setDailyEvent"),
+      setAwayEarnings: (data) =>
+        set({ awayEarnings: data }, false, "setAwayEarnings"),
       setAirline: (airline) => set({ airline }, false, "setAirline"),
       updateAirline: (patch) =>
         set(
@@ -636,6 +641,7 @@ export const useIsAnonymous = () => useGameStore((s) => s.isAnonymous);
 export const useBoughtPlaneToday = () =>
   useGameStore((s) => s.boughtPlaneToday);
 export const useDailyEvent = () => useGameStore((s) => s.dailyEvent);
+export const useAwayEarnings = () => useGameStore((s) => s.awayEarnings);
 export const useLoadSteps = () => useGameStore((s) => s.loadSteps);
 export const useLoadComplete = () => useGameStore((s) => s.loadComplete);
 
