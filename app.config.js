@@ -64,7 +64,7 @@ export default {
       [
         "expo-notifications",
         {
-          icon: "./assets/notification-icon.png",
+          icon: "./assets/images/notification-icon.png",
           color: "#0ea5e9",
           androidMode: "default",
         },

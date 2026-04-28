@@ -14,6 +14,7 @@
  */
 
 import { calcRouteRevenue, fmtCash } from "@/lib/revenue";
+import { supabase } from "@/lib/supabase";
 import { useGameStore } from "@/store";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useCallback, useEffect, useRef } from "react";
@@ -236,6 +237,38 @@ export function useGameClock() {
           stopClock();
 
           if (phase === "playing" && speed > 0) {
+            // Save current state immediately before backgrounding
+            // so if app is killed, progress is not lost
+            try {
+              const { airline, hubs, earnedAchievements, missionsCompleted } =
+                useGameStore.getState();
+              if (airline) {
+                await supabase
+                  .from("airlines")
+                  .update({
+                    cash: airline.cash,
+                    loan: airline.loan,
+                    day: airline.day,
+                    demand_score: airline.demand_score,
+                    reputation: airline.reputation,
+                    achievements: earnedAchievements,
+                    missions_completed: missionsCompleted,
+                  })
+                  .eq("id", airline.id);
+
+                // Save hub trust values too
+                const hubUpdates = hubs
+                  .filter((h) => !h.id.startsWith("temp-"))
+                  .map((h) =>
+                    supabase
+                      .from("hubs")
+                      .update({ trust: Math.round(h.trust * 10) / 10 })
+                      .eq("id", h.id),
+                  );
+                await Promise.all(hubUpdates);
+              }
+            } catch {}
+
             const ts = Date.now().toString();
             await AsyncStorage.setItem(BG_TIMESTAMP_KEY, ts);
             await AsyncStorage.setItem(BG_SPEED_KEY, speed.toString());
@@ -248,7 +281,7 @@ export function useGameClock() {
 
             if (dailyNet > 0) {
               await scheduleAwayNotification(
-                3, // notify after 3 real minutes (was 3 hours — change for prod)
+                3,
                 Math.round(daysIn3Hours),
                 est3h,
               );
@@ -268,6 +301,26 @@ export function useGameClock() {
               await applyAwayEarnings(bgTs, bgSpeed);
               await AsyncStorage.removeItem(BG_TIMESTAMP_KEY);
               await AsyncStorage.removeItem(BG_SPEED_KEY);
+
+              // Save after away earnings so day + cash are persisted
+              try {
+                const { airline, hubs, earnedAchievements, missionsCompleted } =
+                  useGameStore.getState();
+                if (airline) {
+                  await supabase
+                    .from("airlines")
+                    .update({
+                      cash: airline.cash,
+                      loan: airline.loan,
+                      day: airline.day,
+                      demand_score: airline.demand_score,
+                      reputation: airline.reputation,
+                      achievements: earnedAchievements,
+                      missions_completed: missionsCompleted,
+                    })
+                    .eq("id", airline.id);
+                }
+              } catch {}
             } else {
               // No away earnings but ensure pax is reset if day changed while backgrounded
               useGameStore.getState().resetDailyPax();
