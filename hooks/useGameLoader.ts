@@ -24,7 +24,7 @@ import { useGameStore } from "@/store";
 import { useEffect, useRef } from "react";
 
 // ── Column mappers ────────────────────────────────────────────────
- 
+
 function rowToAirport(row: any): Airport {
   return {
     iata: row.iata_code ?? row.iata,
@@ -35,21 +35,12 @@ function rowToAirport(row: any): Airport {
     continent: row.continent ?? "",
     lat: parseFloat(row.latitude_deg ?? row.lat),
     lng: parseFloat(row.longitude_deg ?? row.lng),
-    tier: (() => {
-      const t = (row.type ?? row.tier ?? "").toLowerCase();
-      if (t === "mega" || t === "mega_airport") return "mega";
-      if (t === "large" || t === "large_airport") return "large";
-      if (t === "major" || t === "major_airport") return "major";
-      if (t === "minor" || t === "minor_airport") return "minor";
-      if (t === "local" || t === "local_airport") return "local";
-      return "regional";
-    })(),
+    tier: row.tier,
     pax_annual_m:
       row.pax_annual_m != null ? parseFloat(row.pax_annual_m) : null,
   };
 }
 
- 
 function rowToPlaneModel(row: any): PlaneModel {
   return {
     id: String(row.id),
@@ -68,6 +59,8 @@ function rowToPlaneModel(row: any): PlaneModel {
     haul: Array.isArray(row.haul)
       ? row.haul
       : ((row.haul ?? "short,medium").split(",") as HaulClass[]),
+    cost_per_sector: row.cost_per_sector,
+    fuel_per_nm: row.fuel_per_nm,
   };
 }
 
@@ -112,9 +105,7 @@ export function useGameLoader() {
       const { data, error } = await supabase
         .from("airports")
         .select("*")
-        .in("type", ["large_airport", "medium_airport"])
-        .eq("scheduled_service", "yes")
-        .not("iata_code", "is", null);
+        .gte("pax_annual_m", 2);
 
       if (error) throw error;
       const airports: Airport[] = (data ?? [])

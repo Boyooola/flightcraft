@@ -170,8 +170,11 @@ export default function SetupScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={{ flex: 1 }}
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      style={{
+        flex: 1,
+        backgroundColor: Colors.bg,
+      }}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
       <View
         style={[
@@ -572,6 +575,7 @@ const s = StyleSheet.create({
   colorGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
+    justifyContent: "center",
     gap: 10,
   },
   colorSwatch: {

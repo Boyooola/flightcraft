@@ -401,27 +401,6 @@ export default function RouteLayer({
       {planes.length > 0 && (
         <MapboxGL.ShapeSource id="planes-source" shape={planeGeoJSON}>
           <MapboxGL.CircleLayer
-            id="plane-glow"
-            existing={false}
-            style={{
-              circleRadius: [
-                "interpolate",
-                ["linear"],
-                ["zoom"],
-                1,
-                6,
-                5,
-                10,
-                10,
-                16,
-              ],
-              circleColor: airlineColor,
-              circleOpacity: 0.25,
-              circleBlur: 1.5,
-              circlePitchAlignment: "map",
-            }}
-          />
-          <MapboxGL.CircleLayer
             id="plane-body"
             existing={false}
             style={{
