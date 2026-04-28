@@ -125,6 +125,7 @@ export default function SettingsSheet() {
   const day = useDay();
   const closeSheet = useGameStore((s) => s.closeSheet);
   const openSheet = useGameStore((s) => s.openSheet);
+  const setIsAnonymous = useGameStore((s) => s.setIsAnonymous);
   const tabBarH = useTabBarHeight();
 
   const [deleting, setDeleting] = useState(false);
@@ -154,6 +155,7 @@ export default function SettingsSheet() {
     } else {
       const u = await getCurrentUser();
       setUserEmail(u?.email ?? null);
+      setIsAnonymous(u?.isAnonymous ?? false);
     }
   };
 

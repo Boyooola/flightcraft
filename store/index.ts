@@ -205,6 +205,7 @@ export interface GameStore {
   ) => void;
   setLoadComplete: () => void;
   setLoadError: (msg: string) => void;
+  setIsAnonymous: (isAnonymous: boolean) => void;
 
   // Reference data
   setAirports: (airports: Airport[]) => void;
@@ -348,6 +349,9 @@ export const useGameStore = create<GameStore>()(
         set({ loadComplete: true, loadError: null }, false, "setLoadComplete"),
 
       setLoadError: (msg) => set({ loadError: msg }, false, "setLoadError"),
+
+      setIsAnonymous: (isAnonymous) =>
+        set({ isAnonymous: isAnonymous }, false, "setIsAnonymous"),
 
       // ── Reference data ───────────────────────────────────────────
       setAirports: (airports) => set({ airports }, false, "setAirports"),
