@@ -48,6 +48,7 @@ export default {
       "expo-font",
       "expo-audio",
       "expo-web-browser",
+      "expo-asset",
       [
         "expo-splash-screen",
         {
