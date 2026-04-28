@@ -285,7 +285,14 @@ export default function SettingsSheet() {
 
       {/* Airline summary */}
       <View style={[s.airlineCard, { borderColor: color + "33" }]}>
-        <View style={[s.airlineDot, { backgroundColor: color }]} />
+        <View
+          style={[
+            s.airlineIconWrap,
+            { backgroundColor: color + "18", borderColor: color + "33" },
+          ]}
+        >
+          <Ionicons name="airplane" size={20} color={color} />
+        </View>
         <View style={s.airlineInfo}>
           <Text style={s.airlineName}>{airline?.name ?? "Your Airline"}</Text>
           <Text style={s.airlineMeta}>
@@ -453,7 +460,15 @@ const s = StyleSheet.create({
     borderWidth: 1,
     padding: Spacing.md,
   },
-  airlineDot: { width: 14, height: 14, borderRadius: 7, flexShrink: 0 },
+  airlineIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+  },
   airlineInfo: { flex: 1 },
   airlineName: { fontSize: 15, color: Colors.text, fontWeight: "700" },
   airlineMeta: { fontSize: 11, color: Colors.dim, marginTop: 2 },
