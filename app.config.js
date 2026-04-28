@@ -11,7 +11,7 @@ export default {
     userInterfaceStyle: "dark",
 
     splash: {
-      image: "./assets/images/splash.png",
+      image: "./assets/images/splash-icon.png",
       resizeMode: "contain",
       backgroundColor: "#04090f",
     },
@@ -49,14 +49,7 @@ export default {
       "expo-audio",
       "expo-web-browser",
       "expo-asset",
-      [
-        "expo-splash-screen",
-        {
-          backgroundColor: "#04090f",
-          image: "./assets/images/splash.png",
-          resizeMode: "contain",
-        },
-      ],
+      "expo-splash-screen",
       "@rnmapbox/maps",
       [
         "@sentry/react-native/expo",
@@ -71,6 +64,7 @@ export default {
       [
         "expo-notifications",
         {
+          icon: "./assets/notification-icon.png",
           color: "#0ea5e9",
           androidMode: "default",
         },
