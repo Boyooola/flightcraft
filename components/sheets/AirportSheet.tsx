@@ -15,8 +15,9 @@ import { useTabBarHeight } from "@/hooks/useSheetLayout";
  */
 
 import { Colors, MIN_TOUCH, Radius, Spacing } from "@/constants/theme";
+import { useGameSounds } from "@/hooks/useGameSounds";
 import { useHaptics } from "@/hooks/useHaptics";
-import { useBuyHub } from "@/hooks/useSupabaseWrite";
+import { useBuyHub, useSellHub } from "@/hooks/useSupabaseWrite";
 import {
   airportClassification,
   allDemandsServed,
@@ -24,7 +25,7 @@ import {
   hubCrowdingLevel,
   hubPurchaseCost,
 } from "@/lib/demands";
-import { calcRouteDailyRevenue, fmtCash } from "@/lib/revenue";
+import { calcRouteRevenue, fmtCash } from "@/lib/revenue";
 import type { Airport, Demand, OwnedHub, Route } from "@/store";
 import {
   useAirline,
@@ -41,6 +42,7 @@ import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import { useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -127,8 +129,20 @@ function DepartureRow({
       : 0;
   const barColor =
     fillPct >= 80 ? Colors.green : fillPct > 0 ? Colors.amber : Colors.red;
-  const revenue =
-    route && hub ? calcRouteDailyRevenue(route, hub, day, true) : 0;
+  const revenue = (() => {
+    if (!route || !hub) return 0;
+    const p = route.plane.plane_model;
+    const dist = route.total_dist_nm ?? route.demand.dist_nm;
+    return calcRouteRevenue({
+      distNm: dist,
+      speedKts: p.speed_kts,
+      trustPct: hub.trust,
+      deliveredPax: demand.pax_day, // full daily estimate
+      paxDay: demand.pax_day,
+      costPerSector: p.cost_per_sector ?? 500,
+      fuelPerNm: p.fuel_per_nm ?? 2.0,
+    }).net;
+  })();
 
   return (
     <View style={dep.row}>
@@ -426,8 +440,11 @@ export default function AirportSheet() {
   const closeSheet = useGameStore((s) => s.closeSheet);
   const tabBarH = useTabBarHeight();
   const haptics = useHaptics();
+  const sounds = useGameSounds();
   const buyHub = useBuyHub();
+  const sellHub = useSellHub();
   const ownedPlanes = useOwnedPlanes();
+  const [selling, setSelling] = useState(false);
 
   const [buying, setBuying] = useState(false);
   const [buyError, setBuyError] = useState<string | null>(null);
@@ -490,16 +507,61 @@ export default function AirportSheet() {
   const servedCount = hubDemands.filter((d) => d.status === "served").length;
   const pendingCount = hubDemands.filter((d) => d.status === "pending").length;
 
+  const handleSell = () => {
+    const hubRouteCount = routes.filter(
+      (r) => r.hub_iata === airport.iata && r.active,
+    ).length;
+    const refund = Math.round(hubPurchaseCost(airport) * 0.5);
+    Alert.alert(
+      "Sell Hub",
+      `Sell ${airport.iata} hub for ${fmtCash(refund)}?
+
+` +
+        (hubRouteCount > 0
+          ? `⚠️ This will deactivate ${hubRouteCount} active route${hubRouteCount !== 1 ? "s" : ""} and free ${hubRouteCount} plane${hubRouteCount !== 1 ? "s" : ""}.
+
+`
+          : "") +
+        "You'll receive 50% of the purchase price.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Sell Hub",
+          style: "destructive",
+          onPress: async () => {
+            setSelling(true);
+            const { error, refund: amount } = await sellHub(hub!.id);
+            setSelling(false);
+            if (error) {
+              Alert.alert("Error", error);
+              haptics.error();
+              sounds.error();
+            } else {
+              haptics.success();
+              sounds.hubSell();
+              closeSheet();
+            }
+          },
+        },
+      ],
+    );
+  };
+
   const handleBuy = async () => {
     haptics.confirm();
     setBuying(true);
     setBuyError(null);
-    const { error } = await buyHub(airport);
+    // Pass the already-shown previewDemands so the same destinations
+    // appear after purchase — no second random generation
+    const { error } = await buyHub(airport, previewDemands as any);
     setBuying(false);
     if (error) {
       setBuyError(error);
       haptics.error();
-    } else haptics.success();
+    } else {
+      haptics.success();
+      sounds.hubBuy();
+    }
   };
 
   const handleCreateRoute = (demand: Demand) => {
@@ -598,6 +660,27 @@ export default function AirportSheet() {
       </View>
 
       <View style={s.divider} />
+
+      {/* ── SELL HUB ── */}
+      {isOwned && hub && (
+        <TouchableOpacity
+          style={s.sellHubBtn}
+          onPress={handleSell}
+          disabled={selling}
+          activeOpacity={0.8}
+        >
+          {selling ? (
+            <ActivityIndicator size="small" color={Colors.red} />
+          ) : (
+            <Ionicons name="storefront-outline" size={13} color={Colors.red} />
+          )}
+          <Text style={s.sellHubTxt}>
+            {selling
+              ? "Selling..."
+              : `Sell Hub · ${fmtCash(Math.round(hubPurchaseCost(airport) * 0.5))} refund`}
+          </Text>
+        </TouchableOpacity>
+      )}
 
       {/* ══ BUY HUB ══ */}
       {!isOwned && (
@@ -1034,4 +1117,19 @@ const s = StyleSheet.create({
     marginTop: 4,
   },
   crowdingBarFill: { height: "100%", borderRadius: 2 },
+  sellHubBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.red + "44",
+    backgroundColor: Colors.red + "0a",
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    alignSelf: "flex-start",
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.sm,
+  },
+  sellHubTxt: { fontSize: 11, color: Colors.red, fontWeight: "600" },
 });

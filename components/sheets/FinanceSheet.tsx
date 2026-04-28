@@ -12,7 +12,7 @@ import { useTabBarHeight } from "@/hooks/useSheetLayout";
 
 import { Colors, Radius, Spacing } from "@/constants/theme";
 import {
-  calcRouteDailyRevenue,
+  calcRouteRevenue,
   dailyInterest,
   fmtCash,
   fmtCashShort,
@@ -225,7 +225,18 @@ export default function FinanceSheet() {
       .filter((r) => r.active)
       .reduce((sum, r) => {
         const hub = hubs.find((h) => h.airport.iata === r.hub_iata);
-        return sum + (hub ? calcRouteDailyRevenue(r, hub, day, true) : 0);
+        const p = r.plane.plane_model;
+        const dist = r.total_dist_nm ?? r.demand.dist_nm;
+        const res = calcRouteRevenue({
+          distNm: dist,
+          speedKts: p.speed_kts,
+          trustPct: hub?.trust ?? 0,
+          deliveredPax: r.demand.pax_day,
+          paxDay: r.demand.pax_day,
+          costPerSector: p.cost_per_sector ?? 500,
+          fuelPerNm: p.fuel_per_nm ?? 2.0,
+        });
+        return sum + res.net;
       }, 0);
   }, [routes, hubs, day]);
 
@@ -247,8 +258,18 @@ export default function FinanceSheet() {
       .filter((r) => r.active)
       .map((r) => {
         const hub = hubs.find((h) => h.airport.iata === r.hub_iata);
-        const rev = hub ? calcRouteDailyRevenue(r, hub, day, true) : 0;
-        return { route: r, rev };
+        const p = r.plane.plane_model;
+        const dist = r.total_dist_nm ?? r.demand.dist_nm;
+        const res = calcRouteRevenue({
+          distNm: dist,
+          speedKts: p.speed_kts,
+          trustPct: hub?.trust ?? 0,
+          deliveredPax: r.demand.pax_day,
+          paxDay: r.demand.pax_day,
+          costPerSector: p.cost_per_sector ?? 500,
+          fuelPerNm: p.fuel_per_nm ?? 2.0,
+        });
+        return { route: r, rev: res.net };
       })
       .sort((a, b) => b.rev - a.rev);
   }, [routes, hubs, day]);

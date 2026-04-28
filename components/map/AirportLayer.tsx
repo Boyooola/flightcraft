@@ -102,12 +102,12 @@ export default function AirportLayer({
         Animated.timing(pulse, {
           toValue: 1,
           duration: 1800,
-          useNativeDriver: false,
+          useNativeDriver: true,
         }),
         Animated.timing(pulse, {
           toValue: 0,
           duration: 1800,
-          useNativeDriver: false,
+          useNativeDriver: true,
         }),
       ]),
     );

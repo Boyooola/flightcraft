@@ -11,6 +11,7 @@ import { useHudHeight } from "@/hooks/useSheetLayout";
 import type { Mission } from "@/lib/missions";
 import {
   useAirline,
+  useBoughtPlaneToday,
   useDailyMissions,
   useDemands,
   useGameStore,
@@ -31,6 +32,7 @@ function computeLiveComplete(
     loan,
     ledger,
     day,
+    boughtPlane,
   }: {
     demands: any[];
     routes: any[];
@@ -38,6 +40,7 @@ function computeLiveComplete(
     loan: number;
     ledger: any[];
     day: number;
+    boughtPlane: boolean;
   },
 ): boolean {
   if (mission.completed) return true;
@@ -111,14 +114,23 @@ export default function MissionsPill() {
   const routes = useRoutes();
   const hubs = useHubs();
   const loan = useGameStore((s) => s.airline?.loan ?? 0);
+  const boughtPlane = useBoughtPlaneToday();
   const ledger = useGameStore((s) => s.ledger);
   const day = useGameStore((s) => s.airline?.day ?? 1);
 
   const liveCount = useMemo(() => {
     return missions.filter((m) =>
-      computeLiveComplete(m, { demands, routes, hubs, loan, ledger, day }),
+      computeLiveComplete(m, {
+        demands,
+        routes,
+        hubs,
+        loan,
+        ledger,
+        day,
+        boughtPlane,
+      }),
     ).length;
-  }, [missions, demands, routes, hubs, loan, ledger, day]);
+  }, [missions, demands, routes, hubs, loan, ledger, day, boughtPlane]);
 
   if (isCreating || missions.length === 0) return null;
 

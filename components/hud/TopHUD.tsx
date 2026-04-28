@@ -12,7 +12,7 @@
  */
 
 import { Colors, Radius, Spacing } from "@/constants/theme";
-import { fmtCash } from "@/lib/revenue";
+import { calcRouteRevenue, fmtCash } from "@/lib/revenue";
 import {
   useAirline,
   useCash,
@@ -23,7 +23,7 @@ import {
   useRoutes,
 } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Animated,
   Platform,
@@ -43,13 +43,6 @@ const SPEEDS: { value: GameSpeed; icon: string }[] = [
   { value: 2, icon: "play-forward" },
   { value: 3, icon: "play-skip-forward" },
 ];
-
-// Yield per pax — matches revenue.ts
-const YIELD: Record<string, number> = {
-  short: 120,
-  medium: 280,
-  long: 550,
-};
 
 export default function TopHUD() {
   const insets = useSafeAreaInsets();
@@ -78,14 +71,30 @@ export default function TopHUD() {
     const demand = demands.find((d) => d.id === route.demand.id);
     if (!demand) return total;
     const pax = demand.delivered_pax_today ?? 0;
+    if (pax === 0) return total;
     const hub = hubs.find((h) => h.airport.iata === route.hub_iata);
-    const trust = hub?.trust ?? 0;
-    const baseYield = YIELD[demand.haul] ?? 120;
-    const trustMult = 1 + (trust / 100) * 0.25;
-    return total + Math.round(pax * baseYield * trustMult);
+    const p = route.plane.plane_model;
+    const res = calcRouteRevenue({
+      distNm: route.total_dist_nm ?? demand.dist_nm,
+      speedKts: p.speed_kts,
+      trustPct: hub?.trust ?? 0,
+      deliveredPax: pax,
+      paxDay: demand.pax_day,
+      costPerSector: p.cost_per_sector ?? 500,
+      fuelPerNm: p.fuel_per_nm ?? 2.0,
+    });
+    return total + res.net;
   }, 0);
 
-  // ── Day tick pulse ───────────────────────────────────────────────
+  // ── Revenue counter listener ─────────────────────────────────────
+  useEffect(() => {
+    const id = displayedRev.addListener(({ value }) => {
+      setDisplayedRevVal(Math.round(value));
+    });
+    return () => displayedRev.removeListener(id);
+  }, []);
+
+  // ── Day tick pulse ────────────────────────────────────────────────
   const dayScale = useRef(new Animated.Value(1)).current;
   const dayColor = useRef(new Animated.Value(0)).current;
   const prevDay = useRef(day);
@@ -130,12 +139,14 @@ export default function TopHUD() {
 
   // ── Today's revenue ticker animation ────────────────────────────
   // Flashes bright green briefly each time revenue increases
-  const revAnim = useRef(new Animated.Value(0)).current; // 0 = normal, 1 = flash
+  const revAnim = useRef(new Animated.Value(0)).current;
   const prevRev = useRef(0);
+  const displayedRev = useRef(new Animated.Value(0)).current;
+  const [displayedRevVal, setDisplayedRevVal] = useState(0);
 
   useEffect(() => {
     if (todayRevenue > prevRev.current) {
-      prevRev.current = todayRevenue;
+      // Flash animation
       Animated.sequence([
         Animated.timing(revAnim, {
           toValue: 1,
@@ -148,9 +159,17 @@ export default function TopHUD() {
           useNativeDriver: true,
         }),
       ]).start();
+      // Count up animation — from previous value to new value
+      Animated.timing(displayedRev, {
+        toValue: todayRevenue,
+        duration: 600,
+        useNativeDriver: true,
+      }).start();
+      prevRev.current = todayRevenue;
     } else if (todayRevenue === 0) {
       // Day reset
       prevRev.current = 0;
+      displayedRev.setValue(0);
     }
   }, [todayRevenue]);
 
@@ -207,7 +226,10 @@ export default function TopHUD() {
                 },
               ]}
             >
-              +{fmtCash(todayRevenue)}
+              +$
+              {displayedRevVal > 0
+                ? displayedRevVal.toLocaleString()
+                : todayRevenue.toLocaleString()}
             </Animated.Text>
           ) : (
             <Text style={st.revZero}>$0</Text>

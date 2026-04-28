@@ -22,7 +22,7 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
-  View
+  View,
 } from "react-native";
 
 // Pull these as simple selectors — no object return
@@ -38,6 +38,8 @@ export default function RouteCreationBanner() {
   const hudH = useHudHeight();
 
   const color = airline?.color ?? Colors.sky;
+
+  console.log("active", active);
 
   // Slide in/out
   const slideY = useRef(new Animated.Value(-100)).current;

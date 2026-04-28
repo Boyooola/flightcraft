@@ -1,21 +1,19 @@
 /**
  * components/map/RouteLayer.tsx
  *
- * Route arcs + animated plane icons that follow the arc curve.
+ * Route arcs + animated planes + revenue pops.
  *
- * Arc: great-circle interpolation (curved, like a real flight path)
- * Plane: a GeoJSON Point that advances along the arc points each frame.
- *        Bearing is computed from current→next point so the icon
- *        rotates to face the direction of travel.
+ * Revenue uses calcRouteRevenue() from lib/revenue.ts — same
+ * function used by useRevenueTick, RoutesSheet, TopHUD.
+ * No inline math here.
  *
- * Connecting routes: two legs chained into one sequence.
- * Each route has its own phase offset so planes don't all
- * move in sync — staggered based on route index.
- *
- * Animation is real-time (not game-clock) — planes move at a
- * fixed pace regardless of game speed so the map always feels alive.
+ * Pax delivery: only on OUTBOUND arrival (raw crosses 1.0).
+ * Pax capped at pax_day — never over-delivers.
+ * Revenue pop: green (+) for profit, red (-) for loss.
  */
 
+import { gameSounds } from "@/hooks/useGameSounds";
+import { calcRouteRevenue } from "@/lib/revenue";
 import type { Airport, Route } from "@/store";
 import { useGameStore, useRoutes } from "@/store";
 import MapboxGL from "@rnmapbox/maps";
@@ -25,9 +23,11 @@ import { useEffect, useRef, useState } from "react";
 // CONSTANTS
 // ─────────────────────────────────────────────────────────────────
 
-const ARC_STEPS = 40; // points along each arc leg
-const ANIM_INTERVAL_MS = 60; // ~16fps update rate
-const LEG_DURATION_MS = 9000; // time to fly one leg (real time)
+const ARC_STEPS = 40;
+const ANIM_INTERVAL_MS = 60;
+const LEG_DURATION_MS = 9_000;
+const POP_DURATION_MS = 1_500;
+const POP_FRAMES = Math.ceil(POP_DURATION_MS / 33);
 
 // ─────────────────────────────────────────────────────────────────
 // GEOMETRY
@@ -45,7 +45,6 @@ function greatCircleArc(
     const t = i / steps;
     const lng = lng1 + (lng2 - lng1) * t;
     const lat = lat1 + (lat2 - lat1) * t;
-    // Arc height scales with longitudinal span — short routes stay flatter
     const span = Math.abs(lng2 - lng1);
     const arc = Math.sin(t * Math.PI) * span * 0.12;
     pts.push([lng, lat + arc]);
@@ -53,7 +52,6 @@ function greatCircleArc(
   return pts;
 }
 
-/** Bearing in degrees from pointA → pointB (for icon-rotate) */
 function bearing(
   [lng1, lat1]: [number, number],
   [lng2, lat2]: [number, number],
@@ -68,11 +66,6 @@ function bearing(
   return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
 }
 
-// ─────────────────────────────────────────────────────────────────
-// BUILD FULL POINT SEQUENCE FOR A ROUTE
-// Chains legs for connecting routes into one sequence
-// ─────────────────────────────────────────────────────────────────
-
 function buildRoutePoints(
   route: Route,
   airports: Airport[],
@@ -80,7 +73,6 @@ function buildRoutePoints(
   const via = route.via_iata
     ? airports.find((a) => a.iata === route.via_iata)
     : null;
-
   if (via) {
     const leg1 = greatCircleArc(
       route.demand.origin.lng,
@@ -94,10 +86,8 @@ function buildRoutePoints(
       route.demand.dest.lng,
       route.demand.dest.lat,
     );
-    // Remove duplicate mid-point
     return [...leg1, ...leg2.slice(1)];
   }
-
   return greatCircleArc(
     route.demand.origin.lng,
     route.demand.origin.lat,
@@ -106,8 +96,16 @@ function buildRoutePoints(
   );
 }
 
+function fmtPop(amount: number): string {
+  const abs = Math.abs(amount);
+  const pfx = amount >= 0 ? "+" : "-";
+  if (abs >= 1_000_000) return `${pfx}$${(abs / 1_000_000).toFixed(1)}M`;
+  if (abs >= 1_000) return `${pfx}$${Math.round(abs / 1_000)}K`;
+  return `${pfx}$${Math.round(abs)}`;
+}
+
 // ─────────────────────────────────────────────────────────────────
-// PLANE POSITION STATE
+// TYPES
 // ─────────────────────────────────────────────────────────────────
 
 interface PlaneState {
@@ -115,6 +113,15 @@ interface PlaneState {
   lng: number;
   lat: number;
   rotation: number;
+}
+
+interface RevenuePop {
+  id: string;
+  lng: number;
+  lat: number;
+  amount: number;
+  opacity: number;
+  offsetY: number;
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -134,14 +141,14 @@ export default function RouteLayer({
   const airports = useGameStore((s) => s.airports);
 
   const [planes, setPlanes] = useState<PlaneState[]>([]);
+  const [revPops, setRevPops] = useState<RevenuePop[]>([]);
+
   const phaseRef = useRef<Record<string, number>>({});
-  // Track which "half" of the cycle each plane was on last tick
-  // to detect arrivals (crossing raw=1 = outbound arrival at dest)
   const lastRawRef = useRef<Record<string, number>>({});
 
   const active = routes.filter((r) => r.active);
 
-  // ── Animation loop ───────────────────────────────────────────
+  // ── Animation loop ─────────────────────────────────────────────
   useEffect(() => {
     if (active.length === 0) {
       setPlanes([]);
@@ -161,7 +168,7 @@ export default function RouteLayer({
 
       const now = Date.now();
       const scaledMs = LEG_DURATION_MS / Math.max(1, speed);
-      const { addPaxDelivered } = useGameStore.getState();
+      const store = useGameStore.getState();
 
       const newPlanes: PlaneState[] = active.map((r) => {
         const pts = routePoints[r.id];
@@ -184,38 +191,83 @@ export default function RouteLayer({
           pts[Math.max(0, Math.min(total, nextIdx))],
         );
 
-        // ── Arrival detection ────────────────────────────────────
-        // Only credit pax on OUTBOUND arrival (raw crosses 1.0 going up).
-        // NOT on return — avoids double-counting pax per round trip.
+        // ── Outbound arrival only ─────────────────────────────────
         const lastRaw = lastRawRef.current[r.id];
-        if (lastRaw !== undefined) {
-          const justArrivedAtDest = lastRaw < 1 && raw >= 1;
+        if (lastRaw !== undefined && lastRaw < 1 && raw >= 1) {
+          const demand =
+            store.demands.find((d) => d.id === r.demand.id) ?? r.demand;
+          const distNm = r.total_dist_nm ?? r.demand.dist_nm;
+          const plane = r.plane.plane_model;
 
-          if (justArrivedAtDest) {
-            const distNm = r.total_dist_nm ?? r.demand.dist_nm;
-            const flightH = distNm / r.plane.plane_model.speed_kts;
-            const flights = Math.max(1, Math.floor(24 / (flightH * 2)));
-            const paxPerFlight = Math.round(
-              (r.demand.pax_day / flights) * (0.65 + Math.random() * 0.35),
+          // Pax — never exceed daily quota
+          const delivered = demand.delivered_pax_today ?? 0;
+          const remaining = Math.max(0, demand.pax_day - delivered);
+
+          if (remaining > 0) {
+            const flights = Math.max(
+              1,
+              Math.floor(24 / ((distNm / plane.speed_kts) * 2)),
             );
-            const actualPax = Math.max(1, paxPerFlight);
-            addPaxDelivered(r.demand.id, actualPax);
+            const perFlight = Math.round(
+              (demand.pax_day / flights) * (0.65 + Math.random() * 0.35),
+            );
+            const actualPax = Math.min(remaining, Math.max(1, perFlight));
 
-            // Credit revenue LIVE so cash ticks up as planes land
-            // yieldPerPax from revenue lib based on haul
-            const yieldTable: Record<string, number> = {
-              short: 120,
-              medium: 280,
-              long: 550,
-            };
-            const ypp = yieldTable[r.demand.haul] ?? 120;
-            const liveRev = Math.round(actualPax * ypp);
-            const { earnCash } = useGameStore.getState();
-            earnCash(liveRev);
+            store.addPaxDelivered(r.demand.id, actualPax);
+
+            // Revenue — use shared calcRouteRevenue (same as all other components)
+            const hub = store.hubs.find((h) => h.airport.iata === r.hub_iata);
+            const res = calcRouteRevenue({
+              distNm,
+              speedKts: plane.speed_kts,
+              trustPct: hub?.trust ?? 0,
+              deliveredPax: actualPax,
+              paxDay: demand.pax_day,
+              costPerSector: plane.cost_per_sector ?? 500,
+              fuelPerNm: plane.fuel_per_nm ?? 2.0,
+            });
+
+            store.earnCash(res.net);
+            gameSounds.play(
+              res.net >= 0 ? "revenuePositive" : "revenueNegative",
+            );
+
+            // Revenue pop at destination
+            const popId = `pop-${r.id}-${Date.now()}`;
+            setRevPops((prev) => [
+              ...prev,
+              {
+                id: popId,
+                lng: r.demand.dest.lng,
+                lat: r.demand.dest.lat,
+                amount: res.net,
+                opacity: 1.0,
+                offsetY: 0,
+              },
+            ]);
+
+            // Fade + float over POP_DURATION_MS
+            let frame = 0;
+            const fadeId = setInterval(() => {
+              frame++;
+              const t = frame / POP_FRAMES;
+              if (t >= 1) {
+                clearInterval(fadeId);
+                setRevPops((prev) => prev.filter((p) => p.id !== popId));
+                return;
+              }
+              setRevPops((prev) =>
+                prev.map((p) =>
+                  p.id === popId
+                    ? { ...p, opacity: 1 - t, offsetY: t * 40 }
+                    : p,
+                ),
+              );
+            }, 33);
           }
         }
-        lastRawRef.current[r.id] = raw;
 
+        lastRawRef.current[r.id] = raw;
         return { routeId: r.id, lng, lat, rotation: rot };
       });
 
@@ -226,15 +278,12 @@ export default function RouteLayer({
     return () => clearInterval(id);
   }, [active.length, airports, speed, paused]);
 
-  if (active.length === 0) return null;
-
-  // ── Build GeoJSON ─────────────────────────────────────────────
+  // ── Build GeoJSON ───────────────────────────────────────────────
   const lineFeatures: GeoJSON.Feature[] = [];
   const viaPoints: GeoJSON.Feature[] = [];
 
   active.forEach((r) => {
     const via = r.via_iata ? airports.find((a) => a.iata === r.via_iata) : null;
-
     if (via) {
       lineFeatures.push({
         type: "Feature",
@@ -296,8 +345,6 @@ export default function RouteLayer({
     type: "FeatureCollection",
     features: viaPoints,
   };
-
-  // Plane GeoJSON — one Point per active route
   const planeGeoJSON: GeoJSON.FeatureCollection = {
     type: "FeatureCollection",
     features: planes.map((p) => ({
@@ -307,10 +354,24 @@ export default function RouteLayer({
       properties: { rotation: p.rotation },
     })),
   };
+  const popsGeoJSON: GeoJSON.FeatureCollection = {
+    type: "FeatureCollection",
+    features: revPops.map((p) => ({
+      type: "Feature",
+      id: p.id,
+      geometry: { type: "Point", coordinates: [p.lng, p.lat] },
+      properties: {
+        label: fmtPop(p.amount),
+        opacity: p.opacity,
+        offsetY: -p.offsetY,
+        color: p.amount >= 0 ? "#22c55e" : "#ef4444",
+      },
+    })),
+  };
 
   return (
     <>
-      {/* ── Route arcs ── */}
+      {/* Route arcs */}
       <MapboxGL.ShapeSource id="routes-source" shape={lineGeoJSON}>
         <MapboxGL.LineLayer
           id="route-glow"
@@ -336,10 +397,9 @@ export default function RouteLayer({
         />
       </MapboxGL.ShapeSource>
 
-      {/* ── Animated planes ── */}
+      {/* Animated planes */}
       {planes.length > 0 && (
         <MapboxGL.ShapeSource id="planes-source" shape={planeGeoJSON}>
-          {/* Glow halo behind the plane */}
           <MapboxGL.CircleLayer
             id="plane-glow"
             existing={false}
@@ -361,7 +421,6 @@ export default function RouteLayer({
               circlePitchAlignment: "map",
             }}
           />
-          {/* Plane body — solid coloured circle */}
           <MapboxGL.CircleLayer
             id="plane-body"
             existing={false}
@@ -384,7 +443,6 @@ export default function RouteLayer({
               circlePitchAlignment: "map",
             }}
           />
-          {/* Plane icon on top — larger size */}
           <MapboxGL.SymbolLayer
             id="plane-icon"
             existing={false}
@@ -412,7 +470,30 @@ export default function RouteLayer({
         </MapboxGL.ShapeSource>
       )}
 
-      {/* ── Via stop dots ── */}
+      {/* Revenue pops */}
+      {revPops.length > 0 && (
+        <MapboxGL.ShapeSource id="revenue-pops-source" shape={popsGeoJSON}>
+          <MapboxGL.SymbolLayer
+            id="revenue-pops-layer"
+            existing={false}
+            style={{
+              textField: ["get", "label"],
+              textSize: 13,
+              textColor: ["get", "color"],
+              textHaloColor: "rgba(0,0,0,0.75)",
+              textHaloWidth: 1.5,
+              textOpacity: ["get", "opacity"],
+              textOffset: [0, 1.2],
+              textAnchor: "bottom",
+              textFont: ["DIN Offc Pro Bold", "Arial Unicode MS Bold"],
+              textAllowOverlap: true,
+              textIgnorePlacement: true,
+            }}
+          />
+        </MapboxGL.ShapeSource>
+      )}
+
+      {/* Via stop dots */}
       {viaPoints.length > 0 && (
         <MapboxGL.ShapeSource id="via-stops-source" shape={viaGeoJSON}>
           <MapboxGL.CircleLayer

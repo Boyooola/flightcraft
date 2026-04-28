@@ -10,11 +10,12 @@
  */
 
 import { Colors, Radius, Spacing } from "@/constants/theme";
+import { gameSounds } from "@/hooks/useGameSounds";
 import type {
   AchievementToastData,
   MissionToastData,
   RevenueToastData,
-  ToastData,
+  ToastData
 } from "@/hooks/useToast";
 import { useToastListener } from "@/hooks/useToast";
 import { fmtCash } from "@/lib/revenue";
@@ -116,10 +117,15 @@ export default function ToastStack() {
 
   const bottom = insets.bottom + TAB_H + Spacing.md;
 
-  // Sort queue by priority
-  const sortedQueue = [...queue].sort(
-    (a, b) => (TYPE_PRIORITY[a.type] ?? 9) - (TYPE_PRIORITY[b.type] ?? 9),
-  );
+  // Filter out day-summary (rendered by DaySummaryCard separately)
+  // Also suppress revenue toast while day summary is queued
+  const hasDaySummary = queue.some((t) => t.type === "day-summary");
+  const sortedQueue = [...queue]
+    .filter((t) => t.type !== "day-summary")
+    .filter((t) => !(t.type === "revenue" && hasDaySummary))
+    .sort(
+      (a, b) => (TYPE_PRIORITY[a.type] ?? 9) - (TYPE_PRIORITY[b.type] ?? 9),
+    );
 
   const dismissCurrent = useCallback(
     (id?: string) => {
@@ -155,6 +161,13 @@ export default function ToastStack() {
     (toast: ToastData) => {
       currentRef.current = toast;
       setCurrent(toast);
+      // Sound on toast appearance
+      if (toast.type === "achievement") gameSounds.play("achievement");
+      else if (toast.type === "mission") gameSounds.play("missionComplete");
+      else if (toast.type === "revenue") {
+        const rev = (toast as any).net ?? 0;
+        gameSounds.play(rev >= 0 ? "revenuePositive" : "revenueNegative");
+      }
       progress.setValue(1);
 
       Animated.parallel([

@@ -75,124 +75,8 @@ export const MAX_DEMANDS_PER_HUB = 8;
 // AIRPORT TRAFFIC WEIGHTS (for demand pool building)
 // ─────────────────────────────────────────────────────────────────
 
-export const MEGA_HUBS = new Set([
-  "LHR",
-  "CDG",
-  "FRA",
-  "AMS",
-  "DXB",
-  "SIN",
-  "HKG",
-  "NRT",
-  "JFK",
-  "LAX",
-  "ORD",
-  "ATL",
-  "PEK",
-  "PVG",
-  "SYD",
-  "ICN",
-  "DEL",
-  "BOM",
-  "CGK",
-  "DOH",
-  "IST",
-  "MAD",
-  "BCN",
-  "FCO",
-  "ZRH",
-  "VIE",
-  "CPH",
-  "BKK",
-  "KUL",
-  "MEX",
-  "MNL",
-  "NBO",
-  "JNB",
-  "CAI",
-  "LOS",
-  "ADD",
-  "GRU",
-  "EZE",
-  "YYZ",
-  "DFW",
-  "DEN",
-  "CLT",
-  "SEA",
-  "SFO",
-  "MIA",
-  "MCO",
-  "LAS",
-  "HND",
-  "CAN",
-  "PVG",
-]);
-
-export const MAJOR_HUBS = new Set([
-  "DUB",
-  "LIS",
-  "BRU",
-  "ARN",
-  "HEL",
-  "WAW",
-  "PRG",
-  "BUD",
-  "ATH",
-  "OSL",
-  "CLT",
-  "MIA",
-  "SEA",
-  "DEN",
-  "SFO",
-  "YVR",
-  "BOG",
-  "SCL",
-  "LIM",
-  "GRU",
-  "CMB",
-  "DAC",
-  "KHI",
-  "LHE",
-  "CCU",
-  "MAA",
-  "HYD",
-  "BLR",
-  "CTU",
-  "XIY",
-  "WUH",
-  "HGH",
-  "NKG",
-  "AKL",
-  "MEL",
-  "BNE",
-  "PER",
-  "CEB",
-  "DVO",
-  "KIX",
-  "DAR",
-  "CMN",
-  "ABV",
-  "ACC",
-  "MRU",
-  "DOH",
-  "AUH",
-  "BAH",
-  "AMM",
-  "SGN",
-  "HAN",
-  "CAN",
-  "SZX",
-  "KMG",
-  "MUC",
-  "BCN",
-  "FCO",
-  "LIS",
-]);
-
 /** Estimate annual pax for airports without pax_annual_m in DB */
 function estimatePaxAnnual(airport: Airport): number {
-  if (MEGA_HUBS.has(airport.iata)) return 35 + Math.random() * 30;
-  if (MAJOR_HUBS.has(airport.iata)) return 5 + Math.random() * 20;
   if (airport.tier === "mega") return 40 + Math.random() * 60;
   if (airport.tier === "large") return 10 + Math.random() * 30;
   if (airport.tier === "major") return 3 + Math.random() * 10;
@@ -223,8 +107,6 @@ export function airportWeight(airport: Airport): number {
   if (pax >= 50) return 10;
   if (pax >= 20) return 7;
   if (pax >= 5) return 5;
-  if (MEGA_HUBS.has(airport.iata)) return 8;
-  if (MAJOR_HUBS.has(airport.iata)) return 4;
   if (airport.tier === "mega") return 9;
   if (airport.tier === "large") return 6;
   if (airport.tier === "major") return 3;
@@ -283,43 +165,76 @@ export function simulatePaxDay(
   dest: Airport,
   dist: number,
 ): number {
-  // Annual pax at each airport (millions)
-  // Priority: DB field → lookup table → estimate from tier
   const oPax = origin.pax_annual_m ?? estimatePaxAnnual(origin);
   const dPax = dest.pax_annual_m ?? estimatePaxAnnual(dest);
 
-  // Gravity core: geometric mean of airport sizes ÷ distance^1.5
-  // Min distance 0.3 (×1000nm) prevents division explosion on tiny routes
-  const distK = Math.max(dist / 1000, 0.3);
-  const gravity = Math.sqrt(oPax * dPax) / Math.pow(distK, 1.5);
+  const distNm = Math.max(dist, 100);
 
-  // Continent-pair bonus — denser corridors get a lift
-  const contBonus = continentPairBonus(origin.continent, dest.continent);
+  // Base demand from both airport sizes.
+  // Geometric mean prevents ATL → tiny airport from becoming too huge.
+  const airportPower = Math.sqrt(oPax * dPax);
 
-  // Hub connectivity — large airports attract connecting passengers
-  // beyond what their O&D traffic alone would suggest
-  const hubBonus =
-    dPax >= 60
-      ? 1.4 // mega hub  (DXB 86M, ATL 104M)
-      : dPax >= 30
-        ? 1.25 // major hub (SIN 58M, DOH 44M)
-        : dPax >= 10
-          ? 1.1 // international (CEB 12M)
+  // Distance curve:
+  // short routes strong, medium routes viable, long-haul still possible.
+  const distanceFactor =
+    distNm < 500 ? 1.35 : distNm < 1500 ? 1.0 : distNm < 3500 ? 0.72 : 0.48;
+
+  // Big airports create both origin/destination and connection demand.
+  const hubFactor =
+    Math.max(oPax, dPax) >= 60
+      ? 1.35
+      : Math.max(oPax, dPax) >= 30
+        ? 1.22
+        : Math.max(oPax, dPax) >= 10
+          ? 1.1
           : 1.0;
 
-  // Variance ±20% — daily fluctuation (weather, events, seasonality)
-  const variance = 0.8 + Math.random() * 0.4;
+  const continentFactor = continentPairBonus(origin.continent, dest.continent);
 
-  // Domestic short-haul cap — commuter routes don't fill widebodies
-  const cap = origin.country === dest.country && dist < 500 ? 400 : 800;
+  // Domestic routes are naturally stronger, especially short/medium haul.
+  const domesticFactor =
+    origin.country === dest.country ? (distNm < 800 ? 1.45 : 1.2) : 1.0;
 
-  // Scale = 5 — tuned so outputs feel right:
-  //   Large hub pair, short distance → 400-800 pax/day
-  //   Large hub pair, long distance  →  30-150 pax/day
-  //   Small airport pair             →  20-80  pax/day
-  const raw = gravity * contBonus * hubBonus * variance * 5;
+  // International capital / hub routes should feel important.
+  const internationalFactor =
+    origin.country !== dest.country && Math.min(oPax, dPax) >= 5 ? 1.18 : 1.0;
 
-  return Math.max(20, Math.min(cap, Math.round(raw)));
+  // Deterministic variance so demand does NOT randomly change every render.
+  const variance = seededVariance(origin.iata, dest.iata);
+
+  const raw =
+    airportPower *
+    distanceFactor *
+    hubFactor *
+    continentFactor *
+    domesticFactor *
+    internationalFactor *
+    variance *
+    18;
+
+  // Route caps by market type.
+  const cap =
+    origin.country === dest.country
+      ? distNm < 500
+        ? 650
+        : 900
+      : distNm < 1500
+        ? 850
+        : 1200;
+
+  return Math.max(15, Math.min(cap, Math.round(raw)));
+}
+
+function seededVariance(originIata: string, destIata: string): number {
+  const key = `${originIata}-${destIata}`;
+  let hash = 0;
+
+  for (let i = 0; i < key.length; i++) {
+    hash = (hash * 31 + key.charCodeAt(i)) % 100000;
+  }
+
+  // 0.85 to 1.15 stable variance
+  return 0.85 + (hash % 31) / 100;
 }
 
 // ─────────────────────────────────────────────────────────────────

@@ -10,7 +10,7 @@ import { useTabBarHeight } from "@/hooks/useSheetLayout";
 import { Colors, Radius, Spacing } from "@/constants/theme";
 import { useHaptics } from "@/hooks/useHaptics";
 import { useDeactivateRoute } from "@/hooks/useSupabaseWrite";
-import { calcRouteDailyRevenue, fmtCash } from "@/lib/revenue";
+import { calcRouteRevenue, fmtCash } from "@/lib/revenue";
 import type { Route } from "@/store";
 import {
   useAirline,
@@ -85,7 +85,7 @@ function RouteRow({
   const flightH = distNm / speed_kts;
   const flights = Math.max(1, Math.floor(24 / (flightH * 2)));
 
-  // Read LIVE delivered_pax_today from demands store — not the stale route snapshot
+  // Read LIVE delivered_pax_today from demands store
   const liveDemand = liveDemands.find((d) => d.id === route.demand.id);
   const deliveredPax = liveDemand?.delivered_pax_today ?? 0;
   const fillPct =
@@ -93,7 +93,20 @@ function RouteRow({
       ? Math.min(100, Math.round((deliveredPax / route.demand.pax_day) * 100))
       : 0;
 
-  const dailyRev = hub ? calcRouteDailyRevenue(route, hub, day, true) : 0;
+  // Revenue — same calcRouteRevenue as all other components
+  const p = route.plane.plane_model;
+  const revenueResult = calcRouteRevenue({
+    distNm,
+    speedKts: p.speed_kts,
+    trustPct: 0, // conservative — trust not available per-route here
+    deliveredPax,
+    paxDay: route.demand.pax_day,
+    costPerSector: p.cost_per_sector ?? 500,
+    fuelPerNm: p.fuel_per_nm ?? 2.0,
+  });
+  const routeNetRevenue = revenueResult.net;
+  const routeGross = revenueResult.gross;
+
   const isConnecting = !!route.via_iata;
 
   const haulColor =
@@ -203,8 +216,13 @@ function RouteRow({
         ) : (
           <>
             <Text style={rr.revLabel}>DAILY</Text>
-            <Text style={[rr.rev, { color: Colors.green }]}>
-              {fmtCash(dailyRev)}
+            <Text
+              style={[
+                rr.rev,
+                { color: revenueResult.net >= 0 ? Colors.green : Colors.red },
+              ]}
+            >
+              {fmtCash(revenueResult.net)}
             </Text>
             <Text style={rr.holdHint}>hold to remove</Text>
           </>
@@ -307,7 +325,18 @@ export default function RoutesSheet() {
 
   const totalDailyRev = activeRoutes.reduce((sum, r) => {
     const hub = hubs.find((h) => h.airport.iata === r.hub_iata);
-    return sum + (hub ? calcRouteDailyRevenue(r, hub, day, true) : 0);
+    const p = r.plane.plane_model;
+    const dist = r.total_dist_nm ?? r.demand.dist_nm;
+    const res = calcRouteRevenue({
+      distNm: dist,
+      speedKts: p.speed_kts,
+      trustPct: hub?.trust ?? 0,
+      deliveredPax: r.demand.pax_day,
+      paxDay: r.demand.pax_day,
+      costPerSector: p.cost_per_sector ?? 500,
+      fuelPerNm: p.fuel_per_nm ?? 2.0,
+    });
+    return sum + res.net;
   }, 0);
 
   const handleLongPress = useCallback(

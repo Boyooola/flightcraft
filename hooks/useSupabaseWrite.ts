@@ -5,6 +5,7 @@
  * Pattern: optimistic store update first → async DB write → rollback on error.
  */
 
+import { gameSounds } from "@/hooks/useGameSounds";
 import {
   generateDemands,
   generateOneDemand,
@@ -24,7 +25,10 @@ export function useBuyHub() {
   const store = useGameStore.getState;
 
   return useCallback(
-    async (airport: Airport): Promise<{ error: string | null }> => {
+    async (
+      airport: Airport,
+      preGenerated?: Demand[],
+    ): Promise<{ error: string | null }> => {
       const {
         airline,
         airports,
@@ -60,14 +64,19 @@ export function useBuyHub() {
       ]);
 
       const existingDests = demands.map((d) => d.dest.iata);
-      const newDemands = generateDemands(
-        airport,
-        airports,
-        3,
-        existingDests,
-        airline.demand_score,
-        true,
-      );
+      // Use pre-generated demands if provided (from AirportSheet preview)
+      // so the player sees the same destinations before and after purchase
+      const newDemands =
+        preGenerated && preGenerated.length > 0
+          ? preGenerated
+          : generateDemands(
+              airport,
+              airports,
+              3,
+              existingDests,
+              airline.demand_score,
+              true,
+            );
 
       try {
         const { data: hubData, error: hubErr } = await supabase
@@ -142,8 +151,105 @@ export function useBuyHub() {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// CREATE ROUTE
+// SELL HUB
 // ─────────────────────────────────────────────────────────────────
+
+export function useSellHub() {
+  const store = useGameStore.getState;
+
+  return useCallback(
+    async (
+      hubId: string,
+    ): Promise<{ error: string | null; refund: number }> => {
+      const {
+        airline,
+        hubs,
+        demands,
+        routes,
+        earnCash,
+        setHubs,
+        setDemands,
+        setRoutes,
+        setOwnedPlanes,
+        addLedgerEntries,
+      } = store();
+      if (!airline) return { error: "No airline", refund: 0 };
+
+      const hub = hubs.find((h) => h.id === hubId);
+      if (!hub) return { error: "Hub not found", refund: 0 };
+
+      // Refund 50% of hub purchase cost
+      const { hubPurchaseCost } = await import("@/lib/demands");
+      const refund = Math.round(hubPurchaseCost(hub.airport) * 0.5);
+
+      // Collect IDs to cascade delete
+      const hubDemands = demands.filter((d) => d.hub_iata === hub.airport.iata);
+      const demandIds = hubDemands.map((d) => d.id);
+      const hubRoutes = routes.filter((r) => r.hub_iata === hub.airport.iata);
+      const routeIds = hubRoutes.map((r) => r.id);
+
+      // Optimistic update — remove from store immediately
+      earnCash(refund);
+      setHubs(hubs.filter((h) => h.id !== hubId));
+      setDemands(demands.filter((d) => !demandIds.includes(d.id)));
+      setRoutes(routes.filter((r) => !routeIds.includes(r.id)));
+
+      // Free planes that were on these routes
+      const assignedPlaneIds = new Set(hubRoutes.map((r) => r.plane.id));
+      setOwnedPlanes(
+        store().ownedPlanes.map((p) =>
+          assignedPlaneIds.has(p.id) ? { ...p, route_id: null } : p,
+        ),
+      );
+
+      addLedgerEntries([
+        {
+          id: `led-sell-hub-${Date.now()}`,
+          day: airline.day,
+          type: "revenue",
+          label: `Sold hub — ${hub.airport.iata}`,
+          amount: refund,
+          route_id: null,
+        },
+      ]);
+
+      try {
+        // DB cascade: deactivate routes → delete demands → delete hub
+        if (routeIds.length > 0) {
+          await supabase
+            .from("routes")
+            .update({ active: false })
+            .in("id", routeIds);
+
+          await supabase
+            .from("owned_planes")
+            .update({ route_id: null })
+            .in("id", [...assignedPlaneIds]);
+        }
+
+        if (demandIds.length > 0) {
+          await supabase.from("demands").delete().in("id", demandIds);
+        }
+
+        await supabase.from("hubs").delete().eq("id", hubId);
+
+        await supabase
+          .from("airlines")
+          .update({ cash: store().airline?.cash })
+          .eq("id", airline.id);
+
+        return { error: null, refund };
+      } catch (err) {
+        // Rollback — reload page state would be cleanest but just report error
+        return {
+          error: err instanceof Error ? err.message : "Failed to sell hub",
+          refund: 0,
+        };
+      }
+    },
+    [],
+  );
+}
 
 export function useCreateRoute() {
   const store = useGameStore.getState;
@@ -179,6 +285,7 @@ export function useCreateRoute() {
         active: true,
       });
       updateDemand(demand.id, { status: "served" });
+      gameSounds.play("routeCreate");
 
       try {
         const { data: routeData, error: routeErr } = await supabase
@@ -370,6 +477,7 @@ export function useBuyPlane() {
       const tempId = `temp-plane-${Date.now()}`;
       spendCash(planeModel.price);
       addOwnedPlane({ id: tempId, plane_model: planeModel, route_id: null });
+      store().setBoughtPlaneToday(true); // triggers live mission check
       addLedgerEntries([
         {
           id: `led-plane-${Date.now()}`,

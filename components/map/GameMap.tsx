@@ -107,31 +107,17 @@ export default function GameMap({ airlineColor, onMapReady }: GameMapProps) {
           waypointIatas={waypointIatas}
         />
 
-        {/* Hide Mapbox default city/place dots and labels */}
-        {[
-          "settlement-label",
-          "settlement-subdivision-label",
-          "place-label",
-          "place-city-label",
-          "place-town-label",
-          "place-village-label",
-          "poi-label",
-          "transit-label",
-          "airport-label",
-          "water-point-label",
-          "natural-point-label",
-          "settlement-minor-label",
-          "settlement-major-label",
-        ].map((id) => (
-          <MapboxGL.SymbolLayer
-            key={id}
-            id={`hide-${id}`}
-            sourceID="composite"
-            sourceLayerID={id}
-            existing
-            style={{ visibility: "none" }}
-          />
-        ))}
+        <MapboxGL.StyleImport
+          id="basemap"
+          existing
+          config={{
+            showPlaceLabels: "No",
+            showPointOfInterestLabels: "No",
+            showTransitLabels: "No",
+            showAirportLabels: "No",
+            showRoadLabels: "No",
+          }}
+        />
 
         <RouteLayer airlineColor={color} speed={speed} paused={speed === 0} />
       </MapboxGL.MapView>

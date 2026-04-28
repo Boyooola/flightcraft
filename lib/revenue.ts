@@ -1,26 +1,36 @@
 /**
  * lib/revenue.ts
  *
- * Passenger-based revenue simulation.
+ * SINGLE SOURCE OF TRUTH for all revenue calculations.
+ * Every component that shows revenue numbers imports from here.
+ * Never inline revenue math in components.
  *
- * ECONOMY BALANCE (tuned for ~60-90 day plane payoff on good routes):
+ * Formula:
+ *   yield_per_pax  = dist_nm × $0.12  (min $15, max $750)
+ *                  × trust_bonus      (up to +25% at 100% trust)
  *
- *   Yield per pax:
- *     Short  (<1000nm):  $120/pax base  (was $85)
- *     Medium (1-3500nm): $280/pax base  (was $220)
- *     Long   (>3500nm):  $550/pax base  (was $480)
+ *   gross_revenue  = delivered_pax × yield_per_pax
  *
- *   Load factor base: 70% (was 65%)
- *   Trust yield bonus: up to +25% at 100% trust
+ *   operating_cost = flights × (cost_per_sector + dist_nm × fuel_per_nm)
+ *                  × pax_ratio  ← scales cost to actual delivery fraction
  *
- *   Example — MNL→SIN (medium, 425 pax/day, E170 at 60% of old price):
- *     Revenue ≈ $119K/day → recoups plane in ~16 days ✓
+ *   net_revenue    = gross - operating_cost  (can be negative)
  *
- *   Example — MNL→CEB (short, 120 pax/day):
- *     Revenue ≈ $14K/day → recoups CRJ in ~60 days ✓
+ * pax_ratio ensures operating cost scales with actual pax delivered:
+ *   delivered 50 of 100 pax_day → pay 50% of daily operating cost
+ *   delivered 100 of 100 pax_day → pay 100% of daily operating cost
+ *   This prevents "pay full cost but deliver no pax" penalty spikes.
  */
 
-import type { HaulClass, OwnedHub, Route } from "@/store";
+import type { HaulClass } from "@/store";
+
+// ─────────────────────────────────────────────────────────────────
+// CONSTANTS
+// ─────────────────────────────────────────────────────────────────
+
+const BASE_RATE_PER_NM = 0.12; // $ per nm per pax
+const MIN_YIELD = 15; // floor — tiny hops still earn something
+const MAX_YIELD = 750; // ceiling — ultra long haul cap
 
 // ─────────────────────────────────────────────────────────────────
 // DAILY FLIGHTS
@@ -32,95 +42,90 @@ export function dailyFlights(distNm: number, speedKts: number): number {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// YIELD PER PAX — rebalanced
+// YIELD PER PAX — distance-based
 // ─────────────────────────────────────────────────────────────────
 
-const YIELD_TABLE: Record<HaulClass, number> = {
-  short: 120, // $120/pax — commuter + leisure
-  medium: 280, // $280/pax — regional international
-  long: 550, // $550/pax — long haul premium
-};
-
-export function yieldPerPax(haul: HaulClass, trustPct: number): number {
-  const base = YIELD_TABLE[haul];
-  const trustBonus = 1 + (trustPct / 100) * 0.25; // +25% at full trust
-  return base * trustBonus;
-}
-
-// ─────────────────────────────────────────────────────────────────
-// SIMULATE FLIGHT PAX
-// ─────────────────────────────────────────────────────────────────
-
-export function simulateFlightPax(
-  demandPaxDay: number,
-  planeCapacity: number,
-  flightsPerDay: number,
+export function yieldPerPax(
+  _haul: HaulClass, // kept for API compat, not used — dist drives yield
   trustPct: number,
-  dayNumber: number,
+  distNm?: number,
 ): number {
-  const demandPerFlight = demandPaxDay / Math.max(1, flightsPerDay);
-
-  // Day-of-week effect
-  const dayOfWeek = dayNumber % 7;
-  const isWeekend = dayOfWeek >= 5;
-  const weekendMod = isWeekend ? 1.15 : 0.97;
-
-  // Trust boost — higher trust = more repeat bookings
-  const trustBoost = 1 + (trustPct / 100) * 0.25;
-  const baseLoad = 0.7 * trustBoost * weekendMod; // 70% base (was 65%)
-
-  // Variance ±20%
-  const variance = 0.8 + Math.random() * 0.4;
-  const loadFactor = Math.min(0.98, baseLoad * variance);
-
-  const seatsAvail = Math.round(planeCapacity * loadFactor);
-  return Math.min(Math.round(demandPerFlight), seatsAvail, planeCapacity);
+  const dist = distNm ?? 1000;
+  const base = dist * BASE_RATE_PER_NM;
+  const trustBonus = 1 + (trustPct / 100) * 0.25;
+  return Math.round(
+    Math.min(MAX_YIELD, Math.max(MIN_YIELD, base * trustBonus)),
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────
-// SIMULATE ROUTE — full daily passenger simulation
+// ROUTE OPERATING COST — full daily cost
 // ─────────────────────────────────────────────────────────────────
 
-export interface RouteSimResult {
-  paxCarried: number;
-  revenue: number;
-  flightsMade: number;
-  loadFactor: number;
+export function routeOperatingCost(
+  distNm: number,
+  speedKts: number,
+  costPerSector: number,
+  fuelPerNm: number,
+): number {
+  const flights = dailyFlights(distNm, speedKts);
+  const costPerFlight = costPerSector + distNm * fuelPerNm;
+  return Math.round(flights * costPerFlight);
 }
 
-export function simulateRoute(
-  route: Route,
-  hub: OwnedHub,
-  dayNumber: number,
-): RouteSimResult {
-  const { demand, plane } = route;
-  const distNm = route.total_dist_nm ?? demand.dist_nm;
-  const flights = dailyFlights(distNm, plane.plane_model.speed_kts);
-  const capacity = plane.plane_model.pax_capacity;
-  const trustPct = hub.trust;
+// ─────────────────────────────────────────────────────────────────
+// CORE FUNCTION — used by ALL components
+//
+// Returns gross, cost, and net for a given pax delivery.
+// pax_ratio scales the cost: if only 50% of daily pax are delivered,
+// only 50% of the daily operating cost is charged.
+// ─────────────────────────────────────────────────────────────────
 
-  let totalPax = 0;
-  for (let f = 0; f < flights; f++) {
-    totalPax += simulateFlightPax(
-      demand.pax_day,
-      capacity,
-      flights,
-      trustPct,
-      dayNumber + f,
-    );
-  }
-  totalPax = Math.min(totalPax, demand.pax_day);
+export interface RouteRevenueResult {
+  gross: number; // pax × yield — always ≥ 0
+  cost: number; // proportional operating cost — always ≥ 0
+  net: number; // gross - cost — can be negative
+  ypp: number; // yield per pax used
+  paxRatio: number; // fraction of daily demand delivered (0-1)
+}
 
-  const ypp = yieldPerPax(demand.haul, trustPct);
-  const revenue = Math.round(totalPax * ypp);
-  const lf = capacity * flights > 0 ? totalPax / (capacity * flights) : 0;
+export function calcRouteRevenue(params: {
+  distNm: number;
+  speedKts: number;
+  trustPct: number;
+  deliveredPax: number;
+  paxDay: number; // daily demand — used to compute pax_ratio
+  costPerSector: number;
+  fuelPerNm: number;
+  crowdMultiplier?: number; // 0.8 for crisis, 0.9 for overcrowded, 1.0 default
+}): RouteRevenueResult {
+  const {
+    distNm,
+    speedKts,
+    trustPct,
+    deliveredPax,
+    paxDay,
+    costPerSector,
+    fuelPerNm,
+    crowdMultiplier = 1.0,
+  } = params;
 
-  return {
-    paxCarried: totalPax,
-    revenue,
-    flightsMade: flights,
-    loadFactor: Math.round(lf * 100) / 100,
-  };
+  const ypp = yieldPerPax("short", trustPct, distNm);
+  const gross = Math.round(deliveredPax * ypp * crowdMultiplier);
+
+  // Scale operating cost to fraction of pax actually delivered
+  const paxRatio = paxDay > 0 ? Math.min(1, deliveredPax / paxDay) : 0;
+  const fullCost = routeOperatingCost(
+    distNm,
+    speedKts,
+    costPerSector,
+    fuelPerNm,
+  );
+  const cost = Math.round(fullCost * paxRatio);
+
+  const net = gross - cost;
+
+  return { gross, cost, net, ypp, paxRatio };
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -141,20 +146,16 @@ export function fmtCash(v: number): string {
   return "$" + Math.round(v).toLocaleString();
 }
 
+export function fmtCashExact(v: number): string {
+  const abs = Math.abs(v);
+  const sign = v < 0 ? "-$" : "+$";
+  return sign + Math.round(abs).toLocaleString();
+}
+
 export function fmtCashShort(v: number): string {
   const abs = Math.abs(v);
   const sign = v < 0 ? "-$" : "+$";
   if (abs >= 1_000_000) return sign + (abs / 1_000_000).toFixed(1) + "M";
   if (abs >= 1_000) return sign + (abs / 1_000).toFixed(0) + "K";
   return sign + Math.round(abs).toLocaleString();
-}
-
-// Legacy compat shim
-export function calcRouteDailyRevenue(
-  route: Route,
-  hub: OwnedHub,
-  day: number,
-  _inflation: boolean,
-): number {
-  return simulateRoute(route, hub, day).revenue;
 }

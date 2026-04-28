@@ -10,6 +10,7 @@
  */
 
 import { Colors, Radius, Spacing } from "@/constants/theme";
+import { useGameSounds } from "@/hooks/useGameSounds";
 import { useHaptics } from "@/hooks/useHaptics";
 import { useTabBarHeight } from "@/hooks/useSheetLayout";
 import { useBuyPlane } from "@/hooks/useSupabaseWrite";
@@ -188,13 +189,24 @@ function PlaneCard({
 }) {
   const buyPlane = useBuyPlane();
   const haptics = useHaptics();
+  const sounds = useGameSounds();
   const [qty, setQty] = useState(1);
   const [buying, setBuying] = useState(false);
   const [bought, setBought] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const fc = FAMILY_COLOR[model.family] ?? Colors.dim;
-  const locked = demandScore < model.unlock_demands;
+  const lockedByDemands =
+    model.unlock_demands > 0 && demandScore < model.unlock_demands;
+  const lockedByCash = model.unlock_cash > 0 && cash < model.unlock_cash;
+  const locked = lockedByDemands || lockedByCash;
+
+  // What's blocking unlock
+  const lockReason = lockedByDemands
+    ? `Serve ${model.unlock_demands - demandScore} more route${model.unlock_demands - demandScore !== 1 ? "s" : ""} to unlock`
+    : lockedByCash
+      ? `Need ${fmtCash(model.unlock_cash)} cash to unlock`
+      : "";
   const totalCost = model.price * qty;
   const canAfford = cash >= totalCost;
   const canBuy = !locked && canAfford && !buying;
@@ -218,9 +230,11 @@ function PlaneCard({
     if (lastError) {
       setError(lastError);
       haptics.error();
+      sounds.error();
     } else {
       setBought(true);
       haptics.success();
+      sounds.planeBuy();
       setTimeout(() => setBought(false), 2000);
     }
   };
@@ -275,15 +289,12 @@ function PlaneCard({
         </View>
 
         {/* Lock reason */}
-        {locked && (
+        {locked && lockReason ? (
           <View style={pc.lockRow}>
             <Ionicons name="lock-closed" size={10} color={Colors.dim} />
-            <Text style={pc.lockTxt}>
-              Serve {model.unlock_demands - demandScore} more demand
-              {model.unlock_demands - demandScore !== 1 ? "s" : ""} to unlock
-            </Text>
+            <Text style={pc.lockTxt}>{lockReason}</Text>
           </View>
-        )}
+        ) : null}
 
         {/* Buy row */}
         {!locked && (

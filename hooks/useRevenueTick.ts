@@ -15,12 +15,12 @@ import {
   useSpawnDailyDemand,
 } from "@/hooks/useSupabaseWrite";
 import {
-  emitRevenueToast,
+  emitDaySummaryToast,
   emitUnlockToast,
   emitWarningToast,
 } from "@/hooks/useToast";
 import { allDemandsServed, hubCrowdingLevel } from "@/lib/demands";
-import { dailyInterest, yieldPerPax } from "@/lib/revenue";
+import { calcRouteRevenue, dailyInterest } from "@/lib/revenue";
 import type { LedgerEntry } from "@/store";
 import { useGameStore } from "@/store";
 import { useEffect, useRef } from "react";
@@ -84,7 +84,13 @@ export function useRevenueTick() {
       );
     });
 
-    // ── 2. Reset pax counters NOW — after crowding is captured
+    // ── 2. Snapshot pax BEFORE reset — then reset ───────────────
+    // resetDailyPax() zeroes delivered_pax_today. We must capture
+    // the values first or the route loop reads 0 for everything.
+    const paxSnapshot = new Map<string, number>();
+    demands.forEach((d) => {
+      paxSnapshot.set(d.id, d.delivered_pax_today ?? 0);
+    });
     resetDailyPax();
 
     // ── 3. Trust — adjusted by overcrowding level ────────────────
@@ -114,7 +120,7 @@ export function useRevenueTick() {
               const d = demands.find((d) => d.id === r.demand.id);
               const fill =
                 d && d.pax_day > 0
-                  ? (d.delivered_pax_today ?? 0) / d.pax_day
+                  ? (paxSnapshot.get(d.id) ?? 0) / d.pax_day
                   : 0;
               return sum + fill;
             }, 0) / Math.max(1, hubRoutes.length);
@@ -140,9 +146,9 @@ export function useRevenueTick() {
       if (!hub) return;
 
       // Revenue = actual pax delivered today × yield per pax
-      // Pax are credited live in RouteLayer as planes land
+      // Use paxSnapshot — captured before resetDailyPax() zeroed the counters
       const demand = route.demand;
-      const deliveredPax = demand.delivered_pax_today ?? 0;
+      const deliveredPax = paxSnapshot.get(demand.id) ?? 0;
       const routeCrowding = crowdingByHub.get(route.hub_iata);
       const revMultiplier =
         routeCrowding?.level === "crisis"
@@ -150,10 +156,21 @@ export function useRevenueTick() {
           : routeCrowding?.level === "overcrowded"
             ? 0.9
             : 1.0;
-      const ypp = yieldPerPax(demand.haul, hub.trust);
-      const finalRevenue = Math.round(deliveredPax * ypp * revMultiplier);
+      const routeDist = route.total_dist_nm ?? demand.dist_nm;
+      const plane = route.plane.plane_model;
+      const res = calcRouteRevenue({
+        distNm: routeDist,
+        speedKts: plane.speed_kts,
+        trustPct: hub.trust,
+        deliveredPax,
+        paxDay: demand.pax_day,
+        costPerSector: plane.cost_per_sector ?? 500,
+        fuelPerNm: plane.fuel_per_nm ?? 2.0,
+        crowdMultiplier: revMultiplier,
+      });
+      const finalRevenue = res.net;
       totalRev += finalRevenue;
-      totalPaxToday += demand.delivered_pax_today ?? 0;
+      totalPaxToday += deliveredPax; // from paxSnapshot, not zeroed demand
       activeRouteCount++;
 
       const via = route.via_iata ? ` → ${route.via_iata}` : "";
@@ -162,7 +179,7 @@ export function useRevenueTick() {
         day: airline.day,
         type: "revenue",
         label: `${route.demand.origin.iata}${via} → ${route.demand.dest.iata} · ${deliveredPax} pax`,
-        amount: finalRevenue,
+        amount: finalRevenue, // net after operating costs
         route_id: route.id,
       });
     });
@@ -191,18 +208,30 @@ export function useRevenueTick() {
     if (interest > 0) accrueInterest(interest);
     if (entries.length) addLedgerEntries(entries);
 
-    // ── 6. Revenue toast ─────────────────────────────────────────
-    if (totalRev > 0 || interest > 0) {
-      emitRevenueToast({
-        id: `toast-day-${airline.day}`,
-        revenue: totalRev,
-        interest,
-        net,
-        day: airline.day,
-        routes: activeRouteCount,
-        paxToday: totalPaxToday,
-      });
-    }
+    // ── 6. Day summary card ───────────────────────────────────────
+    const {
+      dailyMissions,
+      missionsCompleted,
+      airline: latestAirline,
+    } = useGameStore.getState();
+    const doneToday = dailyMissions.filter((m) => m.completed).length;
+    const currentCash = latestAirline?.cash ?? airline.cash;
+    const currentLoan = latestAirline?.loan ?? airline.loan;
+    const netWorth = Math.max(0, currentCash - currentLoan);
+    const prevNetWorth = Math.max(0, airline.cash - airline.loan);
+
+    emitDaySummaryToast({
+      id: `day-summary-${airline.day}`,
+      day: airline.day,
+      revenue: totalRev,
+      interest,
+      net,
+      paxToday: totalPaxToday,
+      missionsToday: doneToday,
+      missionsTotal: dailyMissions.length,
+      netWorth,
+      prevNetWorth,
+    });
 
     // ── 7. Overcrowding toasts ───────────────────────────────────
     crowdingByHub.forEach((crowding, hubIata) => {

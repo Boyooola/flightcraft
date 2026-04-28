@@ -1,219 +1,268 @@
-/**
- * components/auth/AuthScreen.tsx
- *
- * First screen players see.
- * Two options:
- *   - Sign in with Google (full account, cloud sync, IAP ready)
- *   - Continue as Guest  (anonymous, progress stored locally + Supabase)
- *
- * Design: dark aviation theme matching the game UI.
- */
+// app/(auth)/index.tsx
 
-import { Colors, Radius, Spacing } from "@/constants/theme";
-import { useAuth } from "@/hooks/useAuth";
-import { Ionicons } from "@expo/vector-icons";
+import { Colors, MIN_TOUCH, Radius, Spacing } from "@/constants/theme";
+import { isGoogleSignInAvailable, useAuth } from "@/hooks/useAuth";
+import { supabase } from "@/lib/supabase";
+import * as Haptics from "expo-haptics";
+import { router } from "expo-router";
+import { useState } from "react";
 import {
   ActivityIndicator,
+  SafeAreaView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 
 const GOOGLE_BLUE = "#4285F4";
 
 export default function AuthScreen() {
-  const { state, error, signInWithGoogle, signInAsGuest } = useAuth();
+  const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const loading = state === "loading";
+  const { signInWithGoogle } = useAuth();
+
+  const handleGuest = async () => {
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setLoading(true);
+    setError(null);
+    const { error: err } = await supabase.auth.signInAnonymously();
+    if (err) {
+      setLoading(false);
+      setError(err.message);
+      return;
+    }
+    router.replace("/(game)");
+  };
+
+  const handleGoogle = async () => {
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setGoogleLoading(true);
+    setError(null);
+    try {
+      await signInWithGoogle();
+      // signInWithGoogle calls setPhase("loading") on success
+      // expo-router will pick up the auth state change and redirect
+      router.replace("/(game)");
+    } catch (err: any) {
+      setError(err.message ?? "Google Sign-In failed.");
+    } finally {
+      setGoogleLoading(false);
+    }
+  };
+
+  const googleAvailable = isGoogleSignInAvailable;
+  const anyLoading = loading || googleLoading;
 
   return (
     <SafeAreaView style={s.root}>
-      {/* Hero */}
-      <View style={s.hero}>
-        <View style={s.logoWrap}>
-          <Ionicons name="airplane" size={48} color={Colors.sky} />
+      <View style={s.inner}>
+        {/* Logo */}
+        <View style={s.logoBox}>
+          <Text style={s.logoPlane}>✈</Text>
         </View>
-        <Text style={s.appName}>FlightCraft</Text>
-        <Text style={s.tagline}>Build your airline empire</Text>
-      </View>
+        <Text style={s.wordmark}>FLIGHTCRAFT</Text>
+        <Text style={s.tagline}>GLOBAL AVIATION TYCOON</Text>
 
-      {/* Auth options */}
-      <View style={s.actions}>
-        {/* Google Sign-In — primary */}
+        {/* Google Sign-In — primary CTA */}
         <TouchableOpacity
-          style={[s.googleBtn, loading && { opacity: 0.6 }]}
-          onPress={signInWithGoogle}
-          disabled={loading}
+          style={[
+            s.googleBtn,
+            anyLoading && s.btnDisabled,
+            !googleAvailable && s.btnDisabled,
+          ]}
+          onPress={handleGoogle}
+          disabled={anyLoading || !googleAvailable}
           activeOpacity={0.85}
         >
-          {loading ? (
-            <ActivityIndicator color={Colors.bg} size="small" />
+          {googleLoading ? (
+            <ActivityIndicator color="#fff" size="small" />
           ) : (
             <>
-              {/* Google G logo */}
-              <View style={s.googleIcon}>
+              <View style={s.googleIconWrap}>
                 <Text style={s.googleG}>G</Text>
               </View>
-              <Text style={s.googleTxt}>Sign in with Google</Text>
+              <Text style={s.googleTxt}>
+                {googleAvailable
+                  ? "SIGN IN WITH GOOGLE"
+                  : "GOOGLE (REQUIRES UPDATE)"}
+              </Text>
             </>
           )}
         </TouchableOpacity>
 
         {/* Divider */}
         <View style={s.divider}>
-          <View style={s.dividerLine} />
-          <Text style={s.dividerTxt}>or</Text>
-          <View style={s.dividerLine} />
+          <View style={s.divLine} />
+          <Text style={s.divTxt}>OR</Text>
+          <View style={s.divLine} />
         </View>
 
-        {/* Guest option */}
+        {/* Guest */}
         <TouchableOpacity
-          style={[s.guestBtn, loading && { opacity: 0.6 }]}
-          onPress={signInAsGuest}
-          disabled={loading}
-          activeOpacity={0.8}
+          style={[s.btn, anyLoading && s.btnDisabled]}
+          onPress={handleGuest}
+          disabled={anyLoading}
+          activeOpacity={0.85}
         >
-          <Ionicons name="person-outline" size={16} color={Colors.muted} />
-          <Text style={s.guestTxt}>Continue as Guest</Text>
+          {loading ? (
+            <ActivityIndicator color={Colors.bg} size="small" />
+          ) : (
+            <Text style={s.btnText}>CONTINUE AS GUEST</Text>
+          )}
         </TouchableOpacity>
 
-        <Text style={s.guestNote}>
-          Guest progress is saved on this device only.{"\n"}
-          You can link a Google account later in Settings.
+        <Text style={s.note}>
+          Guest progress saved on this device only · Link Google anytime in
+          Settings
         </Text>
 
-        {/* Error */}
         {error && (
           <View style={s.errorBox}>
-            <Ionicons name="warning-outline" size={14} color={Colors.red} />
-            <Text style={s.errorTxt}>{error}</Text>
+            <Text style={s.errorText}>{error}</Text>
           </View>
         )}
       </View>
-
-      {/* Footer */}
-      <Text style={s.footer}>
-        By continuing you agree to our Privacy Policy
-      </Text>
     </SafeAreaView>
   );
 }
 
 const s = StyleSheet.create({
-  root: {
+  root: { flex: 1, backgroundColor: Colors.bg },
+  inner: {
     flex: 1,
-    backgroundColor: Colors.bg,
-    justifyContent: "space-between",
-    paddingHorizontal: Spacing.xl,
-    paddingVertical: Spacing.xl,
-  },
-
-  // Hero
-  hero: { alignItems: "center", paddingTop: Spacing.xxl, gap: Spacing.md },
-  logoWrap: {
-    width: 90,
-    height: 90,
-    borderRadius: 24,
-    backgroundColor: Colors.sky + "15",
-    borderWidth: 1,
-    borderColor: Colors.sky + "33",
     alignItems: "center",
     justifyContent: "center",
+    padding: Spacing.xl,
   },
-  appName: {
-    fontSize: 36,
-    color: Colors.text,
-    fontWeight: "700",
-    letterSpacing: 1,
-  },
-  tagline: { fontSize: 14, color: Colors.dim, letterSpacing: 0.5 },
 
-  // Actions
-  actions: { gap: Spacing.md },
+  // Logo
+  logoBox: {
+    width: 72,
+    height: 72,
+    borderRadius: 20,
+    backgroundColor: "#0c1c33",
+    borderWidth: 1,
+    borderColor: "rgba(56,189,248,.25)",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: Spacing.lg,
+  },
+  logoPlane: { fontSize: 32, color: Colors.sky },
+  wordmark: {
+    fontSize: 34,
+    color: Colors.text,
+    letterSpacing: 8,
+    fontWeight: "700",
+    marginBottom: 6,
+  },
+  tagline: {
+    fontSize: 10,
+    color: "rgba(56,189,248,.6)",
+    letterSpacing: 4,
+    marginBottom: Spacing.xl,
+  },
 
   // Google button
   googleBtn: {
+    width: "100%",
+    maxWidth: 320,
+    backgroundColor: GOOGLE_BLUE,
+    borderRadius: Radius.lg,
+    minHeight: MIN_TOUCH,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: Spacing.sm,
-    backgroundColor: GOOGLE_BLUE,
-    borderRadius: Radius.lg,
-    paddingVertical: Spacing.md + 2,
+    gap: 10,
+    marginBottom: Spacing.md,
     shadowColor: GOOGLE_BLUE,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.35,
-    shadowRadius: 8,
-    elevation: 6,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.4,
+    shadowRadius: 6,
+    elevation: 4,
   },
-  googleIcon: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+  googleIconWrap: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
     backgroundColor: "#fff",
     alignItems: "center",
     justifyContent: "center",
   },
-  googleG: { fontSize: 14, fontWeight: "700", color: GOOGLE_BLUE },
+  googleG: { fontSize: 13, fontWeight: "700", color: GOOGLE_BLUE },
   googleTxt: {
-    fontSize: 15,
+    fontSize: 12,
+    letterSpacing: 1.5,
     fontWeight: "700",
     color: "#fff",
-    letterSpacing: 0.3,
   },
 
   // Benefits
   benefits: {
-    backgroundColor: Colors.surface,
-    borderRadius: Radius.lg,
+    width: "100%",
+    maxWidth: 320,
+    backgroundColor: "rgba(56,189,248,.05)",
+    borderRadius: Radius.md,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: "rgba(56,189,248,.12)",
     padding: Spacing.md,
-    gap: Spacing.sm,
+    gap: Spacing.xs,
+    marginBottom: Spacing.lg,
   },
-  benefitRow: { flexDirection: "row", alignItems: "center", gap: Spacing.sm },
-  benefitTxt: { fontSize: 12, color: Colors.muted },
+  benefitRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  benefitTxt: { fontSize: 11, color: Colors.muted },
 
   // Divider
-  divider: { flexDirection: "row", alignItems: "center", gap: Spacing.sm },
-  dividerLine: { flex: 1, height: 1, backgroundColor: Colors.border },
-  dividerTxt: { fontSize: 11, color: Colors.dim },
-
-  // Guest
-  guestBtn: {
+  divider: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
     gap: Spacing.sm,
+    width: "100%",
+    maxWidth: 320,
+    marginBottom: Spacing.lg,
+  },
+  divLine: { flex: 1, height: 1, backgroundColor: Colors.border },
+  divTxt: { fontSize: 9, color: Colors.dim, letterSpacing: 2 },
+
+  // Guest button
+  btn: {
+    width: "100%",
+    maxWidth: 320,
+    backgroundColor: "rgba(255,255,255,.06)",
     borderRadius: Radius.lg,
     borderWidth: 1,
     borderColor: Colors.border,
-    paddingVertical: Spacing.md,
-    backgroundColor: "rgba(255,255,255,.03)",
+    minHeight: MIN_TOUCH,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: Spacing.md,
   },
-  guestTxt: { fontSize: 14, color: Colors.muted, fontWeight: "600" },
-  guestNote: {
+  btnDisabled: { opacity: 0.5 },
+  btnText: {
+    color: Colors.muted,
+    fontSize: 12,
+    letterSpacing: 2,
+    fontWeight: "700",
+  },
+  note: {
     fontSize: 10,
     color: Colors.dim,
+    letterSpacing: 0.3,
     textAlign: "center",
-    lineHeight: 16,
+    marginBottom: Spacing.lg,
   },
 
   // Error
   errorBox: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.sm,
-    backgroundColor: Colors.red + "12",
+    width: "100%",
+    maxWidth: 320,
+    padding: Spacing.md,
     borderRadius: Radius.md,
+    backgroundColor: "rgba(248,113,113,.08)",
     borderWidth: 1,
-    borderColor: Colors.red + "33",
-    padding: Spacing.sm,
+    borderColor: "rgba(248,113,113,.2)",
   },
-  errorTxt: { fontSize: 11, color: Colors.red, flex: 1 },
-
-  // Footer
-  footer: { fontSize: 9, color: Colors.dim, textAlign: "center" },
+  errorText: { fontSize: 11, color: Colors.red, textAlign: "center" },
 });

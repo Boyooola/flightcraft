@@ -48,6 +48,20 @@ export interface MissionToastData {
   icon: string;
 }
 
+export interface DaySummaryToastData {
+  type: "day-summary";
+  id: string;
+  day: number;
+  revenue: number;
+  interest: number;
+  net: number;
+  paxToday: number;
+  missionsToday: number; // completed this day
+  missionsTotal: number; // total missions available
+  netWorth: number;
+  prevNetWorth: number; // so we can show delta
+}
+
 export interface AchievementToastData {
   type: "achievement";
   id: string;
@@ -64,7 +78,8 @@ export type ToastData =
   | UnlockToastData
   | WarningToastData
   | MissionToastData
-  | AchievementToastData;
+  | AchievementToastData
+  | DaySummaryToastData;
 
 // ─────────────────────────────────────────────────────────────────
 // EMITTER
@@ -91,6 +106,10 @@ export function emitWarningToast(data: Omit<WarningToastData, "type">) {
 
 export function emitMissionToast(data: Omit<MissionToastData, "type">) {
   emitToast({ type: "mission", ...data });
+}
+
+export function emitDaySummaryToast(data: Omit<DaySummaryToastData, "type">) {
+  emitToast({ type: "day-summary", ...data });
 }
 
 export function emitAchievementToast(data: Omit<AchievementToastData, "type">) {

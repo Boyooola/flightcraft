@@ -1,12 +1,8 @@
 /**
  * app/(game)/index.tsx
  *
- * Routes between all game phases:
- *   loading   → LoadingScreen
- *   setup     → SetupScreen
- *   welcome   → WelcomeScreen
- *   tutorial  → TutorialScreen (overlaid on live map)
- *   playing   → GameMap + HUD
+ * Root game screen. Routes between all phases.
+ * Single default export always present — Metro requires this.
  */
 
 import AuthScreen from "@/components/auth/AuthScreen";
@@ -14,6 +10,7 @@ import TabBar from "@/components/hud/TabBar";
 import TopHUD from "@/components/hud/TopHUD";
 import GameMap from "@/components/map/GameMap";
 import SheetManager from "@/components/sheets/SheetManager";
+import DaySummaryCard from "@/components/ui/DaySummaryCard";
 import LoadingScreen from "@/components/ui/LoadingScreen";
 import MissionsPill from "@/components/ui/MissionsPill";
 import RouteCreationBanner from "@/components/ui/RouteCreationBanner";
@@ -32,8 +29,7 @@ import SetupScreen from "./setup";
 import TutorialScreen from "./tutorial";
 import WelcomeScreen from "./welcome";
 
-export default function GameScreen() {
-  useGameLoader();
+function GameContent() {
   useGameClock();
   useRevenueTick();
   useMissionChecker();
@@ -51,74 +47,44 @@ export default function GameScreen() {
     return () => clearTimeout(t);
   }, [loadComplete]);
 
-  if (phase === "auth") {
-    return (
-      <GestureHandlerRootView style={{ flex: 1 }}>
-        <SafeAreaProvider>
-          <AuthScreen />
-        </SafeAreaProvider>
-      </GestureHandlerRootView>
-    );
-  }
+  if (phase === "auth") return <AuthScreen />;
 
   if (!loadComplete) return <LoadingScreen steps={loadSteps} />;
 
-  if (phase === "setup" || !airline) {
-    return (
-      <GestureHandlerRootView style={{ flex: 1 }}>
-        <SafeAreaProvider>
-          <SetupScreen />
-        </SafeAreaProvider>
-      </GestureHandlerRootView>
-    );
-  }
+  if (phase === "setup" || !airline) return <SetupScreen />;
 
-  if (phase === "welcome") {
-    return (
-      <GestureHandlerRootView style={{ flex: 1 }}>
-        <SafeAreaProvider>
-          <WelcomeScreen />
-        </SafeAreaProvider>
-      </GestureHandlerRootView>
-    );
-  }
+  if (phase === "welcome") return <WelcomeScreen />;
+
+  return (
+    <View style={s.root}>
+      <GameMap
+        airlineColor={airline.color}
+        onMapReady={() => setMapReady(true)}
+      />
+      {mapReady && (
+        <>
+          <TopHUD />
+          <TabBar />
+        </>
+      )}
+      {!mapReady && <LoadingScreen steps={loadSteps} overlay />}
+      <SheetManager />
+      {phase === "playing" && <MissionsPill />}
+      {phase === "playing" && <DaySummaryCard />}
+      {phase === "playing" && <ToastStack />}
+      {phase === "playing" && <RouteCreationBanner />}
+      {phase === "tutorial" && mapReady && <TutorialScreen />}
+    </View>
+  );
+}
+
+export default function GameScreen() {
+  useGameLoader();
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
-        <View style={s.root}>
-          {/* Map always mounted */}
-          <GameMap
-            airlineColor={airline.color}
-            onMapReady={() => setMapReady(true)}
-          />
-
-          {/* HUD once map ready */}
-          {mapReady && (
-            <>
-              <TopHUD />
-              <TabBar />
-            </>
-          )}
-
-          {/* Map loading overlay */}
-          {!mapReady && <LoadingScreen steps={loadSteps} overlay />}
-
-          {/* Sheets */}
-          <SheetManager />
-
-          {/* Missions pill — persistent map button */}
-          {phase === "playing" && <MissionsPill />}
-
-          {/* Unified toast stack — hidden when sheet open */}
-          {phase === "playing" && <ToastStack />}
-
-          {/* Route creation banner */}
-          {phase === "playing" && <RouteCreationBanner />}
-
-          {/* Tutorial overlay */}
-          {phase === "tutorial" && mapReady && <TutorialScreen />}
-        </View>
+        <GameContent />
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );

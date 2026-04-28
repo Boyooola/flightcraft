@@ -65,6 +65,8 @@ export interface PlaneModel {
   range_nm: number;
   speed_kts: number;
   price: number;
+  cost_per_sector: number; // fixed cost per flight departure ($)
+  fuel_per_nm: number; // variable fuel cost per nm ($)
   unlock_cash: number;
   unlock_demands: number;
   description: string;
@@ -146,6 +148,7 @@ export interface LoadStep {
 export interface GameStore {
   // Auth
   isAnonymous: boolean;
+  boughtPlaneToday: boolean; // set when plane purchased, reset at day tick
 
   // Load
   loadSteps: LoadStep[];
@@ -194,6 +197,7 @@ export interface GameStore {
 
   // Session
   setPhase: (phase: GamePhase) => void;
+  setBoughtPlaneToday: (val: boolean) => void;
   setAirline: (airline: AirlineConfig) => void;
   updateAirline: (patch: Partial<AirlineConfig>) => void;
 
@@ -271,7 +275,8 @@ export const useGameStore = create<GameStore>()(
   devtools(
     subscribeWithSelector((set, get) => ({
       // ── Initial state ────────────────────────────────────────────
-      isAnonymous: false, // set correctly by useGameLoader after session check
+      isAnonymous: false,
+      boughtPlaneToday: false, // set correctly by useGameLoader after session check
       loadSteps: INITIAL_LOAD_STEPS,
       loadComplete: false,
       loadError: null,
@@ -316,6 +321,8 @@ export const useGameStore = create<GameStore>()(
 
       // ── Session ──────────────────────────────────────────────────
       setPhase: (phase) => set({ phase }, false, "setPhase"),
+      setBoughtPlaneToday: (val) =>
+        set({ boughtPlaneToday: val }, false, "setBoughtPlaneToday"),
       setAirline: (airline) => set({ airline }, false, "setAirline"),
       updateAirline: (patch) =>
         set(
@@ -620,6 +627,8 @@ export const useRoutes = () => useGameStore((s) => s.routes);
 export const useLedger = () => useGameStore((s) => s.ledger);
 export const usePhase = () => useGameStore((s) => s.phase);
 export const useIsAnonymous = () => useGameStore((s) => s.isAnonymous);
+export const useBoughtPlaneToday = () =>
+  useGameStore((s) => s.boughtPlaneToday);
 export const useLoadSteps = () => useGameStore((s) => s.loadSteps);
 export const useLoadComplete = () => useGameStore((s) => s.loadComplete);
 

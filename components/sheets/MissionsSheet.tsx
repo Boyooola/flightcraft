@@ -12,6 +12,7 @@ import type { Mission } from "@/lib/missions";
 import { fmtCash } from "@/lib/revenue";
 import {
   useAirline,
+  useBoughtPlaneToday,
   useDailyMissions,
   useDay,
   useDemands,
@@ -51,6 +52,7 @@ function useMissionProgress(mission: Mission): {
   const hubs = useHubs();
   const airline = useAirline();
   const ledger = useGameStore((s) => s.ledger);
+  const boughtPlane = useBoughtPlaneToday();
 
   return useMemo(() => {
     if (mission.completed) return { progress: 1, liveComplete: true };
@@ -129,13 +131,26 @@ function useMissionProgress(mission: Mission): {
       }
 
       case "plane_buy":
+        return { progress: boughtPlane ? 1 : 0, liveComplete: boughtPlane };
+
       case "no_crowding":
         return { progress: 0, liveComplete: false };
 
       default:
         return { progress: 0, liveComplete: false };
     }
-  }, [mission, demands, routes, hubs, airline?.loan, ledger.length]);
+  }, [
+    mission.completed,
+    mission.target,
+    mission.type,
+    boughtPlane,
+    routes,
+    demands,
+    airline?.day,
+    airline?.loan,
+    ledger,
+    hubs,
+  ]);
 }
 
 // ─── Mission Card ─────────────────────────────────────────────────

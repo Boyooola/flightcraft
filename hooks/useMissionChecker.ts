@@ -17,7 +17,7 @@ import {
   type MissionContext,
   type MissionProgress,
 } from "@/lib/missions";
-import { useDailyMissions, useGameStore } from "@/store";
+import { useBoughtPlaneToday, useDailyMissions, useGameStore } from "@/store";
 import { useEffect, useRef } from "react";
 
 export function useMissionChecker() {
@@ -27,29 +27,16 @@ export function useMissionChecker() {
   const startDayLoanRef = useRef<number>(-1); // loan at start of this day
   const prevPaxRef = useRef<number>(0); // yesterday's total pax
   const prevRevRef = useRef<number>(0); // yesterday's total revenue
-  const boughtPlaneRef = useRef<boolean>(false);
-  const prevPlanesRef = useRef<number>(-1);
 
   const airline = useGameStore((s) => s.airline);
+  const boughtPlaneToday = useBoughtPlaneToday();
   const routes = useGameStore((s) => s.routes);
   const hubs = useGameStore((s) => s.hubs);
   const demands = useGameStore((s) => s.demands);
-  const ownedPlanes = useGameStore((s) => s.ownedPlanes);
   const ledger = useGameStore((s) => s.ledger);
   const missions = useDailyMissions();
 
-  // Track plane purchases within the day
-  useEffect(() => {
-    if (!airline) return;
-    if (prevPlanesRef.current === -1) {
-      prevPlanesRef.current = ownedPlanes.length;
-      return;
-    }
-    if (ownedPlanes.length > prevPlanesRef.current) {
-      boughtPlaneRef.current = true;
-    }
-    prevPlanesRef.current = ownedPlanes.length;
-  }, [ownedPlanes.length]);
+  // boughtPlaneToday tracked in store — set by useBuyPlane, reset at day tick
 
   // Track loan repayment — accumulate within the day
   // Fires whenever loan changes (repayment or new loan)
@@ -122,7 +109,7 @@ export function useMissionChecker() {
         loanRepaidToday: loanRepaidRef.current,
         anyOvercrowded,
         overcrowdedHub: overcrowdedHub ?? undefined,
-        boughtPlaneToday: boughtPlaneRef.current,
+        boughtPlaneToday: boughtPlaneToday, // from store — live
       };
 
       missions.forEach((mission) => {
@@ -187,8 +174,7 @@ export function useMissionChecker() {
 
     // Reset daily counters
     loanRepaidRef.current = 0;
-    startDayLoanRef.current = airline.loan; // snapshot loan at day start
-    boughtPlaneRef.current = false;
-    prevPlanesRef.current = ownedPlanes.length;
+    startDayLoanRef.current = airline.loan;
+    useGameStore.getState().setBoughtPlaneToday(false); // reset for new day
   }, [airline?.day]);
 }

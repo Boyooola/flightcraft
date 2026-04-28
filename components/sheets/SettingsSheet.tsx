@@ -8,6 +8,7 @@
 
 import { Colors, Radius, Spacing } from "@/constants/theme";
 import { getCurrentUser, useAuth } from "@/hooks/useAuth";
+import { useGameSounds } from "@/hooks/useGameSounds";
 import { useTabBarHeight } from "@/hooks/useSheetLayout";
 import { fmtCash } from "@/lib/revenue";
 import { supabase } from "@/lib/supabase";
@@ -25,6 +26,7 @@ import {
   ActivityIndicator,
   Alert,
   StyleSheet,
+  Switch,
   Text,
   TouchableOpacity,
   View,
@@ -133,7 +135,9 @@ export default function SettingsSheet() {
   const isAnonymous = useIsAnonymous();
   const loadComplete = useLoadComplete();
   const { linkGoogleAccount } = useAuth();
+  const sounds = useGameSounds();
   const color = airline?.color ?? Colors.sky;
+  const [sfxOn, setSfxOn] = useState(sounds.isSfxEnabled());
 
   // Load user email on mount
   useEffect(() => {
@@ -217,10 +221,7 @@ export default function SettingsSheet() {
   return (
     <BottomSheetScrollView
       style={s.root}
-      contentContainerStyle={[
-        s.content,
-        { paddingBottom: tabBarH + Spacing.xxl },
-      ]}
+      contentContainerStyle={[s.content, { paddingBottom: tabBarH }]}
       showsVerticalScrollIndicator={false}
     >
       {/* Header */}
@@ -344,6 +345,25 @@ export default function SettingsSheet() {
       />
 
       {/* ABOUT */}
+      <SectionHeader label="SOUND" />
+      <SettingRow
+        icon="volume-high-outline"
+        label="Sound Effects"
+        sublabel="Planes, purchases, achievements"
+        right={
+          <Switch
+            value={sfxOn}
+            onValueChange={(v) => {
+              setSfxOn(v);
+              sounds.setSfxEnabled(v);
+            }}
+            trackColor={{ false: Colors.border, true: Colors.sky + "88" }}
+            thumbColor={sfxOn ? Colors.sky : Colors.dim}
+          />
+        }
+      />
+      <Divider />
+
       <SectionHeader label="ABOUT" />
       <SettingRow
         icon="information-circle-outline"
