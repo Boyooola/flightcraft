@@ -22,7 +22,6 @@ import { useCallback, useEffect, useState } from "react";
 let GoogleSignin: any = null;
 let statusCodes: any = {};
 try {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const pkg = require("@react-native-google-signin/google-signin");
   GoogleSignin = pkg.GoogleSignin;
   statusCodes = pkg.statusCodes ?? {};
@@ -120,6 +119,9 @@ export function useAuth() {
   // ── Link Google to guest account ───────────────────────────────
   const linkGoogleAccount = useCallback(async (): Promise<{
     error: string | null;
+    conflict?: boolean; // true = Google account already has progress
+    onOverwrite?: () => Promise<{ error: string | null }>;
+    onKeepGuest?: () => void;
   }> => {
     if (!GoogleSignin) {
       return {
@@ -134,14 +136,78 @@ export function useAuth() {
       const idToken = userInfo?.data?.idToken ?? userInfo?.idToken;
       if (!idToken) return { error: "No ID token from Google" };
 
-      const { error: sbError } = await supabase.auth.signInWithIdToken({
+      // ── Step 1: Check if this Google account already has an airline ──
+      // Sign in to a temporary session to check without destroying the guest
+      const { data: checkData } = await supabase.auth.signInWithIdToken({
         provider: "google",
         token: idToken,
       });
-      if (sbError) return { error: sbError.message };
+
+      const googleUserId = checkData?.user?.id;
+      const guestUserId =
+        useGameStore.getState().airline?.id ??
+        (await supabase.auth.getUser()).data?.user?.id;
+
+      if (googleUserId && googleUserId !== guestUserId) {
+        // Different user ID — Google account already exists in Supabase
+        // Check if it has an airline with meaningful progress
+        const { data: existingAirline } = await supabase
+          .from("airlines")
+          .select("id, name, day, cash")
+          .eq("user_id", googleUserId)
+          .maybeSingle();
+
+        if (existingAirline && existingAirline.day > 1) {
+          // Conflict — Google account has real progress
+          // Sign back out of Google session, restore guest session
+          await supabase.auth.signOut();
+
+          return {
+            error: null,
+            conflict: true,
+            // Option A: overwrite Google progress with current guest progress
+            onOverwrite: async () => {
+              try {
+                const { error: relink } = await supabase.auth.signInWithIdToken(
+                  {
+                    provider: "google",
+                    token: idToken,
+                  },
+                );
+                if (relink) return { error: relink.message };
+
+                // Delete the old Google airline and transfer guest data
+                await supabase
+                  .from("airlines")
+                  .delete()
+                  .eq("id", existingAirline.id);
+
+                // Update the guest airline to the new Google user ID
+                const guestAirline = useGameStore.getState().airline;
+                if (guestAirline) {
+                  await supabase
+                    .from("airlines")
+                    .update({ user_id: googleUserId })
+                    .eq("id", guestAirline.id);
+                }
+
+                useGameStore.getState().setIsAnonymous(false);
+                return { error: null };
+              } catch (e: any) {
+                return { error: e.message ?? "Failed to link account" };
+              }
+            },
+            // Option B: keep playing as guest, do nothing
+            onKeepGuest: () => {},
+          };
+        }
+      }
+
+      // ── No conflict — safe to link ────────────────────────────────
+      useGameStore.getState().setIsAnonymous(false);
       return { error: null };
     } catch (err: any) {
-      if (err.code === statusCodes.SIGN_IN_CANCELLED) return { error: null };
+      if (err.code === statusCodes?.SIGN_IN_CANCELLED) return { error: null };
       return { error: err.message ?? "Failed to link Google account" };
     }
   }, []);

@@ -6,6 +6,7 @@
  * Missions link for quick access.
  */
 
+import { GameAlert, useGameAlert } from "@/components/ui/GameAlert";
 import { Colors, Radius, Spacing } from "@/constants/theme";
 import { getCurrentUser, useAuth } from "@/hooks/useAuth";
 import { useGameSounds } from "@/hooks/useGameSounds";
@@ -24,7 +25,6 @@ import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   StyleSheet,
   Switch,
   Text,
@@ -125,7 +125,6 @@ export default function SettingsSheet() {
   const day = useDay();
   const closeSheet = useGameStore((s) => s.closeSheet);
   const openSheet = useGameStore((s) => s.openSheet);
-  const setIsAnonymous = useGameStore((s) => s.setIsAnonymous);
   const tabBarH = useTabBarHeight();
 
   const [deleting, setDeleting] = useState(false);
@@ -139,6 +138,7 @@ export default function SettingsSheet() {
   const sounds = useGameSounds();
   const color = airline?.color ?? Colors.sky;
   const [sfxOn, setSfxOn] = useState(sounds.isSfxEnabled());
+  const gameAlert = useGameAlert();
 
   // Load user email on mount
   useEffect(() => {
@@ -148,25 +148,64 @@ export default function SettingsSheet() {
   const handleLinkGoogle = async () => {
     setLinking(true);
     setLinkError(null);
-    const { error } = await linkGoogleAccount();
+    const result = await linkGoogleAccount();
     setLinking(false);
-    if (error) {
-      setLinkError(error);
-    } else {
-      const u = await getCurrentUser();
-      setUserEmail(u?.email ?? null);
-      setIsAnonymous(u?.isAnonymous ?? false);
+
+    if (result.error) {
+      setLinkError(result.error);
+      return;
     }
+
+    if (result.conflict && result.onOverwrite && result.onKeepGuest) {
+      // Google account already has progress — ask player what to do
+      gameAlert.show({
+        icon: "warning-outline",
+        title: "Account Conflict",
+        message:
+          "Your Google account already has an airline with saved progress.\n\nKeep your current guest progress, or cancel to keep the Google account progress.",
+        buttons: [
+          {
+            label: "Keep my current progress",
+            style: "destructive",
+            onPress: async () => {
+              setLinking(true);
+              const { error } = await result.onOverwrite!();
+              setLinking(false);
+              if (error) {
+                setLinkError(error);
+              } else {
+                useGameStore.getState().setIsAnonymous(false);
+                const u = await getCurrentUser();
+                setUserEmail(u?.email ?? null);
+              }
+            },
+          },
+          {
+            label: "Cancel",
+            style: "cancel",
+            onPress: result.onKeepGuest,
+          },
+        ],
+      });
+      return;
+    }
+
+    // No conflict — link succeeded
+    useGameStore.getState().setIsAnonymous(false);
+    const u = await getCurrentUser();
+    setUserEmail(u?.email ?? null);
   };
 
   const handleDeleteAccount = () => {
-    Alert.alert(
-      "Delete Account",
-      "This will permanently delete your airline and all progress. This cannot be undone.",
-      [
-        { text: "Cancel", style: "cancel" },
+    gameAlert.show({
+      icon: "trash-outline",
+      title: "Delete Account",
+      message:
+        "This will permanently delete your airline and all progress. This cannot be undone.",
+      buttons: [
+        { label: "Cancel", style: "cancel" },
         {
-          text: "Delete",
+          label: "Delete Account",
           style: "destructive",
           onPress: async () => {
             setDeleting(true);
@@ -207,17 +246,18 @@ export default function SettingsSheet() {
               });
             } catch (e) {
               console.error("Delete account error:", e);
-              Alert.alert(
-                "Error",
-                "Failed to delete account. Please try again.",
-              );
+              gameAlert.show({
+                title: "Error",
+                message: "Failed to delete account. Please try again.",
+                buttons: [{ label: "OK", style: "cancel" }],
+              });
             } finally {
               setDeleting(false);
             }
           },
         },
       ],
-    );
+    });
   };
 
   return (
@@ -382,6 +422,7 @@ export default function SettingsSheet() {
         sublabel="How we handle your data"
         onPress={() => openSheet("privacy-policy")}
       />
+      <GameAlert ref={gameAlert.ref} />
     </BottomSheetScrollView>
   );
 }

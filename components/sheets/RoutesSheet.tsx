@@ -7,6 +7,7 @@ import { useTabBarHeight } from "@/hooks/useSheetLayout";
  * resets demand to pending so it can be reassigned).
  */
 
+import { GameAlert, useGameAlert } from "@/components/ui/GameAlert";
 import { Colors, Radius, Spacing } from "@/constants/theme";
 import { useHaptics } from "@/hooks/useHaptics";
 import { useDeactivateRoute } from "@/hooks/useSupabaseWrite";
@@ -24,7 +25,6 @@ import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   Animated,
   StyleSheet,
   Text,
@@ -318,6 +318,7 @@ export default function RoutesSheet() {
   const deactivate = useDeactivateRoute();
 
   const [deactivating, setDeactivating] = useState<string | null>(null);
+  const gameAlert = useGameAlert();
 
   const activeRoutes = routes.filter((r) => r.active);
   const color = airline?.color ?? Colors.sky;
@@ -347,20 +348,25 @@ export default function RoutesSheet() {
       const label = `${route.demand.origin.iata}${via} → ${route.demand.dest.iata}`;
       const plane = route.plane.plane_model.nickname;
 
-      Alert.alert(
-        "Remove Route",
-        `Stop flying ${label} with ${plane}?\n\nThe plane will become idle and the demand will go back to pending so you can reassign it.`,
-        [
-          { text: "Keep Flying", style: "cancel" },
+      gameAlert.show({
+        icon: "git-branch-outline",
+        title: "Remove Route",
+        message: `Stop flying ${label} with ${plane}?\n\nThe plane becomes idle and the demand returns to pending.`,
+        buttons: [
+          { label: "Keep Flying", style: "cancel" },
           {
-            text: "Remove Route",
+            label: "Remove Route",
             style: "destructive",
             onPress: async () => {
               setDeactivating(route.id);
               const { error } = await deactivate(route.id);
               setDeactivating(null);
               if (error) {
-                Alert.alert("Error", error);
+                gameAlert.show({
+                  title: "Error",
+                  message: error,
+                  buttons: [{ label: "OK", style: "cancel" }],
+                });
                 haptics.error();
               } else {
                 haptics.success();
@@ -368,7 +374,7 @@ export default function RoutesSheet() {
             },
           },
         ],
-      );
+      });
     },
     [deactivate, haptics],
   );
@@ -480,6 +486,8 @@ export default function RoutesSheet() {
       )}
 
       <View style={{ height: 40 }} />
+      <GameAlert ref={gameAlert.ref} />
+      <GameAlert ref={gameAlert.ref} />
     </BottomSheetScrollView>
   );
 }

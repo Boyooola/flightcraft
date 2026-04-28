@@ -14,6 +14,7 @@ import { useTabBarHeight } from "@/hooks/useSheetLayout";
  * DEMANDS section remains for unowned preview.
  */
 
+import { GameAlert, useGameAlert } from "@/components/ui/GameAlert";
 import { Colors, MIN_TOUCH, Radius, Spacing } from "@/constants/theme";
 import { useGameSounds } from "@/hooks/useGameSounds";
 import { useHaptics } from "@/hooks/useHaptics";
@@ -46,7 +47,6 @@ import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import { useMemo, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -452,6 +452,7 @@ export default function AirportSheet() {
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const ownedPlanes = useOwnedPlanes();
   const [selling, setSelling] = useState(false);
+  const gameAlert = useGameAlert();
 
   const [buying, setBuying] = useState(false);
   const [buyError, setBuyError] = useState<string | null>(null);
@@ -534,30 +535,31 @@ export default function AirportSheet() {
       (r) => r.hub_iata === airport.iata && r.active,
     ).length;
     const refund = Math.round(hubPurchaseCost(airport) * 0.5);
-    Alert.alert(
-      "Sell Hub",
-      `Sell ${airport.iata} hub for ${fmtCash(refund)}?
-
-` +
+    gameAlert.show({
+      icon: "storefront-outline",
+      title: "Sell Hub",
+      message:
+        `Sell ${airport.iata} hub for ${fmtCash(refund)}?` +
         (hubRouteCount > 0
-          ? `⚠️ This will deactivate ${hubRouteCount} active route${hubRouteCount !== 1 ? "s" : ""} and free ${hubRouteCount} plane${hubRouteCount !== 1 ? "s" : ""}.
-
-`
+          ? `\n\n⚠️ Deactivates ${hubRouteCount} route${hubRouteCount !== 1 ? "s" : ""} and frees ${hubRouteCount} plane${hubRouteCount !== 1 ? "s" : ""}.`
           : "") +
-        "You'll receive 50% of the purchase price.",
-      [
-        { text: "Cancel", style: "cancel" },
+        "\n\nYou'll receive 50% of the purchase price.",
+      buttons: [
+        { label: "Cancel", style: "cancel" },
         {
-          text: "Sell Hub",
+          label: "Sell Hub",
           style: "destructive",
           onPress: async () => {
             setSelling(true);
-            const { error, refund: amount } = await sellHub(hub!.id);
+            const { error } = await sellHub(hub!.id);
             setSelling(false);
             if (error) {
-              Alert.alert("Error", error);
+              gameAlert.show({
+                title: "Error",
+                message: error,
+                buttons: [{ label: "OK", style: "cancel" }],
+              });
               haptics.error();
-              sounds.error();
             } else {
               haptics.success();
               sounds.hubSell();
@@ -566,7 +568,7 @@ export default function AirportSheet() {
           },
         },
       ],
-    );
+    });
   };
 
   const handleBuy = async () => {
@@ -595,10 +597,7 @@ export default function AirportSheet() {
   return (
     <BottomSheetScrollView
       style={s.root}
-      contentContainerStyle={[
-        s.content,
-        { paddingBottom: tabBarH + Spacing.xxl },
-      ]}
+      contentContainerStyle={[s.content, { paddingBottom: tabBarH }]}
       showsVerticalScrollIndicator={false}
     >
       {/* ══ HEADER ══ */}
@@ -943,6 +942,7 @@ export default function AirportSheet() {
       )}
 
       <View style={{ height: 50 }} />
+      <GameAlert ref={gameAlert.ref} />
     </BottomSheetScrollView>
   );
 }
