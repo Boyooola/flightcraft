@@ -215,8 +215,15 @@ export default function RouteLayer({
 
             store.addPaxDelivered(r.demand.id, actualPax);
 
-            // Also credit pax to the origin→via leg demand if it exists
-            // e.g. DOH→AYT→BUD connecting route serves DOH→AYT passengers too
+            // ── Leg demand credit — real O&D split ────────────────
+            // For DOH→AYT→BUD:
+            //   leg_pax    = simulatePaxDay(DOH, AYT)   e.g. 120
+            //   through_pax = r.demand.pax_day           e.g. 80  (DOH→BUD)
+            //   via_ratio  = 120 / (120 + 80) = 0.60
+            //   leg passengers = actualPax × 0.60
+            //
+            // This mirrors real O&D modelling: passengers split between
+            // those deplaning at the via stop vs continuing to final dest.
             if (r.via_iata) {
               const legDemand = store.demands.find(
                 (d) =>
@@ -229,10 +236,16 @@ export default function RouteLayer({
                   legDemand.pax_day - (legDemand.delivered_pax_today ?? 0),
                 );
                 if (legRemaining > 0) {
+                  // Use stored O&D ratio (computed at route creation from gravity model)
+                  // Falls back to leg_pax / (leg_pax + through_pax) if not stored
+                  const viaRatio =
+                    r.via_pax_ratio ??
+                    legDemand.pax_day /
+                      Math.max(1, legDemand.pax_day + demand.pax_day);
                   const legPax = Math.min(
                     legRemaining,
-                    Math.round(actualPax * 0.4),
-                  ); // ~40% connect at via
+                    Math.round(actualPax * viaRatio),
+                  );
                   if (legPax > 0) store.addPaxDelivered(legDemand.id, legPax);
                 }
               }

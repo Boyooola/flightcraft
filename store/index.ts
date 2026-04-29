@@ -123,6 +123,7 @@ export interface Route {
   hub_iata: string;
   via_iata: string | null;
   total_dist_nm: number;
+  via_pax_ratio: number | null; // O&D split: fraction of pax deplaning at via stop
   active: boolean;
 }
 

@@ -10,6 +10,7 @@ import {
   generateDemands,
   generateOneDemand,
   hubPurchaseCost,
+  simulatePaxDay,
 } from "@/lib/demands";
 import { fmtCash } from "@/lib/revenue";
 import { supabase } from "@/lib/supabase";
@@ -377,6 +378,7 @@ export function useCreateRoute() {
         via_iata: viaIata,
         total_dist_nm: routeDistNm,
         active: true,
+        via_pax_ratio: null,
       });
       updateDemand(demand.id, { status: "served" });
       gameSounds.play("routeCreate");
@@ -413,6 +415,7 @@ export function useCreateRoute() {
           via_iata: viaIata,
           total_dist_nm: routeDistNm,
           active: true,
+          via_pax_ratio: null,
         });
 
         const newScore = (airline.demand_score ?? 0) + 1;
@@ -811,6 +814,21 @@ export function useCreateCustomRoute() {
           d.dest.iata === dest.iata,
       );
 
+      // ── Compute O&D via_pax_ratio ─────────────────────────────
+      // Fraction of passengers deplaning at the via stop.
+      // Based on relative leg demand vs through demand.
+      // DOH→AYT leg=120, DOH→BUD through=80 → ratio = 120/(120+80) = 0.60
+      let viaPaxRatio: number | null = null;
+      if (via) {
+        const legDemand = demands.find(
+          (d) => d.origin.iata === origin.iata && d.dest.iata === via.iata,
+        );
+        const legPaxDay =
+          legDemand?.pax_day ?? simulatePaxDay(origin, via, distNm);
+        const throughPaxDay = paxDay;
+        viaPaxRatio = legPaxDay / Math.max(1, legPaxDay + throughPaxDay);
+      }
+
       const tempRouteId = `custom-route-${Date.now()}`;
       spendCash(fee);
 
@@ -828,6 +846,7 @@ export function useCreateCustomRoute() {
           hub_iata: origin.iata,
           via_iata: via?.iata ?? null,
           total_dist_nm: totalDist,
+          via_pax_ratio: viaPaxRatio,
           active: true,
         });
       } else {
@@ -853,6 +872,7 @@ export function useCreateCustomRoute() {
           hub_iata: origin.iata,
           via_iata: via?.iata ?? null,
           total_dist_nm: totalDist,
+          via_pax_ratio: viaPaxRatio,
           active: true,
         });
         demandToUse = syntheticDemand;
@@ -972,6 +992,7 @@ export function useCreateCustomRoute() {
           hub_iata: origin.iata,
           via_iata: via?.iata ?? null,
           total_dist_nm: totalDist,
+          via_pax_ratio: viaPaxRatio,
           active: true,
         });
 
