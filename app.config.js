@@ -81,6 +81,6 @@ export default {
         projectId: "60965f1d-19cd-45fb-a5f1-fd3ad63766a1",
       },
     },
-    owner: "aidz0827",
+    owner: "stratoslabs",
   },
 };
