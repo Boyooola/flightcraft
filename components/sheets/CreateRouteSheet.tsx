@@ -32,11 +32,11 @@ import {
   useHubs,
   useOwnedPlanes,
   useRouteCreationWaypoints,
-  useRoutes,
+  useRoutes
 } from "@/store";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   StyleSheet,
@@ -44,6 +44,11 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import DraggableFlatList, {
+  RenderItemParams,
+  ScaleDecorator,
+} from "react-native-draggable-flatlist";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 
 // ─────────────────────────────────────────────────────────────────
 // CONSTANTS
@@ -67,88 +72,157 @@ const FAMILY_COLOR: Record<string, string> = {
 // Shows the waypoint chain with arrows and numbered stops
 // ─────────────────────────────────────────────────────────────────
 
+function WaypointItem({
+  item: ap,
+  getIndex,
+  drag,
+  isActive,
+  color,
+  onRemove,
+  total,
+}: RenderItemParams<Airport> & {
+  color: string;
+  onRemove: (iata: string) => void;
+  total: number;
+}) {
+  const i = getIndex() ?? 0;
+  const isFirst = i === 0;
+  const isLast = i === total - 1;
+  const isVia = !isFirst && !isLast;
+  const dotColor = isVia ? Colors.purple : color;
+  const role = isFirst ? "Origin" : isVia ? "Stop" : "Dest";
+
+  return (
+    <ScaleDecorator activeScale={1.03}>
+      <View style={[rv.row, isActive && rv.rowActive]}>
+        {/* Connector above (except first) */}
+        {!isFirst && (
+          <View style={[rv.connector, { backgroundColor: dotColor + "44" }]} />
+        )}
+
+        <View style={[rv.stop, isActive && rv.stopActive]}>
+          {/* Dot */}
+          <View style={[rv.dot, { backgroundColor: dotColor }]} />
+
+          {/* Airport info */}
+          <View style={rv.info}>
+            <View style={rv.infoTop}>
+              <Text style={[rv.iata, { color: dotColor }]}>{ap.iata}</Text>
+              <View
+                style={[
+                  rv.rolePill,
+                  {
+                    backgroundColor: dotColor + "18",
+                    borderColor: dotColor + "44",
+                  },
+                ]}
+              >
+                <Text style={[rv.roleTxt, { color: dotColor }]}>{role}</Text>
+              </View>
+            </View>
+            <Text style={rv.city} numberOfLines={1}>
+              {ap.city}
+              {ap.country ? `, ${ap.country}` : ""}
+            </Text>
+          </View>
+
+          {/* Remove */}
+          <TouchableOpacity
+            onPress={() => onRemove(ap.iata)}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            style={rv.removeBtn}
+          >
+            <Ionicons name="close-circle" size={18} color={Colors.dim} />
+          </TouchableOpacity>
+
+          {/* Drag handle — only show if > 1 waypoint */}
+          {total > 1 && (
+            <TouchableOpacity
+              onLongPress={drag}
+              delayLongPress={150}
+              style={rv.dragHandle}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <Ionicons
+                name="reorder-three-outline"
+                size={20}
+                color={Colors.dim}
+              />
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+    </ScaleDecorator>
+  );
+}
+
 function RouteVisualiser({
   waypoints,
   color,
   onRemove,
+  onReorder,
 }: {
   waypoints: Airport[];
   color: string;
   onRemove: (iata: string) => void;
+  onReorder: (waypoints: Airport[]) => void;
 }) {
+  const renderItem = useCallback(
+    (params: RenderItemParams<Airport>) => (
+      <WaypointItem
+        {...params}
+        color={color}
+        onRemove={onRemove}
+        total={waypoints.length}
+      />
+    ),
+    [color, onRemove, waypoints.length],
+  );
+
   return (
-    <View style={rv.wrap}>
-      {waypoints.map((ap, i) => {
-        const isFirst = i === 0;
-        const isLast = i === waypoints.length - 1;
-        const isVia = !isFirst && !isLast;
-        const dotColor = isVia ? Colors.purple : color;
-        const role = isFirst ? "Origin" : isVia ? "Stop" : "Dest";
-
-        return (
-          <View key={ap.iata} style={rv.row}>
-            {/* Vertical connector line above (except first) */}
-            {!isFirst && (
-              <View
-                style={[rv.connector, { backgroundColor: dotColor + "44" }]}
+    <GestureHandlerRootView>
+      <DraggableFlatList
+        data={waypoints}
+        keyExtractor={(ap) => ap.iata}
+        renderItem={renderItem}
+        onDragEnd={({ data }) => onReorder(data)}
+        scrollEnabled={false}
+        activationDistance={5}
+        ListFooterComponent={
+          waypoints.length < 3 ? (
+            <View style={rv.tapHint}>
+              <Ionicons
+                name="add-circle-outline"
+                size={12}
+                color={Colors.dim}
               />
-            )}
-
-            <View style={rv.stop}>
-              {/* Dot */}
-              <View style={[rv.dot, { backgroundColor: dotColor }]} />
-
-              {/* Airport info */}
-              <View style={rv.info}>
-                <View style={rv.infoTop}>
-                  <Text style={[rv.iata, { color: dotColor }]}>{ap.iata}</Text>
-                  <View
-                    style={[
-                      rv.rolePill,
-                      {
-                        backgroundColor: dotColor + "18",
-                        borderColor: dotColor + "44",
-                      },
-                    ]}
-                  >
-                    <Text style={[rv.roleTxt, { color: dotColor }]}>
-                      {role}
-                    </Text>
-                  </View>
-                </View>
-                <Text style={rv.city} numberOfLines={1}>
-                  {ap.city}
-                  {ap.country ? `, ${ap.country}` : ""}
-                </Text>
-              </View>
-
-              {/* Remove */}
-              <TouchableOpacity
-                onPress={() => onRemove(ap.iata)}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                style={rv.removeBtn}
-              >
-                <Ionicons name="close-circle" size={18} color={Colors.dim} />
-              </TouchableOpacity>
+              <Text style={rv.tapHintTxt}>
+                {waypoints.length === 1
+                  ? "Tap a destination airport on the map"
+                  : "Tap another airport to add a stop"}
+              </Text>
             </View>
-          </View>
-        );
-      })}
-    </View>
+          ) : null
+        }
+      />
+    </GestureHandlerRootView>
   );
 }
 
 const rv = StyleSheet.create({
-  wrap: { gap: 0 },
   row: { position: "relative" },
+  rowActive: { zIndex: 999 },
   connector: { width: 2, height: Spacing.md, marginLeft: 11, marginBottom: -2 },
   stop: {
     flexDirection: "row",
     alignItems: "center",
     gap: Spacing.sm,
-    paddingVertical: 4,
+    paddingVertical: 6,
+    paddingHorizontal: 4,
+    borderRadius: Radius.md,
   },
-  dot: { width: 10, height: 10, borderRadius: 5, flexShrink: 0, marginTop: 2 },
+  stopActive: { backgroundColor: "rgba(255,255,255,.06)" },
+  dot: { width: 10, height: 10, borderRadius: 5, flexShrink: 0 },
   info: { flex: 1, gap: 1 },
   infoTop: { flexDirection: "row", alignItems: "center", gap: 6 },
   iata: { fontSize: 18, fontWeight: "700", letterSpacing: 0.5 },
@@ -161,6 +235,16 @@ const rv = StyleSheet.create({
   roleTxt: { fontSize: 8, fontWeight: "700", letterSpacing: 0.5 },
   city: { fontSize: 11, color: Colors.dim },
   removeBtn: { padding: 4 },
+  dragHandle: { padding: 4, marginLeft: 2 },
+  tapHint: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: 4,
+    marginTop: 2,
+  },
+  tapHintTxt: { fontSize: 11, color: Colors.dim },
 });
 
 // ─────────────────────────────────────────────────────────────────
@@ -520,6 +604,7 @@ export default function CreateRouteSheet() {
   const airline = useAirline();
   const cash = useCash();
   const removeWp = useGameStore((s) => s.removeWaypoint);
+  const reorderWps = useGameStore((s) => s.reorderWaypoints);
   const clearCreation = useGameStore((s) => s.clearRouteCreation);
   const haptics = useHaptics();
   const tabBarH = useTabBarHeight();
@@ -531,7 +616,6 @@ export default function CreateRouteSheet() {
   const [done, setDone] = useState(false);
 
   const color = airline?.color ?? Colors.sky;
-
   const waypoints = creationWaypoints;
 
   // ── handleRemoveWaypoint — defined after waypoints ────────────
@@ -798,6 +882,7 @@ export default function CreateRouteSheet() {
             haptics.tap();
             handleRemoveWaypoint(iata);
           }}
+          onReorder={reorderWps}
         />
 
         {/* Tap hint for adding via */}

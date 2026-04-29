@@ -191,7 +191,7 @@ export default function RouteLayer({
           pts[Math.max(0, Math.min(total, nextIdx))],
         );
 
-        // ── Outbound arrival only ─────────────────────────────────
+        // ── Outbound arrival at DESTINATION ───────────────────────
         const lastRaw = lastRawRef.current[r.id];
         if (lastRaw !== undefined && lastRaw < 1 && raw >= 1) {
           const demand =
@@ -214,6 +214,29 @@ export default function RouteLayer({
             const actualPax = Math.min(remaining, Math.max(1, perFlight));
 
             store.addPaxDelivered(r.demand.id, actualPax);
+
+            // Also credit pax to the origin→via leg demand if it exists
+            // e.g. DOH→AYT→BUD connecting route serves DOH→AYT passengers too
+            if (r.via_iata) {
+              const legDemand = store.demands.find(
+                (d) =>
+                  d.origin.iata === r.demand.origin.iata &&
+                  d.dest.iata === r.via_iata,
+              );
+              if (legDemand) {
+                const legRemaining = Math.max(
+                  0,
+                  legDemand.pax_day - (legDemand.delivered_pax_today ?? 0),
+                );
+                if (legRemaining > 0) {
+                  const legPax = Math.min(
+                    legRemaining,
+                    Math.round(actualPax * 0.4),
+                  ); // ~40% connect at via
+                  if (legPax > 0) store.addPaxDelivered(legDemand.id, legPax);
+                }
+              }
+            }
 
             // Revenue — use shared calcRouteRevenue (same as all other components)
             const hub = store.hubs.find((h) => h.airport.iata === r.hub_iata);
@@ -400,6 +423,28 @@ export default function RouteLayer({
       {/* Animated planes */}
       {planes.length > 0 && (
         <MapboxGL.ShapeSource id="planes-source" shape={planeGeoJSON}>
+          <MapboxGL.CircleLayer
+            id="plane-body"
+            existing={false}
+            style={{
+              circleRadius: [
+                "interpolate",
+                ["linear"],
+                ["zoom"],
+                1,
+                4,
+                5,
+                7,
+                10,
+                11,
+              ],
+              circleColor: airlineColor,
+              circleStrokeColor: "#ffffff",
+              circleStrokeWidth: 1.5,
+              circleStrokeOpacity: 0.9,
+              circlePitchAlignment: "map",
+            }}
+          />
           <MapboxGL.SymbolLayer
             id="plane-icon"
             existing={false}
@@ -440,7 +485,7 @@ export default function RouteLayer({
               textHaloColor: "rgba(0,0,0,0.75)",
               textHaloWidth: 1.5,
               textOpacity: ["get", "opacity"],
-              textOffset: [0, 1.2],
+              textOffset: [0, ["get", "offsetY"] as any],
               textAnchor: "bottom",
               textFont: ["DIN Offc Pro Bold", "Arial Unicode MS Bold"],
               textAllowOverlap: true,

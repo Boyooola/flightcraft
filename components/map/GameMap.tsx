@@ -19,6 +19,7 @@ import { useCallback, useRef } from "react";
 import { StyleSheet, View } from "react-native";
 import AirportLayer from "./AirportLayer";
 import RouteLayer from "./RouteLayer";
+import RoutePreviewLayer from "./RoutePreviewLayer";
 
 const MAPBOX_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_TOKEN ?? "";
 MapboxGL.setAccessToken(MAPBOX_TOKEN);
@@ -133,6 +134,9 @@ export default function GameMap({ airlineColor, onMapReady }: GameMapProps) {
         ))}
 
         <RouteLayer airlineColor={color} speed={speed} paused={speed === 0} />
+
+        {/* Preview arc during route creation */}
+        <RoutePreviewLayer airlineColor={color} />
       </MapboxGL.MapView>
     </View>
   );

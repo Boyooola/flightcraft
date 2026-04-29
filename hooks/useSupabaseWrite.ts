@@ -903,6 +903,37 @@ export function useCreateCustomRoute() {
           demandId = demandData.id;
         }
 
+        // ── Mark leg demands as served ───────────────────────────────
+        // When creating DOH→AYT→BUD, the DOH→AYT demand should be served
+        // since the plane physically flies that leg and delivers pax.
+        if (via) {
+          const legDemands = [
+            // origin → via leg
+            demands.find(
+              (d) =>
+                d.origin.iata === origin.iata &&
+                d.dest.iata === via.iata &&
+                d.status === "pending",
+            ),
+            // via → dest leg
+            demands.find(
+              (d) =>
+                d.origin.iata === via.iata &&
+                d.dest.iata === dest.iata &&
+                d.status === "pending",
+            ),
+          ].filter(Boolean);
+
+          for (const legDemand of legDemands) {
+            if (!legDemand) continue;
+            store().updateDemand(legDemand.id, { status: "served" });
+            await supabase
+              .from("demands")
+              .update({ status: "served" })
+              .eq("id", legDemand.id);
+          }
+        }
+
         // Insert route
         const { data: routeData, error: routeErr } = await supabase
           .from("routes")

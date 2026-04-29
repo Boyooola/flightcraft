@@ -268,6 +268,7 @@ export interface GameStore {
   startRouteCreation: (preWaypoints?: Airport[]) => void;
   addWaypoint: (airport: Airport) => void;
   removeWaypoint: (iata: string) => void;
+  reorderWaypoints: (waypoints: Airport[]) => void;
   clearRouteCreation: () => void;
 
   // Helpers
@@ -653,6 +654,9 @@ export const useGameStore = create<GameStore>()(
           false,
           "removeWaypoint",
         ),
+
+      reorderWaypoints: (waypoints) =>
+        set({ creationWaypoints: waypoints }, false, "reorderWaypoints"),
 
       clearRouteCreation: () =>
         set(
