@@ -34,45 +34,134 @@ import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
 // ─────────────────────────────────────────────────────────────────
 // MINI SPARKLINE
-// Pure SVG-free bar chart using Views
+// ─────────────────────────────────────────────────────────────────
+// IMPROVED SPARKLINE — profit/loss zones, day labels, today marker
 // ─────────────────────────────────────────────────────────────────
 
 function Sparkline({
   data,
   color,
-  height = 36,
+  height = 60,
+  currentDay,
+  days,
 }: {
   data: number[];
   color: string;
   height?: number;
+  currentDay: number;
+  days: number[];
 }) {
   if (data.length === 0) return null;
-  const max = Math.max(...data, 1);
+
+  const max = Math.max(...data.map(Math.abs), 1);
+  const hasNeg = data.some((v) => v < 0);
+  // Zero line position (as % from bottom)
+  const zeroY = hasNeg ? 50 : 0;
+
   return (
-    <View style={[sp.wrap, { height }]}>
-      {data.map((v, i) => (
-        <View key={i} style={sp.barCol}>
-          <View
-            style={[
-              sp.bar,
-              {
-                height: `${Math.max(4, Math.round((v / max) * 100))}%` as any,
-                backgroundColor: v >= 0 ? color : Colors.red,
-                opacity:
-                  i === data.length - 1 ? 1 : 0.45 + (i / data.length) * 0.55,
-              },
-            ]}
-          />
+    <View>
+      {/* Bar chart */}
+      <View style={[sp.wrap, { height }]}>
+        {/* Zero line — only when there are negatives */}
+        {hasNeg && (
+          <View style={[sp.zeroLine, { bottom: `${zeroY}%` as any }]} />
+        )}
+        {data.map((v, i) => {
+          const isToday = days[i] === currentDay;
+          const barH = hasNeg
+            ? Math.max(6, Math.round((Math.abs(v) / max) * (height / 2)))
+            : Math.max(4, Math.round((v / max) * height));
+          const isPos = v >= 0;
+          const barColor = isToday ? color : isPos ? color : Colors.red;
+          const opacity = isToday ? 1 : 0.4 + (i / data.length) * 0.5;
+
+          return (
+            <View
+              key={i}
+              style={[
+                sp.barCol,
+                { justifyContent: isPos ? "flex-end" : "flex-start" },
+              ]}
+            >
+              {isToday && (
+                <View style={[sp.todayDot, { backgroundColor: color }]} />
+              )}
+              <View
+                style={{
+                  height: barH,
+                  backgroundColor: barColor,
+                  opacity,
+                  borderRadius: 2,
+                  marginTop: !isPos ? 0 : undefined,
+                  marginBottom: isPos ? 0 : undefined,
+                }}
+              />
+            </View>
+          );
+        })}
+      </View>
+
+      {/* Day labels — show every 5 days */}
+      <View style={sp.labelRow}>
+        {data.map((_, i) => (
+          <View key={i} style={sp.labelCol}>
+            {days[i] % 5 === 0 && <Text style={sp.dayLabel}>{days[i]}</Text>}
+          </View>
+        ))}
+      </View>
+
+      {/* Legend */}
+      <View style={sp.legend}>
+        <View style={sp.legendItem}>
+          <View style={[sp.legendDot, { backgroundColor: color }]} />
+          <Text style={sp.legendTxt}>Profit</Text>
         </View>
-      ))}
+        {hasNeg && (
+          <View style={sp.legendItem}>
+            <View style={[sp.legendDot, { backgroundColor: Colors.red }]} />
+            <Text style={sp.legendTxt}>Loss</Text>
+          </View>
+        )}
+        <View style={sp.legendItem}>
+          <View
+            style={[sp.legendDot, { backgroundColor: color, opacity: 1 }]}
+          />
+          <Text style={sp.legendTxt}>Today</Text>
+        </View>
+      </View>
     </View>
   );
 }
 
 const sp = StyleSheet.create({
-  wrap: { flexDirection: "row", alignItems: "flex-end", gap: 2 },
-  barCol: { flex: 1, justifyContent: "flex-end", height: "100%" },
-  bar: { borderRadius: 2, minHeight: 4 },
+  wrap: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 1.5,
+    position: "relative",
+  },
+  barCol: { flex: 1, height: "100%", flexDirection: "column" },
+  zeroLine: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: "rgba(255,255,255,.2)",
+  },
+  todayDot: {
+    width: 3,
+    height: 3,
+    borderRadius: 2,
+    alignSelf: "center",
+    marginBottom: 2,
+  },
+  labelRow: { flexDirection: "row", marginTop: 4, gap: 1.5 },
+  labelCol: { flex: 1, alignItems: "center" },
+  dayLabel: { fontSize: 7, color: Colors.dim },
+  legend: { flexDirection: "row", gap: Spacing.md, marginTop: 6 },
+  legendItem: { flexDirection: "row", alignItems: "center", gap: 4 },
+  legendDot: { width: 6, height: 6, borderRadius: 3 },
+  legendTxt: { fontSize: 9, color: Colors.dim },
 });
 
 // ─────────────────────────────────────────────────────────────────
@@ -85,14 +174,17 @@ function LedgerRow({
   entry: { day: number; label: string; amount: number; type: string };
 }) {
   const isPos = entry.amount >= 0;
+  const isEvent = entry.type === "event";
   const icon =
-    entry.type === "revenue"
-      ? "airplane"
-      : entry.type === "interest"
-        ? "percent"
-        : entry.type === "purchase"
-          ? "cart-outline"
-          : "cash";
+    entry.type === "event"
+      ? "calendar-outline"
+      : entry.type === "revenue"
+        ? "airplane"
+        : entry.type === "interest"
+          ? "percent"
+          : entry.type === "purchase"
+            ? "cart-outline"
+            : "cash";
 
   return (
     <View style={lr.row}>
@@ -243,14 +335,23 @@ export default function FinanceSheet() {
   const dailyNet = totalDailyRev - interest;
 
   // 30-day revenue sparkline from ledger
+  const sparkDays = useMemo(() => {
+    const allDays = new Set(ledger.map((e) => e.day));
+    const sorted = Array.from(allDays).sort((a, b) => a - b);
+    const last30 = sorted.slice(-30);
+    return last30.length > 0
+      ? last30
+      : Array.from({ length: 30 }, (_, i) => Math.max(1, day - 29 + i));
+  }, [ledger, day]);
+
   const sparkData = useMemo(() => {
     const byDay: Record<number, number> = {};
     ledger.forEach((e) => {
       byDay[e.day] = (byDay[e.day] ?? 0) + e.amount;
     });
     const days = Array.from({ length: 30 }, (_, i) => day - 29 + i);
-    return days.map((d) => byDay[d] ?? 0);
-  }, [ledger, day]);
+    return sparkDays.map((d) => byDay[d] ?? 0);
+  }, [ledger, sparkDays]);
 
   // Per-route revenue breakdown
   const routeRevenues = useMemo(() => {
@@ -286,10 +387,7 @@ export default function FinanceSheet() {
   return (
     <BottomSheetScrollView
       style={s.root}
-      contentContainerStyle={[
-        s.content,
-        { paddingBottom: tabBarH + Spacing.xxl },
-      ]}
+      contentContainerStyle={[s.content, { paddingBottom: tabBarH }]}
       showsVerticalScrollIndicator={false}
     >
       {/* Header */}
@@ -401,7 +499,13 @@ export default function FinanceSheet() {
       {sparkData.some((v) => v !== 0) && (
         <View style={s.section}>
           <Text style={s.sectionTitle}>30-DAY NET INCOME</Text>
-          <Sparkline data={sparkData} color={color} height={48} />
+          <Sparkline
+            data={sparkData}
+            color={color}
+            height={60}
+            currentDay={day}
+            days={sparkDays}
+          />
           <View style={s.sparkLabels}>
             <Text style={s.sparkLbl}>Day {Math.max(1, day - 29)}</Text>
             <Text style={s.sparkLbl}>Today</Text>

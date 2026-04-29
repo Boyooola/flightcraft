@@ -17,8 +17,10 @@ import {
   useAirline,
   useDailyMissions,
   useGameStore,
+  useOwnedPlanes,
   useRouteCount,
   useRouteCreationActive,
+  useRoutes,
 } from "@/store";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useEffect, useRef } from "react";
@@ -85,6 +87,10 @@ export default function TabBar() {
   const haptics = useHaptics();
 
   const color = airline?.color ?? Colors.sky;
+  const ownedPlanes = useOwnedPlanes();
+  const activeRoutes = useRoutes().filter((r) => r.active);
+  const busyPlaneIds = new Set(activeRoutes.map((r) => r.plane.id));
+  const idleCount = ownedPlanes.filter((p) => !busyPlaneIds.has(p.id)).length;
 
   // Pending missions count for FAB badge
   const pendingMissions = dailyMissions.filter((m) => !m.completed).length;
@@ -142,6 +148,7 @@ export default function TabBar() {
     const active = activeSheet === id && !isCreating;
     const c = active ? Colors.sky : Colors.dim;
     const showBadge = id === "routes" && routeCount > 0 && !isCreating;
+    const showIdle = id === "fleet" && idleCount > 0 && !isCreating;
 
     return (
       <TouchableOpacity
@@ -155,6 +162,11 @@ export default function TabBar() {
           {showBadge && (
             <View style={s.badge}>
               <Text style={s.badgeText}>{routeCount}</Text>
+            </View>
+          )}
+          {showIdle && (
+            <View style={[s.badge, s.badgeAmber]}>
+              <Text style={s.badgeText}>{idleCount}</Text>
             </View>
           )}
         </View>
@@ -237,7 +249,7 @@ const s = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    zIndex: 250,
+    zIndex: 20,
     backgroundColor: "rgba(8,15,30,0.97)",
     borderTopWidth: 1,
     borderTopColor: Colors.border,
@@ -263,9 +275,10 @@ const s = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  iconWrapActive: { backgroundColor: Colors.skyDim, borderRadius: Radius.md },
+  iconWrapActive: { backgroundColor: Colors.skyDim },
   label: { fontSize: 9, color: Colors.dim, letterSpacing: 0.5 },
   labelActive: { color: Colors.sky },
+  badgeAmber: { backgroundColor: Colors.amber },
   badge: {
     position: "absolute",
     top: 4,

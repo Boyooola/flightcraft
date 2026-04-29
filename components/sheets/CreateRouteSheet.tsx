@@ -531,88 +531,49 @@ export default function CreateRouteSheet() {
   const [done, setDone] = useState(false);
 
   const color = airline?.color ?? Colors.sky;
+
   const waypoints = creationWaypoints;
 
-  // ── Prompt state — not enough waypoints yet ──────────────────
-  if (waypoints.length < 2) {
-    return (
-      <View style={s.prompt}>
-        <View style={[s.promptIcon, { backgroundColor: color + "18" }]}>
-          <Ionicons name="map-outline" size={32} color={color} />
-        </View>
-        <Text style={s.promptTitle}>Select your route</Text>
-        <Text style={s.promptSub}>
-          Tap your hub first, then the destination airport.{"\n"}
-          Add a third airport for a connecting stop.
-        </Text>
-        <View style={s.promptSteps}>
-          {[
-            { n: "1", label: "Tap your hub (origin)" },
-            { n: "2", label: "Tap the destination" },
-            { n: "3", label: "Optional: tap a via stop" },
-          ].map(({ n, label }) => (
-            <View key={n} style={s.promptStep}>
-              <View style={[s.stepNum, { backgroundColor: color + "20" }]}>
-                <Text style={[s.stepN, { color }]}>{n}</Text>
-              </View>
-              <Text style={s.stepLbl}>{label}</Text>
-            </View>
-          ))}
-        </View>
-      </View>
-    );
-  }
+  // ── handleRemoveWaypoint — defined after waypoints ────────────
+  const handleRemoveWaypoint = (iata: string) => {
+    const remaining = waypoints.filter((w) => w.iata !== iata);
+    if (remaining.length < 1) {
+      clearCreation();
+    } else {
+      removeWp(iata);
+    }
+  };
 
-  // ── Success ──────────────────────────────────────────────────
-  if (done) {
-    const origin = waypoints[0];
-    const dest = waypoints[waypoints.length - 1];
-    const via = waypoints.length === 3 ? waypoints[1] : null;
-    return (
-      <View style={s.success}>
-        <View style={[s.successIcon, { backgroundColor: color + "18" }]}>
-          <Ionicons name="airplane" size={36} color={color} />
-        </View>
-        <Text style={s.successTitle}>Route Opened!</Text>
-        <Text style={s.successSub}>
-          {origin.iata}
-          {via ? ` → ${via.iata}` : ""} → {dest.iata}
-          {"\n"}Revenue starts next game-day.
-        </Text>
-      </View>
-    );
-  }
-
-  // ── Derive route geometry ────────────────────────────────────
-  const origin = waypoints[0];
-  const dest = waypoints[waypoints.length - 1];
+  // ── Derive route geometry (safe defaults when < 2 waypoints) ──
+  const origin = waypoints[0] ?? null;
+  const dest = waypoints[waypoints.length - 1] ?? null;
   const via = waypoints.length === 3 ? waypoints[1] : null;
-
-  const legs = via
-    ? [distNm(origin, via), distNm(via, dest)]
-    : [distNm(origin, dest)];
+  const legs =
+    origin && dest && origin !== dest
+      ? via
+        ? [distNm(origin, via), distNm(via, dest)]
+        : [distNm(origin, dest)]
+      : [0];
   const totalDist = legs.reduce((a, b) => a + b, 0);
   const maxLeg = Math.max(...legs);
   const haul = haulClass(totalDist);
+
+  const originHub = origin
+    ? hubs.find((h) => h.airport.iata === origin.iata)
+    : undefined;
+  const originNotOwned = !!origin && !originHub;
+  const paxDay = useMemo(() => {
+    if (!origin || !dest || origin.iata === dest.iata) return 0;
+    return simulatePaxDay(origin, dest, totalDist);
+  }, [origin?.iata, dest?.iata, totalDist]);
   const fee = CREATION_FEE[haul] ?? 150_000;
   const canAfford = cash >= fee;
 
-  const originHub = hubs.find((h) => h.airport.iata === origin.iata);
-  const originNotOwned = !originHub;
-
-  // Market demand estimate (memoised so it's stable)
-  // eslint-disable-next-line react-hooks/rules-of-hooks
-  const paxDay = useMemo(
-    () => simulatePaxDay(origin, dest, totalDist),
-    [origin, dest, totalDist],
-  );
-
-  // Plane classification
-  const busyIds = new Set(
-    routes.filter((r) => r.active).map((r) => r.plane.id),
-  );
-  // eslint-disable-next-line react-hooks/rules-of-hooks
   const classified = useMemo(() => {
+    if (!origin || !dest) return [];
+    const busyIds = new Set(
+      routes.filter((r) => r.active).map((r) => r.plane.id),
+    );
     return ownedPlanes
       .map((plane) => {
         const busy = busyIds.has(plane.id);
@@ -638,7 +599,7 @@ export default function CreateRouteSheet() {
           });
           dailyRev = res.net;
           fillPct = Math.round(
-            (Math.min(paxDay, p.pax_capacity) / paxDay) * 100,
+            (Math.min(paxDay, p.pax_capacity) / Math.max(1, paxDay)) * 100,
           );
         }
         return { plane, busy, canServe, reason, dailyRev, fillPct };
@@ -647,10 +608,116 @@ export default function CreateRouteSheet() {
         if (a.canServe !== b.canServe) return a.canServe ? -1 : 1;
         return b.dailyRev - a.dailyRev;
       });
-  }, [ownedPlanes, busyIds, maxLeg, paxDay, totalDist, originHub?.trust]);
+  }, [ownedPlanes, routes, maxLeg, paxDay, totalDist, originHub?.trust]);
 
-  const selectedPlane = ownedPlanes.find((p) => p.id === selectedId) ?? null;
-  const eligibleCount = classified.filter((p) => p.canServe).length;
+  const eligibleCount = classified.filter((c) => c.canServe).length;
+  const selectedPlane =
+    classified.find((c) => c.plane.id === selectedId)?.plane ?? null;
+
+  // ── Early returns AFTER all hooks ─────────────────────────────
+
+  // Prompt state — not enough waypoints yet
+  if (waypoints.length < 2) {
+    const hasOrigin = waypoints.length === 1;
+    return (
+      <View style={s.prompt}>
+        {/* Live route being built */}
+        {hasOrigin ? (
+          <View style={s.buildingRoute}>
+            <View style={s.buildingChip}>
+              <Ionicons name="radio-button-on" size={12} color={color} />
+              <Text style={[s.buildingIata, { color }]}>
+                {waypoints[0].iata}
+              </Text>
+              <Text style={s.buildingCity}>{waypoints[0].city}</Text>
+            </View>
+            <View style={s.buildingArrow}>
+              <View
+                style={[s.buildingLine, { backgroundColor: color + "44" }]}
+              />
+              <Ionicons name="ellipse-outline" size={14} color={Colors.dim} />
+            </View>
+            <View style={[s.buildingChip, s.buildingChipEmpty]}>
+              <Ionicons name="locate-outline" size={12} color={Colors.dim} />
+              <Text style={s.buildingEmptyTxt}>Tap destination</Text>
+            </View>
+          </View>
+        ) : (
+          <View style={[s.promptIcon, { backgroundColor: color + "18" }]}>
+            <Ionicons name="airplane-outline" size={32} color={color} />
+          </View>
+        )}
+
+        <Text style={s.promptTitle}>
+          {hasOrigin ? "Now pick a destination" : "Plot your flight path"}
+        </Text>
+        <Text style={s.promptSub}>
+          {hasOrigin
+            ? "Tap any airport on the map to set your destination."
+            : "Tap your hub on the map to start building a route."}
+        </Text>
+
+        {!hasOrigin && (
+          <View style={s.promptTips}>
+            <View style={s.tipRow}>
+              <Ionicons
+                name="checkmark-circle-outline"
+                size={14}
+                color={color}
+              />
+              <Text style={s.tipTxt}>Start from one of your owned hubs</Text>
+            </View>
+            <View style={s.tipRow}>
+              <Ionicons
+                name="checkmark-circle-outline"
+                size={14}
+                color={color}
+              />
+              <Text style={s.tipTxt}>Add a mid-stop for connecting routes</Text>
+            </View>
+            <View style={s.tipRow}>
+              <Ionicons
+                name="checkmark-circle-outline"
+                size={14}
+                color={color}
+              />
+              <Text style={s.tipTxt}>
+                Longer routes earn more per passenger
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {hasOrigin && (
+          <TouchableOpacity style={s.cancelWp} onPress={() => clearCreation()}>
+            <Text style={s.cancelWpTxt}>✕ Cancel route</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+    );
+  }
+
+  // ── Success ──────────────────────────────────────────────────
+  if (done) {
+    return (
+      <View style={s.success}>
+        <View style={[s.successIcon, { backgroundColor: color + "18" }]}>
+          <Ionicons name="airplane" size={36} color={color} />
+        </View>
+        <Text style={s.successTitle}>Route is Live! ✈</Text>
+        <Text style={[s.successRoute, { color }]}>
+          {origin?.iata}
+          {via ? ` → ${via.iata}` : ""} → {dest?.iata}
+        </Text>
+        <Text style={s.successSub}>
+          Your plane is airborne. Revenue ticks in{"\n"}as each flight
+          completes.
+        </Text>
+      </View>
+    );
+  }
+
+  // ── Main route sheet ─────────────────────────────────────────
 
   const handleCreate = async () => {
     if (!selectedPlane || !canAfford) return;
@@ -674,6 +741,20 @@ export default function CreateRouteSheet() {
     } else {
       haptics.success();
       setDone(true);
+      // Auto-save — persist cash + day immediately after route creation fee charged
+      try {
+        const { airline: a } = useGameStore.getState();
+        if (a) {
+          const { supabase } = await import("@/lib/supabase");
+          await supabase
+            .from("airlines")
+            .update({
+              cash: a.cash,
+              demand_score: a.demand_score,
+            })
+            .eq("id", a.id);
+        }
+      } catch {}
     }
   };
 
@@ -687,10 +768,7 @@ export default function CreateRouteSheet() {
   return (
     <BottomSheetScrollView
       style={s.root}
-      contentContainerStyle={[
-        s.content,
-        { paddingBottom: tabBarH + Spacing.xxl },
-      ]}
+      contentContainerStyle={[s.content, { paddingBottom: tabBarH }]}
       showsVerticalScrollIndicator={false}
     >
       {/* Header */}
@@ -718,7 +796,7 @@ export default function CreateRouteSheet() {
           color={color}
           onRemove={(iata) => {
             haptics.tap();
-            removeWp(iata);
+            handleRemoveWaypoint(iata);
           }}
         />
 
@@ -779,14 +857,19 @@ export default function CreateRouteSheet() {
         )}
       </View>
 
-      {/* Origin not owned */}
+      {/* Origin not owned — prominent inline warning */}
       {originNotOwned && (
-        <View style={[s.alert, s.alertRed]}>
-          <Ionicons name="warning-outline" size={14} color={Colors.red} />
-          <Text style={s.alertRedTxt}>
-            {origin.iata} is not one of your hubs. Routes must start from an
-            airport you own. Remove it and tap a hub instead.
-          </Text>
+        <View style={s.validationBanner}>
+          <Ionicons name="alert-circle" size={15} color={Colors.amber} />
+          <View style={s.validationBody}>
+            <Text style={[s.validationTitle, { color: Colors.amber }]}>
+              Wrong starting airport
+            </Text>
+            <Text style={s.validationSub}>
+              {origin.iata} isn&apos;t your hub. Tap ✕ on it above, then tap one
+              of your owned hubs to start the route.
+            </Text>
+          </View>
         </View>
       )}
 
@@ -955,6 +1038,53 @@ const s = StyleSheet.create({
     textAlign: "center",
     lineHeight: 20,
   },
+
+  // Route building state
+  buildingRoute: {
+    alignItems: "center",
+    gap: 8,
+    width: "100%",
+    paddingHorizontal: Spacing.md,
+  },
+  buildingChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "rgba(255,255,255,.06)",
+    borderRadius: Radius.full,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  buildingChipEmpty: { borderStyle: "dashed", backgroundColor: "transparent" },
+  buildingIata: { fontSize: 16, fontWeight: "700" },
+  buildingCity: { fontSize: 11, color: Colors.muted },
+  buildingEmptyTxt: { fontSize: 12, color: Colors.dim },
+  buildingArrow: {
+    flexDirection: "row",
+    alignItems: "center",
+    width: "60%",
+    justifyContent: "center",
+  },
+  buildingLine: { flex: 1, height: 1 },
+
+  // Prompt tips
+  promptTips: { alignSelf: "stretch", gap: 8, marginTop: Spacing.sm },
+  tipRow: { flexDirection: "row", alignItems: "center", gap: Spacing.sm },
+  tipTxt: { fontSize: 12, color: Colors.muted },
+
+  // Cancel button
+  cancelWp: { marginTop: Spacing.sm },
+  cancelWpTxt: { fontSize: 12, color: Colors.red, fontWeight: "600" },
+
+  // Success
+  successRoute: {
+    fontSize: 20,
+    fontWeight: "700",
+    letterSpacing: 1,
+    marginTop: -Spacing.sm,
+  },
   promptSteps: { gap: Spacing.sm, width: "100%" },
   promptStep: { flexDirection: "row", alignItems: "center", gap: Spacing.md },
   stepNum: {
@@ -1056,6 +1186,20 @@ const s = StyleSheet.create({
   summaryVal: { fontSize: 11, color: Colors.text, fontWeight: "700" },
 
   // Alerts
+  validationBanner: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: Spacing.sm,
+    backgroundColor: "rgba(251,191,36,.06)",
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.amber + "44",
+    padding: Spacing.md,
+    marginBottom: Spacing.sm,
+  },
+  validationBody: { flex: 1, gap: 3 },
+  validationTitle: { fontSize: 12, fontWeight: "700" },
+  validationSub: { fontSize: 11, color: Colors.muted, lineHeight: 16 },
   alert: {
     flexDirection: "row",
     alignItems: "flex-start",

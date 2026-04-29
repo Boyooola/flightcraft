@@ -400,28 +400,6 @@ export default function RouteLayer({
       {/* Animated planes */}
       {planes.length > 0 && (
         <MapboxGL.ShapeSource id="planes-source" shape={planeGeoJSON}>
-          <MapboxGL.CircleLayer
-            id="plane-body"
-            existing={false}
-            style={{
-              circleRadius: [
-                "interpolate",
-                ["linear"],
-                ["zoom"],
-                1,
-                4,
-                5,
-                7,
-                10,
-                11,
-              ],
-              circleColor: airlineColor,
-              circleStrokeColor: "#ffffff",
-              circleStrokeWidth: 1.5,
-              circleStrokeOpacity: 0.9,
-              circlePitchAlignment: "map",
-            }}
-          />
           <MapboxGL.SymbolLayer
             id="plane-icon"
             existing={false}

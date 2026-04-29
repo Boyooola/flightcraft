@@ -324,21 +324,22 @@ export function useDailyEvents() {
         const event = generateDailyEvent(day);
         const store = useGameStore.getState();
 
-        // Apply cash bonus immediately
+        // Always add a ledger entry so Finance shows event history
+        const ledgerEntry: any = {
+          id: `event-day-${day}`,
+          day,
+          type: "event",
+          label: `${event.type === "positive" ? "📈" : event.type === "negative" ? "📉" : "📋"} ${event.title}`,
+          amount: event.cashBonus ?? 0,
+          route_id: null,
+        };
+
         if (event.cashBonus) {
           store.earnCash(event.cashBonus);
-          store.addLedgerEntries([
-            {
-              id: `event-cash-day-${day}`,
-              day,
-              type: event.cashBonus > 0 ? "revenue" : "purchase",
-              label: event.title,
-              amount: event.cashBonus,
-              route_id: null,
-            },
-          ]);
+          ledgerEntry.amount = event.cashBonus;
         }
 
+        store.addLedgerEntries([ledgerEntry]);
         // Store event for display — save to store
         store.setDailyEvent(event);
       },

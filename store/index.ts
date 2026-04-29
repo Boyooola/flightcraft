@@ -129,7 +129,7 @@ export interface Route {
 export interface LedgerEntry {
   id: string;
   day: number;
-  type: "revenue" | "interest" | "purchase" | "loan";
+  type: "revenue" | "interest" | "purchase" | "loan" | "event";
   label: string;
   amount: number;
   route_id: string | null;
@@ -150,6 +150,7 @@ export interface GameStore {
   // Auth
   isAnonymous: boolean;
   boughtPlaneToday: boolean;
+  setIsAnonymous: (v: boolean) => void;
   dailyEvent: DailyEvent | null;
   awayEarnings: { days: number; amount: number } | null;
   isApplyingAwayEarnings: boolean;
@@ -205,7 +206,6 @@ export interface GameStore {
   ) => void;
   setLoadComplete: () => void;
   setLoadError: (msg: string) => void;
-  setIsAnonymous: (isAnonymous: boolean) => void;
 
   // Reference data
   setAirports: (airports: Airport[]) => void;
@@ -350,9 +350,6 @@ export const useGameStore = create<GameStore>()(
 
       setLoadError: (msg) => set({ loadError: msg }, false, "setLoadError"),
 
-      setIsAnonymous: (isAnonymous) =>
-        set({ isAnonymous: isAnonymous }, false, "setIsAnonymous"),
-
       // ── Reference data ───────────────────────────────────────────
       setAirports: (airports) => set({ airports }, false, "setAirports"),
       setPlanes: (planes) => set({ planes }, false, "setPlanes"),
@@ -361,6 +358,7 @@ export const useGameStore = create<GameStore>()(
       setPhase: (phase) => set({ phase }, false, "setPhase"),
       setBoughtPlaneToday: (val) =>
         set({ boughtPlaneToday: val }, false, "setBoughtPlaneToday"),
+      setIsAnonymous: (v) => set({ isAnonymous: v }, false, "setIsAnonymous"),
       setDailyEvent: (event) =>
         set({ dailyEvent: event }, false, "setDailyEvent"),
       setAwayEarnings: (data) =>
@@ -737,8 +735,8 @@ export const useMissionsCompleted = () =>
   useGameStore((s) => s.missionsCompleted);
 
 // Compat — use specific hooks above where possible
-export const useRouteCreation = () =>
-  useGameStore((s) => ({
-    active: s.routeCreationMode,
-    waypoints: s.creationWaypoints,
-  }));
+export const useRouteCreation = () => {
+  const active = useGameStore((s) => s.routeCreationMode);
+  const waypoints = useGameStore((s) => s.creationWaypoints);
+  return { active, waypoints };
+};
