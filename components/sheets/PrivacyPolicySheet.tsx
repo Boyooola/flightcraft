@@ -1,6 +1,6 @@
 /**
  * components/sheets/PrivacyPolicySheet.tsx
- * Privacy policy for FlightCraft.
+ * Privacy policy for Flightcraft.
  */
 
 import { Colors, Spacing } from "@/constants/theme";
@@ -17,7 +17,7 @@ function Section({
   children,
 }: {
   title: string;
-  children: string | string[];
+  children: React.ReactNode;
 }) {
   return (
     <View style={s.section}>
@@ -34,10 +34,7 @@ export default function PrivacyPolicySheet() {
   return (
     <BottomSheetScrollView
       style={s.root}
-      contentContainerStyle={[
-        s.content,
-        { paddingBottom: tabBarH + Spacing.xxl },
-      ]}
+      contentContainerStyle={[s.content, { paddingBottom: tabBarH }]}
       showsVerticalScrollIndicator={false}
     >
       <View style={s.header}>
@@ -61,13 +58,13 @@ export default function PrivacyPolicySheet() {
       <View style={s.divider} />
 
       <Section title="Who We Are">
-        FlightCraft is a mobile airline tycoon simulation game. This policy
-        explains what data we collect, how we use it, and your rights regarding
-        your information.
+        Flightcraft is a mobile airline tycoon simulation game. This policy
+        explains what data we collect, how we use it, and your rights. Last
+        updated: April 2026.
       </Section>
 
       <Section title="Data We Collect">
-        When you play FlightCraft, we collect and store the following
+        When you play Flightcraft, we collect and store the following
         information:{"\n\n"}• Game progress — your airline name, cash, routes,
         hubs, fleet, day count, and achievements{"\n"}• Anonymous user
         identifier — a randomly generated ID used to save your progress across
@@ -101,16 +98,28 @@ export default function PrivacyPolicySheet() {
       </Section>
 
       <Section title="Third-Party Services">
-        FlightCraft uses the following third-party services:{"\n\n"}• Supabase —
-        database and authentication (supabase.com/privacy){"\n"}• Expo / React
-        Native — app framework{"\n\n"}
+        Flightcraft uses the following third-party services:{"\n\n"}• Supabase —
+        database and authentication (supabase.com/privacy){"\n"}• Google Sign-In
+        — optional account linking (policies.google.com/privacy){"\n"}• Expo /
+        EAS — app distribution and build infrastructure{"\n"}•
+        expo-notifications — local push notifications scheduled on your device
+        {"\n\n"}
+        We do not currently serve advertisements. If advertising is introduced
+        in a future update, this policy will be updated accordingly and you will
+        be notified. • Expo / React Native — app framework{"\n\n"}
         Future versions may include advertising (Google AdMob) and in-app
         purchases. This policy will be updated before those features are
         enabled.
       </Section>
 
       <Section title="Children">
-        FlightCraft is rated for all ages. We do not knowingly collect personal
+        Push Notifications{"\n\n"}
+        Flightcraft may send you local push notifications to alert you that your
+        airline has earned revenue while you were away, or that your leaderboard
+        rank has improved. These notifications are scheduled on your device and
+        do not require a server connection. You can disable them at any time in
+        your device Settings → Notifications → Flightcraft.{"\n\n"}
+        Flightcraft is rated for all ages. We do not knowingly collect personal
         information from children under 13. If you believe a child has provided
         personal information, please contact us and we will delete it promptly.
       </Section>
@@ -118,20 +127,22 @@ export default function PrivacyPolicySheet() {
       <Section title="Your Rights">
         You have the right to:{"\n\n"}• Access the data we hold about you{"\n"}•
         Request correction of inaccurate data{"\n"}• Request deletion of your
-        account and all associated data{"\n"}• Withdraw consent at any time
-        {"\n\n"}
+        account and all associated data{"\n"}• Opt out of Google Sign-In by
+        playing as a guest{"\n"}• Disable push notifications via your device
+        settings{"\n"}• Clear locally stored preferences by uninstalling the app
+        • Withdraw consent at any time{"\n\n"}
         To exercise these rights, use the Delete Account option in Settings or
         contact us directly.
       </Section>
 
       <Section title="Contact">
         If you have questions about this privacy policy or how we handle your
-        data, please contact us through the FlightCraft page on the Google Play
+        data, please contact us through the Flightcraft page on the Google Play
         Store.
       </Section>
 
       <View style={s.footer}>
-        <Text style={s.footerTxt}>FlightCraft · {LAST_UPDATED}</Text>
+        <Text style={s.footerTxt}>Flightcraft · {LAST_UPDATED}</Text>
       </View>
     </BottomSheetScrollView>
   );

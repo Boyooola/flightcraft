@@ -498,7 +498,7 @@ export default function RouteLayer({
               textHaloColor: "rgba(0,0,0,0.75)",
               textHaloWidth: 1.5,
               textOpacity: ["get", "opacity"],
-              textOffset: [0, ["get", "offsetY"] as any],
+              textOffset: [0, 1.2],
               textAnchor: "bottom",
               textFont: ["DIN Offc Pro Bold", "Arial Unicode MS Bold"],
               textAllowOverlap: true,
