@@ -1,20 +1,13 @@
 /**
  * components/sheets/CreateRouteSheet.tsx
  *
- * Player-initiated route creation — outside the demand system.
+ * WorldWide Rush-style route creation sheet.
  *
- * Flow:
- *   1. Player taps ≥2 airports on map while in creation mode
- *   2. Sheet opens showing waypoints (origin → [via] → dest)
- *   3. Market analysis panel — estimated demand, confidence, break-even
- *   4. Plane selector — only eligible planes (range covers longest leg)
- *   5. Confirm — charges creation fee, generates synthetic demand, creates route
- *
- * Rules:
- *   - Origin MUST be an owned hub
- *   - Each leg ≤ selected plane's range
- *   - Costs $50K short / $150K medium / $300K long haul
- *   - Max 3 waypoints (origin + optional via + dest)
+ * Focus:
+ *   - clear live traveler queues
+ *   - show waiting pax first
+ *   - select the best idle plane for flow
+ *   - keep economics secondary
  */
 
 import { Colors, MIN_TOUCH, Radius, Spacing } from "@/constants/theme";
@@ -22,21 +15,28 @@ import { useHaptics } from "@/hooks/useHaptics";
 import { useTabBarHeight } from "@/hooks/useSheetLayout";
 import { useCreateCustomRoute } from "@/hooks/useSupabaseWrite";
 import { haulClass, simulatePaxDay } from "@/lib/demands";
+import {
+  spawnedPaxForDay,
+  waitingPaxForDemand,
+  type PassengerFlowDemand,
+} from "@/lib/passengerFlow";
 import { calcRouteRevenue, fmtCash } from "@/lib/revenue";
-import { distNm, estimateRouteRevenue } from "@/lib/routing";
-import type { Airport, OwnedPlane } from "@/store";
+import { distNm } from "@/lib/routing";
+import type { Airport, Demand, OwnedPlane } from "@/store";
 import {
   useAirline,
   useCash,
+  useDayProgress,
+  useDemands,
   useGameStore,
   useHubs,
   useOwnedPlanes,
   useRouteCreationWaypoints,
-  useRoutes
+  useRoutes,
 } from "@/store";
-import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { Ionicons } from "@expo/vector-icons";
 import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
-import { useCallback, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   ActivityIndicator,
   StyleSheet,
@@ -44,15 +44,6 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import DraggableFlatList, {
-  RenderItemParams,
-  ScaleDecorator,
-} from "react-native-draggable-flatlist";
-import { GestureHandlerRootView } from "react-native-gesture-handler";
-
-// ─────────────────────────────────────────────────────────────────
-// CONSTANTS
-// ─────────────────────────────────────────────────────────────────
 
 const CREATION_FEE: Record<string, number> = {
   short: 50_000,
@@ -67,330 +58,72 @@ const FAMILY_COLOR: Record<string, string> = {
   airbus: Colors.orange,
 };
 
-// ─────────────────────────────────────────────────────────────────
-// ROUTE VISUALISER
-// Shows the waypoint chain with arrows and numbered stops
-// ─────────────────────────────────────────────────────────────────
-
-function WaypointItem({
-  item: ap,
-  getIndex,
-  drag,
-  isActive,
-  color,
-  onRemove,
-  total,
-}: RenderItemParams<Airport> & {
-  color: string;
-  onRemove: (iata: string) => void;
-  total: number;
-}) {
-  const i = getIndex() ?? 0;
-  const isFirst = i === 0;
-  const isLast = i === total - 1;
-  const isVia = !isFirst && !isLast;
-  const dotColor = isVia ? Colors.purple : color;
-  const role = isFirst ? "Origin" : isVia ? "Stop" : "Dest";
-
-  return (
-    <ScaleDecorator activeScale={1.03}>
-      <View style={[rv.row, isActive && rv.rowActive]}>
-        {/* Connector above (except first) */}
-        {!isFirst && (
-          <View style={[rv.connector, { backgroundColor: dotColor + "44" }]} />
-        )}
-
-        <View style={[rv.stop, isActive && rv.stopActive]}>
-          {/* Dot */}
-          <View style={[rv.dot, { backgroundColor: dotColor }]} />
-
-          {/* Airport info */}
-          <View style={rv.info}>
-            <View style={rv.infoTop}>
-              <Text style={[rv.iata, { color: dotColor }]}>{ap.iata}</Text>
-              <View
-                style={[
-                  rv.rolePill,
-                  {
-                    backgroundColor: dotColor + "18",
-                    borderColor: dotColor + "44",
-                  },
-                ]}
-              >
-                <Text style={[rv.roleTxt, { color: dotColor }]}>{role}</Text>
-              </View>
-            </View>
-            <Text style={rv.city} numberOfLines={1}>
-              {ap.city}
-              {ap.country ? `, ${ap.country}` : ""}
-            </Text>
-          </View>
-
-          {/* Remove */}
-          <TouchableOpacity
-            onPress={() => onRemove(ap.iata)}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            style={rv.removeBtn}
-          >
-            <Ionicons name="close-circle" size={18} color={Colors.dim} />
-          </TouchableOpacity>
-
-          {/* Drag handle — only show if > 1 waypoint */}
-          {total > 1 && (
-            <TouchableOpacity
-              onLongPress={drag}
-              delayLongPress={150}
-              style={rv.dragHandle}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            >
-              <Ionicons
-                name="reorder-three-outline"
-                size={20}
-                color={Colors.dim}
-              />
-            </TouchableOpacity>
-          )}
-        </View>
-      </View>
-    </ScaleDecorator>
-  );
-}
-
-function RouteVisualiser({
+function RouteChain({
   waypoints,
   color,
   onRemove,
-  onReorder,
 }: {
   waypoints: Airport[];
   color: string;
   onRemove: (iata: string) => void;
-  onReorder: (waypoints: Airport[]) => void;
 }) {
-  const renderItem = useCallback(
-    (params: RenderItemParams<Airport>) => (
-      <WaypointItem
-        {...params}
-        color={color}
-        onRemove={onRemove}
-        total={waypoints.length}
-      />
-    ),
-    [color, onRemove, waypoints.length],
-  );
-
   return (
-    <GestureHandlerRootView>
-      <DraggableFlatList
-        data={waypoints}
-        keyExtractor={(ap) => ap.iata}
-        renderItem={renderItem}
-        onDragEnd={({ data }) => onReorder(data)}
-        scrollEnabled={false}
-        activationDistance={5}
-        ListFooterComponent={
-          waypoints.length < 3 ? (
-            <View style={rv.tapHint}>
-              <Ionicons
-                name="add-circle-outline"
-                size={12}
-                color={Colors.dim}
+    <View style={chain.wrap}>
+      {waypoints.map((airport, index) => {
+        const first = index === 0;
+        const last = index === waypoints.length - 1;
+        const via = !first && !last;
+        const accent = via ? Colors.purple : color;
+        const label = first ? "ORIGIN" : via ? "STOP" : "DEST";
+
+        return (
+          <View key={`${airport.iata}-${index}`} style={chain.itemWrap}>
+            {index > 0 && (
+              <View
+                style={[chain.connector, { backgroundColor: color + "44" }]}
               />
-              <Text style={rv.tapHintTxt}>
-                {waypoints.length === 1
-                  ? "Tap a destination airport on the map"
-                  : "Tap another airport to add a stop"}
-              </Text>
+            )}
+
+            <View style={[chain.item, { borderColor: accent + "33" }]}>
+              <View style={[chain.dot, { backgroundColor: accent }]} />
+
+              <View style={chain.body}>
+                <View style={chain.topRow}>
+                  <Text style={[chain.iata, { color: accent }]}>
+                    {airport.iata}
+                  </Text>
+                  <View
+                    style={[chain.badge, { backgroundColor: accent + "16" }]}
+                  >
+                    <Text style={[chain.badgeText, { color: accent }]}>
+                      {label}
+                    </Text>
+                  </View>
+                </View>
+                <Text style={chain.city} numberOfLines={1}>
+                  {airport.city}
+                  {airport.country ? `, ${airport.country}` : ""}
+                </Text>
+              </View>
+
+              <TouchableOpacity
+                onPress={() => onRemove(airport.iata)}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <Ionicons name="close-circle" size={18} color={Colors.dim} />
+              </TouchableOpacity>
             </View>
-          ) : null
-        }
-      />
-    </GestureHandlerRootView>
-  );
-}
-
-const rv = StyleSheet.create({
-  row: { position: "relative" },
-  rowActive: { zIndex: 999 },
-  connector: { width: 2, height: Spacing.md, marginLeft: 11, marginBottom: -2 },
-  stop: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.sm,
-    paddingVertical: 6,
-    paddingHorizontal: 4,
-    borderRadius: Radius.md,
-  },
-  stopActive: { backgroundColor: "rgba(255,255,255,.06)" },
-  dot: { width: 10, height: 10, borderRadius: 5, flexShrink: 0 },
-  info: { flex: 1, gap: 1 },
-  infoTop: { flexDirection: "row", alignItems: "center", gap: 6 },
-  iata: { fontSize: 18, fontWeight: "700", letterSpacing: 0.5 },
-  rolePill: {
-    paddingHorizontal: 6,
-    paddingVertical: 1,
-    borderRadius: Radius.full,
-    borderWidth: 1,
-  },
-  roleTxt: { fontSize: 8, fontWeight: "700", letterSpacing: 0.5 },
-  city: { fontSize: 11, color: Colors.dim },
-  removeBtn: { padding: 4 },
-  dragHandle: { padding: 4, marginLeft: 2 },
-  tapHint: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    paddingVertical: Spacing.sm,
-    paddingHorizontal: 4,
-    marginTop: 2,
-  },
-  tapHintTxt: { fontSize: 11, color: Colors.dim },
-});
-
-// ─────────────────────────────────────────────────────────────────
-// MARKET ANALYSIS
-// ─────────────────────────────────────────────────────────────────
-
-function MarketAnalysis({
-  origin,
-  dest,
-  totalDist,
-  haul,
-  paxDay,
-  selectedPlane,
-  trustPct,
-}: {
-  origin: Airport;
-  dest: Airport;
-  totalDist: number;
-  haul: string;
-  paxDay: number;
-  selectedPlane: OwnedPlane | null;
-  trustPct: number;
-}) {
-  // Confidence — use pax_annual_m from the DB field directly
-  const originHasData = origin.pax_annual_m != null;
-  const destHasData = dest.pax_annual_m != null;
-  const confidence =
-    originHasData && destHasData
-      ? "High"
-      : originHasData || destHasData
-        ? "Medium"
-        : "Low";
-  const confColor =
-    confidence === "High"
-      ? Colors.green
-      : confidence === "Medium"
-        ? Colors.amber
-        : Colors.red;
-
-  const paxLow = Math.round(paxDay * 0.8);
-  const paxHigh = Math.round(paxDay * 1.2);
-  const strength =
-    paxDay >= 400 ? "Strong" : paxDay >= 150 ? "Moderate" : "Thin";
-  const strColor =
-    paxDay >= 400 ? Colors.green : paxDay >= 150 ? Colors.amber : Colors.red;
-
-  // Break-even in game-days based on selected plane
-  let breakEven: number | null = null;
-  let estDailyRev = 0;
-  if (selectedPlane) {
-    const fee = CREATION_FEE[haul] ?? 150_000;
-    const res = estimateRouteRevenue(
-      paxDay,
-      {
-        type: "direct",
-        distNm: totalDist,
-        maxLegNm: totalDist,
-        dailyFlights: 0,
-      },
-      selectedPlane.plane_model.pax_capacity,
-      selectedPlane.plane_model.speed_kts,
-      trustPct,
-      haul,
-    );
-    estDailyRev = res.dailyRev;
-    breakEven = estDailyRev > 0 ? Math.ceil(fee / estDailyRev) : null;
-  }
-
-  return (
-    <View style={an.card}>
-      <Text style={an.title}>MARKET ANALYSIS</Text>
-
-      {/* Stats grid */}
-      <View style={an.grid}>
-        <View style={an.gridBox}>
-          <Text style={an.gridLbl}>DEMAND</Text>
-          <Text style={[an.gridVal, { color: strColor }]}>
-            {paxLow}–{paxHigh}
-          </Text>
-          <Text style={[an.gridSub, { color: strColor }]}>
-            pax/day · {strength}
-          </Text>
-        </View>
-
-        <View style={an.gridBox}>
-          <Text style={an.gridLbl}>CONFIDENCE</Text>
-          <Text style={[an.gridVal, { color: confColor }]}>{confidence}</Text>
-          <Text style={an.gridSub}>
-            {originHasData && destHasData
-              ? "Both airports verified"
-              : originHasData || destHasData
-                ? "One airport verified"
-                : "Estimated data"}
-          </Text>
-        </View>
-
-        {selectedPlane && breakEven !== null && (
-          <View style={an.gridBox}>
-            <Text style={an.gridLbl}>BREAK-EVEN</Text>
-            <Text style={[an.gridVal, { color: Colors.sky }]}>
-              ~{breakEven}
-            </Text>
-            <Text style={an.gridSub}>game-days</Text>
           </View>
-        )}
-      </View>
+        );
+      })}
 
-      {/* Origin pax data */}
-      {(origin.pax_annual_m != null || dest.pax_annual_m != null) && (
-        <View style={an.dataRow}>
-          {origin.pax_annual_m != null && (
-            <View style={an.dataItem}>
-              <Text style={an.dataIata}>{origin.iata}</Text>
-              <Text style={an.dataPax}>{origin.pax_annual_m}M/yr</Text>
-            </View>
-          )}
-          {dest.pax_annual_m != null && (
-            <View style={an.dataItem}>
-              <Text style={an.dataIata}>{dest.iata}</Text>
-              <Text style={an.dataPax}>{dest.pax_annual_m}M/yr</Text>
-            </View>
-          )}
-        </View>
-      )}
-
-      {/* Daily rev preview */}
-      {selectedPlane && estDailyRev > 0 && (
-        <View style={an.revRow}>
-          <Text style={an.revLbl}>EST. DAILY REVENUE</Text>
-          <Text style={[an.revVal, { color: Colors.green }]}>
-            {fmtCash(estDailyRev)}
-          </Text>
-        </View>
-      )}
-
-      {/* Thin market warning */}
-      {paxDay < 80 && (
-        <View style={an.warn}>
-          <Ionicons
-            name="information-circle-outline"
-            size={13}
-            color={Colors.amber}
-          />
-          <Text style={an.warnTxt}>
-            Thin market — you&apos;d be opening a new corridor. Demand grows as
-            hub trust increases.
+      {waypoints.length < 3 && (
+        <View style={chain.hint}>
+          <Ionicons name="add-circle-outline" size={13} color={Colors.dim} />
+          <Text style={chain.hintText}>
+            {waypoints.length === 1
+              ? "Tap a destination airport on the map"
+              : "Optional: tap one airport to add a stop"}
           </Text>
         </View>
       )}
@@ -398,213 +131,286 @@ function MarketAnalysis({
   );
 }
 
-const an = StyleSheet.create({
-  card: {
-    backgroundColor: "rgba(255,255,255,.03)",
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    padding: Spacing.md,
-    gap: Spacing.md,
-  },
-  title: { fontSize: 8, color: Colors.dim, letterSpacing: 2 },
-  grid: { flexDirection: "row", gap: Spacing.sm },
-  gridBox: {
-    flex: 1,
-    backgroundColor: "rgba(255,255,255,.04)",
-    borderRadius: Radius.md,
-    padding: Spacing.sm,
-    gap: 2,
-    alignItems: "center",
-  },
-  gridLbl: { fontSize: 7, color: Colors.dim, letterSpacing: 1.5 },
-  gridVal: { fontSize: 18, fontWeight: "700" },
-  gridSub: {
-    fontSize: 8,
-    color: Colors.dim,
-    textAlign: "center",
-    lineHeight: 12,
-  },
-  dataRow: { flexDirection: "row", gap: Spacing.sm },
-  dataItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    backgroundColor: "rgba(255,255,255,.04)",
-    borderRadius: Radius.sm,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-  },
-  dataIata: { fontSize: 11, color: Colors.sky, fontWeight: "700" },
-  dataPax: { fontSize: 10, color: Colors.dim },
-  revRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  revLbl: { fontSize: 9, color: Colors.dim, letterSpacing: 1.5 },
-  revVal: { fontSize: 16, fontWeight: "700" },
-  warn: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: 6,
-    backgroundColor: Colors.amber + "10",
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.amber + "33",
-    padding: Spacing.sm,
-  },
-  warnTxt: { fontSize: 11, color: Colors.amber, flex: 1, lineHeight: 16 },
-});
+function DemandRushCard({
+  origin,
+  dest,
+  existingDemand,
+  previewDemand,
+  dayProgress,
+  color,
+  totalDist,
+  fee,
+  canAfford,
+}: {
+  origin: Airport;
+  dest: Airport;
+  existingDemand: Demand | null;
+  previewDemand: PassengerFlowDemand;
+  dayProgress: number;
+  color: string;
+  totalDist: number;
+  fee: number;
+  canAfford: boolean;
+}) {
+  const demand = existingDemand ?? previewDemand;
+  const spawned = spawnedPaxForDay(demand, dayProgress);
+  const waiting = waitingPaxForDemand(demand, dayProgress);
+  const moved = demand.delivered_pax_today ?? 0;
+  const progress = Math.min(
+    100,
+    Math.round((moved / Math.max(1, demand.pax_day)) * 100),
+  );
+  const source = existingDemand ? "LIVE DEMAND" : "NEW MARKET";
+  const waitingColor = waiting > 0 ? Colors.amber : Colors.dim;
 
-// ─────────────────────────────────────────────────────────────────
-// PLANE ROW
-// ─────────────────────────────────────────────────────────────────
+  return (
+    <View
+      style={[
+        rush.card,
+        { borderColor: waiting > 0 ? Colors.amber + "44" : color + "33" },
+      ]}
+    >
+      <View style={rush.header}>
+        <View style={[rush.icon, { backgroundColor: color + "18" }]}>
+          <Ionicons name="people-outline" size={18} color={color} />
+        </View>
+
+        <View style={{ flex: 1 }}>
+          <Text style={[rush.label, { color }]}>{source}</Text>
+          <Text style={rush.route} numberOfLines={1}>
+            {origin.iata} → {dest.iata}
+          </Text>
+        </View>
+
+        <View
+          style={[
+            rush.fee,
+            {
+              borderColor: canAfford ? Colors.green + "44" : Colors.red + "44",
+            },
+          ]}
+        >
+          <Text
+            style={[
+              rush.feeValue,
+              { color: canAfford ? Colors.green : Colors.red },
+            ]}
+          >
+            {fmtCash(fee)}
+          </Text>
+          <Text style={rush.feeLabel}>open</Text>
+        </View>
+      </View>
+
+      <View style={rush.stats}>
+        <View style={rush.statBox}>
+          <Text style={[rush.statValue, { color: waitingColor }]}>
+            {waiting.toLocaleString()}
+          </Text>
+          <Text style={rush.statLabel}>Waiting now</Text>
+        </View>
+        <View style={rush.statBox}>
+          <Text style={[rush.statValue, { color: Colors.sky }]}>
+            {spawned.toLocaleString()}
+          </Text>
+          <Text style={rush.statLabel}>Appeared</Text>
+        </View>
+        <View style={rush.statBox}>
+          <Text style={[rush.statValue, { color: Colors.green }]}>
+            {moved.toLocaleString()}
+          </Text>
+          <Text style={rush.statLabel}>Moved</Text>
+        </View>
+      </View>
+
+      <View style={rush.progressRow}>
+        <View style={rush.track}>
+          <View
+            style={[
+              rush.fill,
+              { width: `${progress}%` as any, backgroundColor: color },
+            ]}
+          />
+        </View>
+        <Text style={[rush.progressText, { color }]}>{progress}%</Text>
+      </View>
+
+      <View style={rush.noteRow}>
+        <Ionicons
+          name={existingDemand ? "flash-outline" : "sparkles-outline"}
+          size={13}
+          color={waiting > 0 ? Colors.amber : Colors.dim}
+        />
+        <Text style={rush.note}>
+          {existingDemand
+            ? waiting > 0
+              ? "This route can clear real travelers immediately."
+              : "Travelers will keep appearing as the day progresses."
+            : `Estimated ${demand.pax_day.toLocaleString()} travelers/day · ${totalDist.toLocaleString()}nm corridor.`}
+        </Text>
+      </View>
+    </View>
+  );
+}
 
 function PlaneRow({
   plane,
   canServe,
-  busy,
   selected,
   reason,
-  dailyRev,
-  fillPct,
+  waitingNow,
+  paxDay,
+  totalDist,
+  trustPct,
   color,
   onSelect,
 }: {
   plane: OwnedPlane;
   canServe: boolean;
-  busy: boolean;
   selected: boolean;
   reason: string;
-  dailyRev: number;
-  fillPct: number;
+  waitingNow: number;
+  paxDay: number;
+  totalDist: number;
+  trustPct: number;
   color: string;
   onSelect: () => void;
 }) {
-  const fc = FAMILY_COLOR[plane.plane_model.family] ?? Colors.dim;
-  const fillColor =
-    fillPct >= 80 ? Colors.green : fillPct >= 40 ? Colors.amber : Colors.red;
+  const model = plane.plane_model;
+  const familyColor = FAMILY_COLOR[model.family] ?? Colors.sky;
+  const boardedNow = Math.min(waitingNow, model.pax_capacity);
+  const previewBoard = Math.min(
+    Math.max(boardedNow, Math.ceil(paxDay * 0.35)),
+    model.pax_capacity,
+  );
+
+  const revenue = canServe
+    ? calcRouteRevenue({
+        distNm: totalDist,
+        speedKts: model.speed_kts,
+        trustPct,
+        deliveredPax: previewBoard,
+        paxDay,
+        costPerSector: model.cost_per_sector ?? 500,
+        fuelPerNm: model.fuel_per_nm ?? 2,
+      }).net
+    : 0;
+
+  const capacityPct = Math.min(
+    100,
+    Math.round((model.pax_capacity / Math.max(1, paxDay)) * 100),
+  );
+  const capColor =
+    capacityPct >= 80
+      ? Colors.green
+      : capacityPct >= 40
+        ? Colors.amber
+        : Colors.red;
 
   return (
     <TouchableOpacity
       style={[
-        pr.row,
+        planeStyles.row,
         selected && {
           borderColor: color + "66",
-          backgroundColor: color + "0e",
+          backgroundColor: color + "0d",
         },
-        !canServe && { opacity: 0.4 },
+        !canServe && { opacity: 0.45 },
       ]}
       onPress={canServe ? onSelect : undefined}
       disabled={!canServe}
-      activeOpacity={0.8}
+      activeOpacity={0.84}
     >
       <View
-        style={[pr.stripe, { backgroundColor: canServe ? fc : Colors.dim }]}
+        style={[
+          planeStyles.stripe,
+          { backgroundColor: canServe ? familyColor : Colors.dim },
+        ]}
       />
-      <View style={pr.body}>
-        <View style={pr.top}>
-          <Text style={[pr.name, !canServe && { color: Colors.dim }]}>
-            {plane.plane_model.nickname}
+
+      <View style={planeStyles.body}>
+        <View style={planeStyles.top}>
+          <Text
+            style={[planeStyles.name, !canServe && { color: Colors.dim }]}
+            numberOfLines={1}
+          >
+            {model.nickname}
           </Text>
+
           {selected && (
-            <Ionicons name="checkmark-circle" size={16} color={color} />
+            <Ionicons name="checkmark-circle" size={17} color={color} />
           )}
+
           {!canServe && (
-            <View style={pr.reasonPill}>
-              <Text style={pr.reasonTxt}>{reason}</Text>
+            <View style={planeStyles.lockPill}>
+              <Text style={planeStyles.lockText}>{reason}</Text>
             </View>
           )}
         </View>
 
-        <View style={pr.specs}>
-          <Text style={pr.spec}>{plane.plane_model.pax_capacity} pax</Text>
-          <Text style={pr.specSep}>·</Text>
-          <Text style={pr.spec}>
-            {plane.plane_model.range_nm.toLocaleString()} nm range
-          </Text>
-        </View>
+        <Text style={planeStyles.specs}>
+          {model.pax_capacity} seats · {model.range_nm.toLocaleString()}nm range
+          · {model.speed_kts}kts
+        </Text>
 
-        {canServe && dailyRev > 0 && (
-          <View style={pr.preview}>
-            <Text style={[pr.rev, { color: Colors.green }]}>
-              {fmtCash(dailyRev)}/day
-            </Text>
-            <View style={pr.fillWrap}>
-              <View style={pr.fillTrack}>
+        {canServe && (
+          <>
+            <View style={planeStyles.flowRow}>
+              <View style={planeStyles.flowBox}>
+                <Text
+                  style={[
+                    planeStyles.flowValue,
+                    { color: waitingNow > 0 ? Colors.amber : Colors.dim },
+                  ]}
+                >
+                  {boardedNow.toLocaleString()}
+                </Text>
+                <Text style={planeStyles.flowLabel}>board now</Text>
+              </View>
+              <View style={planeStyles.flowBox}>
+                <Text style={[planeStyles.flowValue, { color: capColor }]}>
+                  {capacityPct}%
+                </Text>
+                <Text style={planeStyles.flowLabel}>slot power</Text>
+              </View>
+              <View style={planeStyles.flowBox}>
+                <Text style={[planeStyles.flowValue, { color: Colors.green }]}>
+                  {fmtCash(revenue)}
+                </Text>
+                <Text style={planeStyles.flowLabel}>first reward</Text>
+              </View>
+            </View>
+
+            <View style={planeStyles.barRow}>
+              <View style={planeStyles.track}>
                 <View
                   style={[
-                    pr.fillBar,
-                    { width: `${fillPct}%` as any, backgroundColor: fillColor },
+                    planeStyles.fill,
+                    {
+                      width: `${capacityPct}%` as any,
+                      backgroundColor: capColor,
+                    },
                   ]}
                 />
               </View>
-              <Text style={[pr.fillPct, { color: fillColor }]}>{fillPct}%</Text>
             </View>
-          </View>
+          </>
         )}
       </View>
     </TouchableOpacity>
   );
 }
 
-const pr = StyleSheet.create({
-  row: {
-    flexDirection: "row",
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    overflow: "hidden",
-    marginBottom: Spacing.sm,
-  },
-  stripe: { width: 4 },
-  body: { flex: 1, padding: Spacing.md, gap: Spacing.xs },
-  top: { flexDirection: "row", alignItems: "center", gap: 7, flexWrap: "wrap" },
-  name: { fontSize: 14, color: Colors.text, fontWeight: "700", flex: 1 },
-  reasonPill: {
-    backgroundColor: "rgba(255,255,255,.06)",
-    borderRadius: Radius.full,
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-  },
-  reasonTxt: { fontSize: 9, color: Colors.dim },
-  specs: { flexDirection: "row", alignItems: "center", gap: 5 },
-  spec: { fontSize: 11, color: Colors.dim },
-  specSep: { fontSize: 11, color: Colors.dim + "66" },
-  preview: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: Spacing.md,
-    marginTop: 2,
-  },
-  rev: { fontSize: 13, fontWeight: "700" },
-  fillWrap: { flexDirection: "row", alignItems: "center", gap: 5, flex: 1 },
-  fillTrack: {
-    flex: 1,
-    height: 3,
-    backgroundColor: "rgba(255,255,255,.08)",
-    borderRadius: 2,
-    overflow: "hidden",
-  },
-  fillBar: { height: "100%", borderRadius: 2 },
-  fillPct: { fontSize: 9, fontWeight: "700", minWidth: 28, textAlign: "right" },
-});
-
-// ─────────────────────────────────────────────────────────────────
-// CREATE ROUTE SHEET
-// ─────────────────────────────────────────────────────────────────
-
 export default function CreateRouteSheet() {
-  const creationWaypoints = useRouteCreationWaypoints();
+  const waypoints = useRouteCreationWaypoints();
   const hubs = useHubs();
   const ownedPlanes = useOwnedPlanes();
   const routes = useRoutes();
+  const demands = useDemands();
+  const dayProgress = useDayProgress();
   const airline = useAirline();
   const cash = useCash();
-  const removeWp = useGameStore((s) => s.removeWaypoint);
-  const reorderWps = useGameStore((s) => s.reorderWaypoints);
+  const removeWaypoint = useGameStore((s) => s.removeWaypoint);
   const clearCreation = useGameStore((s) => s.clearRouteCreation);
   const haptics = useHaptics();
   const tabBarH = useTabBarHeight();
@@ -616,96 +422,180 @@ export default function CreateRouteSheet() {
   const [done, setDone] = useState(false);
 
   const color = airline?.color ?? Colors.sky;
-  const waypoints = creationWaypoints;
-
-  // ── handleRemoveWaypoint — defined after waypoints ────────────
-  const handleRemoveWaypoint = (iata: string) => {
-    const remaining = waypoints.filter((w) => w.iata !== iata);
-    if (remaining.length < 1) {
-      clearCreation();
-    } else {
-      removeWp(iata);
-    }
-  };
-
-  // ── Derive route geometry (safe defaults when < 2 waypoints) ──
   const origin = waypoints[0] ?? null;
   const dest = waypoints[waypoints.length - 1] ?? null;
   const via = waypoints.length === 3 ? waypoints[1] : null;
+
   const legs =
-    origin && dest && origin !== dest
+    origin && dest && origin.iata !== dest.iata
       ? via
         ? [distNm(origin, via), distNm(via, dest)]
         : [distNm(origin, dest)]
       : [0];
-  const totalDist = legs.reduce((a, b) => a + b, 0);
+
+  const totalDist = legs.reduce((sum, leg) => sum + leg, 0);
   const maxLeg = Math.max(...legs);
   const haul = haulClass(totalDist);
+  const fee = CREATION_FEE[haul] ?? 150_000;
+  const canAfford = cash >= fee;
 
   const originHub = origin
-    ? hubs.find((h) => h.airport.iata === origin.iata)
+    ? hubs.find((hub) => hub.airport.iata === origin.iata)
     : undefined;
   const originNotOwned = !!origin && !originHub;
+
   const paxDay = useMemo(() => {
     if (!origin || !dest || origin.iata === dest.iata) return 0;
     return simulatePaxDay(origin, dest, totalDist);
   }, [origin?.iata, dest?.iata, totalDist]);
-  const fee = CREATION_FEE[haul] ?? 150_000;
-  const canAfford = cash >= fee;
+
+  const existingDemand = useMemo(() => {
+    if (!origin || !dest) return null;
+    return (
+      demands.find(
+        (d) =>
+          d.hub_iata === origin.iata &&
+          d.origin.iata === origin.iata &&
+          d.dest.iata === dest.iata &&
+          d.status !== "served",
+      ) ?? null
+    );
+  }, [demands, origin?.iata, dest?.iata]);
+
+  const previewDemand: PassengerFlowDemand = useMemo(
+    () => ({
+      id: existingDemand?.id ?? "preview-demand",
+      hub_iata: origin?.iata ?? "",
+      pax_day: existingDemand?.pax_day ?? paxDay,
+      delivered_pax_today: existingDemand?.delivered_pax_today ?? 0,
+      status: existingDemand?.status ?? "preview",
+    }),
+    [existingDemand, origin?.iata, paxDay],
+  );
+
+  const waitingNow = waitingPaxForDemand(previewDemand, dayProgress);
 
   const classified = useMemo(() => {
     if (!origin || !dest) return [];
+
     const busyIds = new Set(
-      routes.filter((r) => r.active).map((r) => r.plane.id),
+      routes.filter((route) => route.active).map((route) => route.plane.id),
     );
+
     return ownedPlanes
       .map((plane) => {
         const busy = busyIds.has(plane.id);
-        const canServe = !busy && plane.plane_model.range_nm >= maxLeg;
+        const outOfRange = plane.plane_model.range_nm < maxLeg;
+        const canServe = !busy && !outOfRange;
         const reason = busy
-          ? "On another route"
-          : !canServe
-            ? `${plane.plane_model.range_nm.toLocaleString()}nm range, need ${maxLeg.toLocaleString()}nm`
+          ? "Busy"
+          : outOfRange
+            ? `Need ${maxLeg.toLocaleString()}nm`
             : "";
 
-        let dailyRev = 0;
-        let fillPct = 0;
-        if (canServe) {
-          const p = plane.plane_model;
-          const res = calcRouteRevenue({
-            distNm: totalDist,
-            speedKts: p.speed_kts,
-            trustPct: originHub?.trust ?? 0,
-            deliveredPax: Math.min(paxDay, p.pax_capacity),
-            paxDay,
-            costPerSector: p.cost_per_sector ?? 500,
-            fuelPerNm: p.fuel_per_nm ?? 2.0,
-          });
-          dailyRev = res.net;
-          fillPct = Math.round(
-            (Math.min(paxDay, p.pax_capacity) / Math.max(1, paxDay)) * 100,
-          );
-        }
-        return { plane, busy, canServe, reason, dailyRev, fillPct };
+        const boardedNow = Math.min(waitingNow, plane.plane_model.pax_capacity);
+        const previewBoard = Math.min(
+          Math.max(boardedNow, Math.ceil(previewDemand.pax_day * 0.35)),
+          plane.plane_model.pax_capacity,
+        );
+
+        const revenue = canServe
+          ? calcRouteRevenue({
+              distNm: totalDist,
+              speedKts: plane.plane_model.speed_kts,
+              trustPct: originHub?.trust ?? 0,
+              deliveredPax: previewBoard,
+              paxDay: previewDemand.pax_day,
+              costPerSector: plane.plane_model.cost_per_sector ?? 500,
+              fuelPerNm: plane.plane_model.fuel_per_nm ?? 2,
+            }).net
+          : 0;
+
+        return { plane, canServe, reason, revenue, boardedNow };
       })
       .sort((a, b) => {
         if (a.canServe !== b.canServe) return a.canServe ? -1 : 1;
-        return b.dailyRev - a.dailyRev;
+        if (a.boardedNow !== b.boardedNow) return b.boardedNow - a.boardedNow;
+        return b.revenue - a.revenue;
       });
-  }, [ownedPlanes, routes, maxLeg, paxDay, totalDist, originHub?.trust]);
+  }, [
+    ownedPlanes,
+    routes,
+    origin?.iata,
+    dest?.iata,
+    maxLeg,
+    waitingNow,
+    previewDemand.pax_day,
+    totalDist,
+    originHub?.trust,
+  ]);
 
-  const eligibleCount = classified.filter((c) => c.canServe).length;
+  const eligibleCount = classified.filter((item) => item.canServe).length;
   const selectedPlane =
-    classified.find((c) => c.plane.id === selectedId)?.plane ?? null;
+    classified.find((item) => item.plane.id === selectedId)?.plane ?? null;
 
-  // ── Early returns AFTER all hooks ─────────────────────────────
+  const handleRemoveWaypoint = (iata: string) => {
+    const remaining = waypoints.filter((airport) => airport.iata !== iata);
+    if (remaining.length < 1) clearCreation();
+    else removeWaypoint(iata);
+  };
 
-  // Prompt state — not enough waypoints yet
+  const handleCreate = async () => {
+    if (!origin || !dest || !selectedPlane || !canAfford) return;
+
+    haptics.confirm();
+    setCreating(true);
+    setError(null);
+
+    const { error: err } = await createCustom(
+      origin,
+      dest,
+      via,
+      selectedPlane,
+      previewDemand.pax_day,
+      via ? legs[0] : totalDist,
+      haul,
+      totalDist,
+    );
+
+    setCreating(false);
+
+    if (err) {
+      setError(err);
+      haptics.error();
+      return;
+    }
+
+    haptics.success();
+    setDone(true);
+
+    try {
+      const { airline: currentAirline } = useGameStore.getState();
+      if (currentAirline) {
+        const { supabase } = await import("@/lib/supabase");
+        await supabase
+          .from("airlines")
+          .update({
+            cash: currentAirline.cash,
+            demand_score: currentAirline.demand_score,
+          })
+          .eq("id", currentAirline.id);
+      }
+    } catch {}
+  };
+
+  const haulColor =
+    haul === "short"
+      ? Colors.green
+      : haul === "medium"
+        ? Colors.amber
+        : Colors.purple;
+
   if (waypoints.length < 2) {
     const hasOrigin = waypoints.length === 1;
+
     return (
       <View style={s.prompt}>
-        {/* Live route being built */}
         {hasOrigin ? (
           <View style={s.buildingRoute}>
             <View style={s.buildingChip}>
@@ -722,149 +612,94 @@ export default function CreateRouteSheet() {
               <Ionicons name="ellipse-outline" size={14} color={Colors.dim} />
             </View>
             <View style={[s.buildingChip, s.buildingChipEmpty]}>
-              <Ionicons name="locate-outline" size={12} color={Colors.dim} />
-              <Text style={s.buildingEmptyTxt}>Tap destination</Text>
+              <Ionicons name="people-outline" size={12} color={Colors.dim} />
+              <Text style={s.buildingEmptyText}>Pick destination</Text>
             </View>
           </View>
         ) : (
           <View style={[s.promptIcon, { backgroundColor: color + "18" }]}>
-            <Ionicons name="airplane-outline" size={32} color={color} />
+            <Ionicons name="flash-outline" size={34} color={color} />
           </View>
         )}
 
         <Text style={s.promptTitle}>
-          {hasOrigin ? "Now pick a destination" : "Plot your flight path"}
+          {hasOrigin ? "Pick a destination" : "Build a flow route"}
         </Text>
         <Text style={s.promptSub}>
           {hasOrigin
-            ? "Tap any airport on the map to set your destination."
-            : "Tap your hub on the map to start building a route."}
+            ? "Tap an airport to send travelers there."
+            : "Tap one of your hubs on the map to start a new route."}
         </Text>
 
         {!hasOrigin && (
           <View style={s.promptTips}>
             <View style={s.tipRow}>
-              <Ionicons
-                name="checkmark-circle-outline"
-                size={14}
-                color={color}
-              />
-              <Text style={s.tipTxt}>Start from one of your owned hubs</Text>
+              <Ionicons name="people-outline" size={14} color={color} />
+              <Text style={s.tipText}>
+                Routes move waiting travelers from the origin.
+              </Text>
             </View>
             <View style={s.tipRow}>
-              <Ionicons
-                name="checkmark-circle-outline"
-                size={14}
-                color={color}
-              />
-              <Text style={s.tipTxt}>Add a mid-stop for connecting routes</Text>
+              <Ionicons name="cash-outline" size={14} color={color} />
+              <Text style={s.tipText}>
+                Bigger queues mean stronger first rewards.
+              </Text>
             </View>
             <View style={s.tipRow}>
-              <Ionicons
-                name="checkmark-circle-outline"
-                size={14}
-                color={color}
-              />
-              <Text style={s.tipTxt}>
-                Longer routes earn more per passenger
+              <Ionicons name="git-branch-outline" size={14} color={color} />
+              <Text style={s.tipText}>
+                Add one stop if your plane needs a connection.
               </Text>
             </View>
           </View>
         )}
 
         {hasOrigin && (
-          <TouchableOpacity style={s.cancelWp} onPress={() => clearCreation()}>
-            <Text style={s.cancelWpTxt}>✕ Cancel route</Text>
+          <TouchableOpacity style={s.cancelPrompt} onPress={clearCreation}>
+            <Text style={s.cancelPromptText}>Cancel route</Text>
           </TouchableOpacity>
         )}
       </View>
     );
   }
 
-  // ── Success ──────────────────────────────────────────────────
   if (done) {
     return (
       <View style={s.success}>
         <View style={[s.successIcon, { backgroundColor: color + "18" }]}>
-          <Ionicons name="airplane" size={36} color={color} />
+          <Ionicons name="flash-outline" size={38} color={color} />
         </View>
-        <Text style={s.successTitle}>Route is Live! ✈</Text>
+        <Text style={s.successTitle}>Route Live</Text>
         <Text style={[s.successRoute, { color }]}>
           {origin?.iata}
           {via ? ` → ${via.iata}` : ""} → {dest?.iata}
         </Text>
         <Text style={s.successSub}>
-          Your plane is airborne. Revenue ticks in{"\n"}as each flight
-          completes.
+          Your plane will board waiting travelers as they appear and turn them
+          into cash flow.
         </Text>
       </View>
     );
   }
 
-  // ── Main route sheet ─────────────────────────────────────────
-
-  const handleCreate = async () => {
-    if (!selectedPlane || !canAfford) return;
-    haptics.confirm();
-    setCreating(true);
-    setError(null);
-    const { error: err } = await createCustom(
-      origin,
-      dest,
-      via,
-      selectedPlane,
-      paxDay,
-      via ? legs[0] : totalDist,
-      haul,
-      totalDist,
-    );
-    setCreating(false);
-    if (err) {
-      setError(err);
-      haptics.error();
-    } else {
-      haptics.success();
-      setDone(true);
-      // Auto-save — persist cash + day immediately after route creation fee charged
-      try {
-        const { airline: a } = useGameStore.getState();
-        if (a) {
-          const { supabase } = await import("@/lib/supabase");
-          await supabase
-            .from("airlines")
-            .update({
-              cash: a.cash,
-              demand_score: a.demand_score,
-            })
-            .eq("id", a.id);
-        }
-      } catch {}
-    }
-  };
-
-  const haulColor =
-    haul === "short"
-      ? Colors.green
-      : haul === "medium"
-        ? Colors.amber
-        : Colors.purple;
-
   return (
     <BottomSheetScrollView
       style={s.root}
-      contentContainerStyle={[s.content, { paddingBottom: tabBarH }]}
+      contentContainerStyle={[
+        s.content,
+        { paddingBottom: tabBarH + Spacing.xxl },
+      ]}
       showsVerticalScrollIndicator={false}
     >
-      {/* Header */}
       <View style={s.header}>
-        <View style={s.hdrL}>
-          <MaterialCommunityIcons
-            name="airplane-takeoff"
-            size={20}
-            color={color}
-          />
-          <Text style={s.title}>New Route</Text>
+        <View style={s.headerLeft}>
+          <Ionicons name="flash-outline" size={21} color={color} />
+          <View>
+            <Text style={s.title}>Build Route</Text>
+            <Text style={s.subtitle}>Move waiting travelers</Text>
+          </View>
         </View>
+
         <TouchableOpacity
           onPress={clearCreation}
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
@@ -873,200 +708,158 @@ export default function CreateRouteSheet() {
         </TouchableOpacity>
       </View>
 
-      {/* Route visualiser */}
       <View style={s.section}>
-        <RouteVisualiser
+        <RouteChain
           waypoints={waypoints}
           color={color}
           onRemove={(iata) => {
             haptics.tap();
             handleRemoveWaypoint(iata);
           }}
-          onReorder={reorderWps}
         />
-
-        {/* Tap hint for adding via */}
-        {waypoints.length === 2 && (
-          <TouchableOpacity
-            style={s.addVia}
-            activeOpacity={0.7}
-            onPress={() => {}}
-          >
-            <MaterialCommunityIcons
-              name="plus-circle-outline"
-              size={14}
-              color={Colors.dim}
-            />
-            <Text style={s.addViaTxt}>
-              Tap another airport on the map to add a connecting stop
-            </Text>
-          </TouchableOpacity>
-        )}
       </View>
 
-      {/* Route summary bar */}
       <View style={s.summaryBar}>
         <View style={s.summaryItem}>
-          <Text style={s.summaryLbl}>DISTANCE</Text>
-          <Text style={s.summaryVal}>{totalDist.toLocaleString()} nm</Text>
+          <Text style={s.summaryLabel}>DISTANCE</Text>
+          <Text style={s.summaryValue}>{totalDist.toLocaleString()}nm</Text>
         </View>
         <View style={s.summaryDivider} />
         <View style={s.summaryItem}>
-          <Text style={s.summaryLbl}>HAUL</Text>
-          <Text style={[s.summaryVal, { color: haulColor }]}>
-            {haul.charAt(0).toUpperCase() + haul.slice(1)}
+          <Text style={s.summaryLabel}>HAUL</Text>
+          <Text style={[s.summaryValue, { color: haulColor }]}>
+            {haul.toUpperCase()}
           </Text>
         </View>
         <View style={s.summaryDivider} />
         <View style={s.summaryItem}>
-          <Text style={s.summaryLbl}>OPENING FEE</Text>
+          <Text style={s.summaryLabel}>IDLE PLANES</Text>
           <Text
             style={[
-              s.summaryVal,
-              { color: canAfford ? Colors.green : Colors.red },
+              s.summaryValue,
+              { color: eligibleCount > 0 ? Colors.green : Colors.red },
             ]}
           >
-            {fmtCash(fee)}
+            {eligibleCount}
           </Text>
         </View>
-        {via && (
-          <>
-            <View style={s.summaryDivider} />
-            <View style={s.summaryItem}>
-              <Text style={s.summaryLbl}>LEGS</Text>
-              <Text style={s.summaryVal}>
-                {legs[0].toLocaleString()} + {legs[1].toLocaleString()}
-              </Text>
-            </View>
-          </>
-        )}
       </View>
 
-      {/* Origin not owned — prominent inline warning */}
-      {originNotOwned && (
-        <View style={s.validationBanner}>
+      {originNotOwned && origin && (
+        <View style={s.warningBox}>
           <Ionicons name="alert-circle" size={15} color={Colors.amber} />
-          <View style={s.validationBody}>
-            <Text style={[s.validationTitle, { color: Colors.amber }]}>
-              Wrong starting airport
-            </Text>
-            <Text style={s.validationSub}>
-              {origin.iata} isn&apos;t your hub. Tap ✕ on it above, then tap one
-              of your owned hubs to start the route.
+          <View style={{ flex: 1 }}>
+            <Text style={s.warningTitle}>Start from your hub</Text>
+            <Text style={s.warningText}>
+              {origin.iata} is not owned. Remove it above, then tap one of your
+              hubs.
             </Text>
           </View>
         </View>
       )}
 
-      {!originNotOwned && (
+      {!originNotOwned && origin && dest && (
         <>
-          <View style={s.divider} />
-
-          {/* Market analysis */}
           <View style={s.section}>
-            <MarketAnalysis
+            <DemandRushCard
               origin={origin}
               dest={dest}
+              existingDemand={existingDemand}
+              previewDemand={previewDemand}
+              dayProgress={dayProgress}
+              color={color}
               totalDist={totalDist}
-              haul={haul}
-              paxDay={paxDay}
-              selectedPlane={selectedPlane}
-              trustPct={originHub?.trust ?? 0}
+              fee={fee}
+              canAfford={canAfford}
             />
           </View>
 
           <View style={s.divider} />
 
-          {/* Plane selector */}
           <View style={s.section}>
-            <View style={s.sectionHdr}>
-              <Text style={s.eyebrow}>SELECT PLANE</Text>
+            <View style={s.sectionHeader}>
+              <Text style={s.eyebrow}>PICK FLOW POWER</Text>
               <Text
                 style={[
-                  s.eligibleNote,
+                  s.eligible,
                   { color: eligibleCount > 0 ? Colors.green : Colors.red },
                 ]}
               >
-                {eligibleCount} eligible
+                {eligibleCount} ready
               </Text>
             </View>
 
             {ownedPlanes.length === 0 ? (
-              <View style={s.noPlanes}>
+              <View style={s.emptyPlanes}>
                 <Ionicons
                   name="airplane-outline"
-                  size={32}
+                  size={34}
                   color={Colors.dim}
                 />
-                <Text style={s.noPlanesT}>No planes in fleet</Text>
-                <Text style={s.noPlanesS}>
-                  Buy one from the Fleet tab first
+                <Text style={s.emptyTitle}>No planes yet</Text>
+                <Text style={s.emptySub}>
+                  Buy a starter plane from Fleet first.
                 </Text>
               </View>
             ) : (
-              classified.map(
-                ({ plane, canServe, busy, reason, dailyRev, fillPct }) => (
-                  <PlaneRow
-                    key={plane.id}
-                    plane={plane}
-                    canServe={canServe}
-                    busy={busy}
-                    selected={selectedId === plane.id}
-                    reason={reason}
-                    dailyRev={dailyRev}
-                    fillPct={fillPct}
-                    color={color}
-                    onSelect={() => {
-                      haptics.tap();
-                      setSelectedId((prev) =>
-                        prev === plane.id ? null : plane.id,
-                      );
-                    }}
-                  />
-                ),
-              )
+              classified.map(({ plane, canServe, reason }) => (
+                <PlaneRow
+                  key={plane.id}
+                  plane={plane}
+                  canServe={canServe}
+                  selected={selectedId === plane.id}
+                  reason={reason}
+                  waitingNow={waitingNow}
+                  paxDay={previewDemand.pax_day}
+                  totalDist={totalDist}
+                  trustPct={originHub?.trust ?? 0}
+                  color={color}
+                  onSelect={() => {
+                    haptics.tap();
+                    setSelectedId((current) =>
+                      current === plane.id ? null : plane.id,
+                    );
+                  }}
+                />
+              ))
             )}
           </View>
 
-          {/* Error */}
           {error && (
-            <View
-              style={[s.alert, s.alertRed, { marginHorizontal: Spacing.lg }]}
-            >
+            <View style={s.errorBox}>
               <Ionicons name="warning-outline" size={13} color={Colors.red} />
-              <Text style={s.alertRedTxt}>{error}</Text>
+              <Text style={s.errorText}>{error}</Text>
             </View>
           )}
 
-          {/* Confirm */}
           <View style={s.section}>
             <TouchableOpacity
               style={[
-                s.confirmBtn,
+                s.confirm,
                 {
                   backgroundColor:
                     selectedPlane && canAfford
                       ? color
-                      : "rgba(255,255,255,.05)",
+                      : "rgba(255,255,255,.055)",
                 },
                 (!selectedPlane || !canAfford || creating) && { opacity: 0.5 },
               ]}
               onPress={handleCreate}
               disabled={!selectedPlane || !canAfford || creating}
-              activeOpacity={0.85}
+              activeOpacity={0.86}
             >
               {creating ? (
                 <ActivityIndicator color={Colors.bg} size="small" />
               ) : (
                 <>
                   <Ionicons
-                    name="airplane"
+                    name="flash-outline"
                     size={17}
                     color={selectedPlane && canAfford ? Colors.bg : Colors.dim}
                   />
                   <Text
                     style={[
-                      s.confirmTxt,
+                      s.confirmText,
                       {
                         color:
                           selectedPlane && canAfford ? Colors.bg : Colors.dim,
@@ -1074,17 +867,20 @@ export default function CreateRouteSheet() {
                     ]}
                   >
                     {!selectedPlane
-                      ? "Select a plane above"
+                      ? "Select an idle plane"
                       : !canAfford
                         ? `Need ${fmtCash(fee - cash)} more`
-                        : `Open Route — ${fmtCash(fee)}`}
+                        : existingDemand
+                          ? `Clear This Slot · ${fmtCash(fee)}`
+                          : `Open Market Route · ${fmtCash(fee)}`}
                   </Text>
                 </>
               )}
             </TouchableOpacity>
+
             {!canAfford && (
               <Text style={s.shortfall}>
-                {fmtCash(cash)} available · {fmtCash(fee)} needed
+                {fmtCash(cash)} cash · {fmtCash(fee)} needed
               </Text>
             )}
           </View>
@@ -1094,14 +890,261 @@ export default function CreateRouteSheet() {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────
-// STYLES
-// ─────────────────────────────────────────────────────────────────
-const s = StyleSheet.create({
-  root: { flex: 1 },
-  content: { paddingBottom: Spacing.xxl },
+const chain = StyleSheet.create({
+  wrap: {
+    gap: Spacing.xs,
+  },
+  itemWrap: {
+    position: "relative",
+  },
+  connector: {
+    width: 2,
+    height: 10,
+    marginLeft: 15,
+    marginBottom: -2,
+  },
+  item: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    backgroundColor: "rgba(255,255,255,.025)",
+    padding: Spacing.sm,
+  },
+  dot: {
+    width: 11,
+    height: 11,
+    borderRadius: 999,
+  },
+  body: {
+    flex: 1,
+    minWidth: 0,
+  },
+  topRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  iata: {
+    fontSize: 17,
+    fontWeight: "900",
+  },
+  badge: {
+    borderRadius: Radius.full,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  badgeText: {
+    fontSize: 7,
+    fontWeight: "900",
+    letterSpacing: 1,
+  },
+  city: {
+    fontSize: 10,
+    color: Colors.dim,
+    marginTop: 1,
+  },
+  hint: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingTop: Spacing.xs,
+  },
+  hintText: {
+    fontSize: 10,
+    color: Colors.dim,
+  },
+});
 
-  // Prompt (< 2 waypoints)
+const rush = StyleSheet.create({
+  card: {
+    borderRadius: Radius.xl,
+    borderWidth: 1,
+    backgroundColor: "rgba(255,255,255,.03)",
+    padding: Spacing.md,
+    gap: Spacing.md,
+  },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
+  icon: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  label: {
+    fontSize: 8,
+    letterSpacing: 2,
+    fontWeight: "900",
+  },
+  route: {
+    fontSize: 15,
+    color: Colors.text,
+    fontWeight: "900",
+    marginTop: 1,
+  },
+  fee: {
+    alignItems: "flex-end",
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  feeValue: {
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  feeLabel: {
+    fontSize: 8,
+    color: Colors.dim,
+  },
+  stats: {
+    flexDirection: "row",
+    gap: Spacing.sm,
+  },
+  statBox: {
+    flex: 1,
+    alignItems: "center",
+    borderRadius: Radius.lg,
+    backgroundColor: "rgba(255,255,255,.035)",
+    paddingVertical: Spacing.sm,
+  },
+  statValue: {
+    fontSize: 18,
+    fontWeight: "900",
+  },
+  statLabel: {
+    fontSize: 8,
+    color: Colors.dim,
+    fontWeight: "800",
+  },
+  progressRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
+  track: {
+    flex: 1,
+    height: 5,
+    backgroundColor: "rgba(255,255,255,.08)",
+    borderRadius: 999,
+    overflow: "hidden",
+  },
+  fill: {
+    height: "100%",
+    borderRadius: 999,
+  },
+  progressText: {
+    fontSize: 10,
+    fontWeight: "900",
+    minWidth: 34,
+    textAlign: "right",
+  },
+  noteRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 6,
+  },
+  note: {
+    flex: 1,
+    fontSize: 10,
+    color: Colors.dim,
+    lineHeight: 15,
+  },
+});
+
+const planeStyles = StyleSheet.create({
+  row: {
+    flexDirection: "row",
+    borderRadius: Radius.xl,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    overflow: "hidden",
+    backgroundColor: "rgba(255,255,255,.025)",
+    marginBottom: Spacing.sm,
+  },
+  stripe: {
+    width: 4,
+  },
+  body: {
+    flex: 1,
+    padding: Spacing.md,
+    gap: Spacing.sm,
+  },
+  top: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  name: {
+    flex: 1,
+    fontSize: 14,
+    color: Colors.text,
+    fontWeight: "900",
+  },
+  lockPill: {
+    borderRadius: Radius.full,
+    backgroundColor: "rgba(255,255,255,.06)",
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  lockText: {
+    fontSize: 8,
+    color: Colors.dim,
+    fontWeight: "800",
+  },
+  specs: {
+    fontSize: 10,
+    color: Colors.dim,
+  },
+  flowRow: {
+    flexDirection: "row",
+    gap: Spacing.sm,
+  },
+  flowBox: {
+    flex: 1,
+    alignItems: "center",
+    borderRadius: Radius.md,
+    backgroundColor: "rgba(255,255,255,.035)",
+    paddingVertical: Spacing.sm,
+  },
+  flowValue: {
+    fontSize: 13,
+    fontWeight: "900",
+  },
+  flowLabel: {
+    fontSize: 8,
+    color: Colors.dim,
+  },
+  barRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  track: {
+    flex: 1,
+    height: 4,
+    backgroundColor: "rgba(255,255,255,.08)",
+    borderRadius: 999,
+    overflow: "hidden",
+  },
+  fill: {
+    height: "100%",
+    borderRadius: 999,
+  },
+});
+
+const s = StyleSheet.create({
+  root: {
+    flex: 1,
+  },
+  content: {
+    paddingBottom: Spacing.xxl,
+  },
   prompt: {
     flex: 1,
     alignItems: "center",
@@ -1110,79 +1153,90 @@ const s = StyleSheet.create({
     gap: Spacing.lg,
   },
   promptIcon: {
-    width: 64,
-    height: 64,
-    borderRadius: 20,
+    width: 70,
+    height: 70,
+    borderRadius: 22,
     alignItems: "center",
     justifyContent: "center",
   },
-  promptTitle: { fontSize: 20, color: Colors.text, fontWeight: "700" },
+  promptTitle: {
+    fontSize: 21,
+    color: Colors.text,
+    fontWeight: "900",
+    textAlign: "center",
+  },
   promptSub: {
     fontSize: 13,
     color: Colors.dim,
     textAlign: "center",
     lineHeight: 20,
   },
-
-  // Route building state
+  promptTips: {
+    alignSelf: "stretch",
+    gap: 9,
+    marginTop: Spacing.sm,
+  },
+  tipRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
+  tipText: {
+    fontSize: 12,
+    color: Colors.muted,
+    flex: 1,
+  },
   buildingRoute: {
     alignItems: "center",
     gap: 8,
     width: "100%",
-    paddingHorizontal: Spacing.md,
   },
   buildingChip: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    backgroundColor: "rgba(255,255,255,.06)",
     borderRadius: Radius.full,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 8,
     borderWidth: 1,
     borderColor: Colors.border,
+    backgroundColor: "rgba(255,255,255,.06)",
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 8,
   },
-  buildingChipEmpty: { borderStyle: "dashed", backgroundColor: "transparent" },
-  buildingIata: { fontSize: 16, fontWeight: "700" },
-  buildingCity: { fontSize: 11, color: Colors.muted },
-  buildingEmptyTxt: { fontSize: 12, color: Colors.dim },
+  buildingChipEmpty: {
+    borderStyle: "dashed",
+    backgroundColor: "transparent",
+  },
+  buildingIata: {
+    fontSize: 16,
+    fontWeight: "900",
+  },
+  buildingCity: {
+    fontSize: 11,
+    color: Colors.muted,
+  },
+  buildingEmptyText: {
+    fontSize: 12,
+    color: Colors.dim,
+    fontWeight: "800",
+  },
   buildingArrow: {
     flexDirection: "row",
     alignItems: "center",
     width: "60%",
     justifyContent: "center",
   },
-  buildingLine: { flex: 1, height: 1 },
-
-  // Prompt tips
-  promptTips: { alignSelf: "stretch", gap: 8, marginTop: Spacing.sm },
-  tipRow: { flexDirection: "row", alignItems: "center", gap: Spacing.sm },
-  tipTxt: { fontSize: 12, color: Colors.muted },
-
-  // Cancel button
-  cancelWp: { marginTop: Spacing.sm },
-  cancelWpTxt: { fontSize: 12, color: Colors.red, fontWeight: "600" },
-
-  // Success
-  successRoute: {
-    fontSize: 20,
-    fontWeight: "700",
-    letterSpacing: 1,
-    marginTop: -Spacing.sm,
+  buildingLine: {
+    flex: 1,
+    height: 1,
   },
-  promptSteps: { gap: Spacing.sm, width: "100%" },
-  promptStep: { flexDirection: "row", alignItems: "center", gap: Spacing.md },
-  stepNum: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: "center",
-    justifyContent: "center",
+  cancelPrompt: {
+    marginTop: Spacing.sm,
   },
-  stepN: { fontSize: 12, fontWeight: "700" },
-  stepLbl: { fontSize: 13, color: Colors.muted },
-
-  // Success
+  cancelPromptText: {
+    fontSize: 12,
+    color: Colors.red,
+    fontWeight: "800",
+  },
   success: {
     flex: 1,
     alignItems: "center",
@@ -1191,21 +1245,28 @@ const s = StyleSheet.create({
     gap: Spacing.md,
   },
   successIcon: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
+    width: 76,
+    height: 76,
+    borderRadius: 24,
     alignItems: "center",
     justifyContent: "center",
   },
-  successTitle: { fontSize: 22, color: Colors.text, fontWeight: "700" },
+  successTitle: {
+    fontSize: 23,
+    color: Colors.text,
+    fontWeight: "900",
+  },
+  successRoute: {
+    fontSize: 18,
+    fontWeight: "900",
+    letterSpacing: 1,
+  },
   successSub: {
     fontSize: 13,
     color: Colors.muted,
     textAlign: "center",
     lineHeight: 20,
   },
-
-  // Header
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -1214,47 +1275,54 @@ const s = StyleSheet.create({
     paddingTop: Spacing.sm,
     paddingBottom: Spacing.md,
   },
-  hdrL: { flexDirection: "row", alignItems: "center", gap: Spacing.sm },
-  title: { fontSize: 20, color: Colors.text, fontWeight: "700" },
-
-  // Layout
+  headerLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
+  title: {
+    fontSize: 20,
+    color: Colors.text,
+    fontWeight: "900",
+  },
+  subtitle: {
+    fontSize: 10,
+    color: Colors.dim,
+    marginTop: 1,
+  },
   section: {
     paddingHorizontal: Spacing.lg,
     gap: Spacing.sm,
     marginBottom: Spacing.sm,
   },
-  sectionHdr: {
+  sectionHeader: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
-  eyebrow: { fontSize: 9, color: Colors.dim, letterSpacing: 2.5 },
-  eligibleNote: { fontSize: 10, fontWeight: "600" },
+  eyebrow: {
+    fontSize: 9,
+    color: Colors.dim,
+    letterSpacing: 2.5,
+    fontWeight: "900",
+  },
+  eligible: {
+    fontSize: 10,
+    fontWeight: "900",
+  },
   divider: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: Colors.border,
     marginVertical: Spacing.sm,
   },
-
-  // Via hint
-  addVia: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 7,
-    paddingVertical: Spacing.sm,
-    marginTop: Spacing.xs,
-  },
-  addViaTxt: { fontSize: 11, color: Colors.dim, flex: 1, lineHeight: 16 },
-
-  // Summary bar
   summaryBar: {
     flexDirection: "row",
     marginHorizontal: Spacing.lg,
     marginBottom: Spacing.sm,
-    backgroundColor: "rgba(255,255,255,.04)",
     borderRadius: Radius.lg,
     borderWidth: 1,
     borderColor: Colors.border,
+    backgroundColor: "rgba(255,255,255,.035)",
     overflow: "hidden",
   },
   summaryItem: {
@@ -1267,59 +1335,83 @@ const s = StyleSheet.create({
     width: StyleSheet.hairlineWidth,
     backgroundColor: Colors.border,
   },
-  summaryLbl: { fontSize: 7, color: Colors.dim, letterSpacing: 1.5 },
-  summaryVal: { fontSize: 11, color: Colors.text, fontWeight: "700" },
-
-  // Alerts
-  validationBanner: {
+  summaryLabel: {
+    fontSize: 7,
+    color: Colors.dim,
+    letterSpacing: 1.3,
+    fontWeight: "900",
+  },
+  summaryValue: {
+    fontSize: 11,
+    color: Colors.text,
+    fontWeight: "900",
+  },
+  warningBox: {
     flexDirection: "row",
     alignItems: "flex-start",
     gap: Spacing.sm,
-    backgroundColor: "rgba(251,191,36,.06)",
-    borderRadius: Radius.md,
+    borderRadius: Radius.lg,
     borderWidth: 1,
     borderColor: Colors.amber + "44",
+    backgroundColor: Colors.amber + "08",
+    marginHorizontal: Spacing.lg,
     padding: Spacing.md,
-    marginBottom: Spacing.sm,
   },
-  validationBody: { flex: 1, gap: 3 },
-  validationTitle: { fontSize: 12, fontWeight: "700" },
-  validationSub: { fontSize: 11, color: Colors.muted, lineHeight: 16 },
-  alert: {
+  warningTitle: {
+    fontSize: 12,
+    color: Colors.amber,
+    fontWeight: "900",
+  },
+  warningText: {
+    fontSize: 11,
+    color: Colors.muted,
+    lineHeight: 16,
+    marginTop: 2,
+  },
+  emptyPlanes: {
+    alignItems: "center",
+    paddingVertical: Spacing.xl,
+    gap: Spacing.sm,
+  },
+  emptyTitle: {
+    fontSize: 15,
+    color: Colors.text,
+    fontWeight: "900",
+  },
+  emptySub: {
+    fontSize: 12,
+    color: Colors.dim,
+  },
+  errorBox: {
     flexDirection: "row",
     alignItems: "flex-start",
     gap: 6,
     borderRadius: Radius.md,
     borderWidth: 1,
-    padding: Spacing.sm,
+    borderColor: Colors.red + "33",
+    backgroundColor: Colors.red + "08",
     marginHorizontal: Spacing.lg,
     marginBottom: Spacing.sm,
+    padding: Spacing.sm,
   },
-  alertRed: {
-    backgroundColor: "rgba(248,113,113,.08)",
-    borderColor: "rgba(248,113,113,.3)",
+  errorText: {
+    flex: 1,
+    fontSize: 11,
+    color: Colors.red,
+    lineHeight: 16,
   },
-  alertRedTxt: { fontSize: 11, color: Colors.red, flex: 1, lineHeight: 16 },
-
-  // No planes
-  noPlanes: {
-    alignItems: "center",
-    paddingVertical: Spacing.xl,
-    gap: Spacing.sm,
-  },
-  noPlanesT: { fontSize: 15, color: Colors.text, fontWeight: "700" },
-  noPlanesS: { fontSize: 12, color: Colors.dim },
-
-  // Confirm
-  confirmBtn: {
+  confirm: {
+    minHeight: MIN_TOUCH + 4,
+    borderRadius: Radius.lg,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: Spacing.sm,
-    borderRadius: Radius.lg,
-    minHeight: MIN_TOUCH + 4,
   },
-  confirmTxt: { fontSize: 14, fontWeight: "700", letterSpacing: 0.4 },
+  confirmText: {
+    fontSize: 14,
+    fontWeight: "900",
+  },
   shortfall: {
     fontSize: 10,
     color: Colors.red,

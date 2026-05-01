@@ -2,11 +2,6 @@
  * hooks/useToast.ts
  *
  * Lightweight typed event-emitter for ephemeral UI toasts.
- * Four toast types:
- *   revenue   — daily P&L
- *   unlock    — new plane just became available
- *   warning   — cash low / consecutive losses
- *   milestone — goal reached
  */
 
 import type { AchievementCategory } from "@/lib/achievements";
@@ -21,6 +16,9 @@ export interface RevenueToastData {
   day: number;
   routes: number;
   paxToday: number;
+  moved?: number;
+  waiting?: number;
+  cleared?: boolean;
 }
 
 export interface UnlockToastData {
@@ -56,10 +54,13 @@ export interface DaySummaryToastData {
   interest: number;
   net: number;
   paxToday: number;
-  missionsToday: number; // completed this day
-  missionsTotal: number; // total missions available
+  missionsToday: number;
+  missionsTotal: number;
   netWorth: number;
-  prevNetWorth: number; // so we can show delta
+  prevNetWorth: number;
+  waitingPax?: number;
+  stalledRoutes?: number;
+  aiLostPax?: number;
 }
 
 export interface AchievementToastData {
@@ -81,15 +82,11 @@ export type ToastData =
   | AchievementToastData
   | DaySummaryToastData;
 
-// ─────────────────────────────────────────────────────────────────
-// EMITTER
-// ─────────────────────────────────────────────────────────────────
-
 type Listener = (toast: ToastData) => void;
 const listeners = new Set<Listener>();
 
 export function emitToast(toast: ToastData) {
-  listeners.forEach((l) => l(toast));
+  listeners.forEach((listener) => listener(toast));
 }
 
 export function emitRevenueToast(data: Omit<RevenueToastData, "type">) {
@@ -116,10 +113,6 @@ export function emitAchievementToast(data: Omit<AchievementToastData, "type">) {
   emitToast({ type: "achievement", ...data });
 }
 
-// ─────────────────────────────────────────────────────────────────
-// SUBSCRIBER HOOK
-// ─────────────────────────────────────────────────────────────────
-
 export function useToastListener() {
   const [queue, setQueue] = useState<ToastData[]>([]);
 
@@ -134,7 +127,7 @@ export function useToastListener() {
   }, []);
 
   const dismiss = useCallback((id: string) => {
-    setQueue((prev) => prev.filter((t) => t.id !== id));
+    setQueue((prev) => prev.filter((toast) => toast.id !== id));
   }, []);
 
   return { queue, dismiss };

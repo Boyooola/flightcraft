@@ -6,6 +6,7 @@
  */
 
 import type { DailyEvent } from "@/hooks/useDailyEvents";
+import type { AIAirline } from "@/lib/AIAirline";
 import type { Mission } from "@/lib/missions";
 import { create } from "zustand";
 import { devtools, subscribeWithSelector } from "zustand/middleware";
@@ -88,6 +89,9 @@ export interface AirlineConfig {
   speed: GameSpeed;
   reputation: number;
   demand_score: number;
+  seed: string; // game seed — deterministic world generation
+  ai_count: number; // 0-5 AI competitors
+  ai_difficulty: string; // passive | balanced | aggressive
 }
 
 export interface OwnedHub {
@@ -155,6 +159,8 @@ export interface GameStore {
   dailyEvent: DailyEvent | null;
   awayEarnings: { days: number; amount: number } | null;
   isApplyingAwayEarnings: boolean;
+  dayProgress: number; // 0 → 1 within the current game day
+  aiAirlines: AIAirline[];
   weeklyProgress: {
     weekNumber: number;
     paxTotal: number; // total pax delivered this week
@@ -218,6 +224,8 @@ export interface GameStore {
   setDailyEvent: (event: DailyEvent | null) => void;
   setAwayEarnings: (data: { days: number; amount: number } | null) => void;
   setIsApplyingAway: (v: boolean) => void;
+  setDayProgress: (value: number) => void;
+  setAIAirlines: (airlines: AIAirline[]) => void;
   updateWeeklyProgress: (update: Partial<GameStore["weeklyProgress"]>) => void;
   resetWeeklyProgress: (weekNumber: number) => void;
   setAirline: (airline: AirlineConfig) => void;
@@ -299,10 +307,12 @@ export const useGameStore = create<GameStore>()(
     subscribeWithSelector((set, get) => ({
       // ── Initial state ────────────────────────────────────────────
       isAnonymous: false,
+      aiAirlines: [],
       boughtPlaneToday: false,
       dailyEvent: null,
       awayEarnings: null,
       isApplyingAwayEarnings: false,
+      dayProgress: 0,
       weeklyProgress: {
         weekNumber: 0,
         paxTotal: 0,
@@ -361,12 +371,19 @@ export const useGameStore = create<GameStore>()(
       setBoughtPlaneToday: (val) =>
         set({ boughtPlaneToday: val }, false, "setBoughtPlaneToday"),
       setIsAnonymous: (v) => set({ isAnonymous: v }, false, "setIsAnonymous"),
+      setAIAirlines: (a) => set({ aiAirlines: a }, false, "setAIAirlines"),
       setDailyEvent: (event) =>
         set({ dailyEvent: event }, false, "setDailyEvent"),
       setAwayEarnings: (data) =>
         set({ awayEarnings: data }, false, "setAwayEarnings"),
       setIsApplyingAway: (v) =>
         set({ isApplyingAwayEarnings: v }, false, "setIsApplyingAway"),
+      setDayProgress: (value) =>
+        set(
+          { dayProgress: Math.max(0, Math.min(1, value)) },
+          false,
+          "setDayProgress",
+        ),
       updateWeeklyProgress: (update) =>
         set(
           (s) => ({
@@ -592,6 +609,7 @@ export const useGameStore = create<GameStore>()(
             airline: s.airline
               ? { ...s.airline, day: s.airline.day + 1 }
               : null,
+            dayProgress: 0,
           }),
           false,
           "advanceDay",
@@ -693,6 +711,14 @@ export const useGameStore = create<GameStore>()(
 export const useAirports = () => useGameStore((s) => s.airports);
 export const usePlanes = () => useGameStore((s) => s.planes);
 export const useAirline = () => useGameStore((s) => s.airline);
+export const useGameSeed = () =>
+  useGameStore((s) => s.airline?.seed ?? "DEFAULT");
+export const useAIAirlines = () => useGameStore((s) => s.aiAirlines);
+export const useAIConfig = () =>
+  useGameStore((s) => ({
+    count: s.airline?.ai_count ?? 0,
+    difficulty: s.airline?.ai_difficulty ?? "balanced",
+  }));
 export const useHubs = () => useGameStore((s) => s.hubs);
 export const useDemands = () => useGameStore((s) => s.demands);
 export const useOwnedPlanes = () => useGameStore((s) => s.ownedPlanes);
@@ -704,6 +730,7 @@ export const useBoughtPlaneToday = () =>
   useGameStore((s) => s.boughtPlaneToday);
 export const useDailyEvent = () => useGameStore((s) => s.dailyEvent);
 export const useAwayEarnings = () => useGameStore((s) => s.awayEarnings);
+export const useDayProgress = () => useGameStore((s) => s.dayProgress);
 export const useLoadSteps = () => useGameStore((s) => s.loadSteps);
 export const useLoadComplete = () => useGameStore((s) => s.loadComplete);
 

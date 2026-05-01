@@ -1,15 +1,9 @@
 /**
  * components/ui/GoalsOverlay.tsx
  *
- * Floating goals pill on the map — shows next 3 milestones to chase.
- * Tap to expand into a full goals panel.
+ * WorldWide Rush-style goals overlay.
  *
- * Goals ladder:
- *   Net worth milestones: $100K → $500K → $1M → $5M → $10M → $50M → $100M
- *   Route milestones:     1 → 3 → 5 → 10 → 20 → 35 → 50
- *   Hub milestones:       1 → 2 → 3 → 5 → 10
- *   Plane milestones:     1 → 3 → 5 → 10 → 20
- *   Achievement points:   100 → 250 → 500 → 1000 → 2000
+ * Positioned below the taller 2-row TopHUD and stacked under MissionsPill.
  */
 
 import { Colors, Radius, Spacing } from "@/constants/theme";
@@ -19,6 +13,7 @@ import { fmtCash } from "@/lib/revenue";
 import {
   useAirline,
   useCash,
+  useDemands,
   useEarnedAchievements,
   useHubs,
   useLoan,
@@ -38,9 +33,9 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-// ─────────────────────────────────────────────────────────────────
-// GOAL DEFINITIONS
-// ─────────────────────────────────────────────────────────────────
+const FLOAT_GAP = Spacing.sm;
+const MISSIONS_PILL_HEIGHT = 36;
+const GOAL_TOP_OFFSET = FLOAT_GAP + MISSIONS_PILL_HEIGHT + FLOAT_GAP;
 
 interface Goal {
   id: string;
@@ -49,188 +44,174 @@ interface Goal {
   label: string;
   current: number;
   target: number;
-  reward: string; // flavour text
+  reward: string;
+  priority: number;
+}
+
+function pct(goal: Goal) {
+  return Math.min(100, Math.round((goal.current / goal.target) * 100));
 }
 
 function buildGoals(state: {
+  cash: number;
   netWorth: number;
   routes: number;
   hubs: number;
   planes: number;
   achPoints: number;
+  pendingDemands: number;
+  servedDemands: number;
+  totalDemandPax: number;
+  deliveredDemandPax: number;
 }): Goal[] {
   const goals: Goal[] = [];
 
-  // Net worth ladder
-  const nwTargets = [
-    100_000, 500_000, 1_000_000, 5_000_000, 10_000_000, 50_000_000, 100_000_000,
-  ];
-  const nextNW = nwTargets.find((t) => state.netWorth < t);
-  if (nextNW)
+  if (state.pendingDemands > 0) {
     goals.push({
-      id: `nw-${nextNW}`,
-      category: "WEALTH",
-      icon: "trending-up-outline",
-      label: `Reach ${fmtCash(nextNW)} net worth`,
-      current: Math.max(0, state.netWorth),
-      target: nextNW,
-      reward:
-        nextNW >= 10_000_000
-          ? "Empire Builder"
-          : nextNW >= 1_000_000
-            ? "First Million"
-            : "Getting started",
+      id: "clear-demand-slot",
+      category: "RUSH",
+      icon: "flash-outline",
+      label: "Clear 1 demand slot",
+      current: state.servedDemands,
+      target: state.servedDemands + 1,
+      reward: "New demand appears",
+      priority: 100,
     });
+  }
 
-  // Route ladder
+  if (state.totalDemandPax > 0) {
+    goals.push({
+      id: "move-waiting-pax",
+      category: "FLOW",
+      icon: "people-outline",
+      label: "Move waiting passengers",
+      current: state.deliveredDemandPax,
+      target: state.totalDemandPax,
+      reward: "Trust and cash",
+      priority: 95,
+    });
+  }
+
   const routeTargets = [1, 3, 5, 10, 20, 35, 50];
   const nextRoute = routeTargets.find((t) => state.routes < t);
-  if (nextRoute)
+  if (nextRoute) {
     goals.push({
-      id: `route-${nextRoute}`,
-      category: "NETWORK",
+      id: `routes-${nextRoute}`,
+      category: "ROUTES",
       icon: "git-network-outline",
       label: `Open ${nextRoute} active route${nextRoute !== 1 ? "s" : ""}`,
       current: state.routes,
       target: nextRoute,
-      reward:
-        nextRoute >= 20
-          ? "Route Empire"
-          : nextRoute >= 10
-            ? "Established Carrier"
-            : "Growing Network",
+      reward: nextRoute >= 10 ? "Route web" : "More flow",
+      priority: 85,
     });
+  }
 
-  // Hub ladder
-  const hubTargets = [1, 2, 3, 5, 10];
-  const nextHub = hubTargets.find((t) => state.hubs < t);
-  if (nextHub)
-    goals.push({
-      id: `hub-${nextHub}`,
-      category: "HUBS",
-      icon: "business-outline",
-      label: `Own ${nextHub} hub${nextHub !== 1 ? "s" : ""}`,
-      current: state.hubs,
-      target: nextHub,
-      reward:
-        nextHub >= 5
-          ? "Hub Empire"
-          : nextHub >= 2
-            ? "Second Base"
-            : "Hub Owner",
-    });
-
-  // Fleet ladder
   const planeTargets = [1, 3, 5, 10, 20, 30];
   const nextPlane = planeTargets.find((t) => state.planes < t);
-  if (nextPlane)
+  if (nextPlane) {
     goals.push({
-      id: `plane-${nextPlane}`,
+      id: `planes-${nextPlane}`,
       category: "FLEET",
       icon: "airplane-outline",
       label: `Own ${nextPlane} aircraft`,
       current: state.planes,
       target: nextPlane,
-      reward:
-        nextPlane >= 10
-          ? "Growing Fleet"
-          : nextPlane >= 5
-            ? "Full Fleet"
-            : "First Fleet",
+      reward: "Carry more pax",
+      priority: 75,
     });
+  }
 
-  // Achievement points
+  const hubTargets = [1, 2, 3, 5, 10];
+  const nextHub = hubTargets.find((t) => state.hubs < t);
+  if (nextHub) {
+    goals.push({
+      id: `hubs-${nextHub}`,
+      category: "HUBS",
+      icon: "business-outline",
+      label: `Own ${nextHub} hub${nextHub !== 1 ? "s" : ""}`,
+      current: state.hubs,
+      target: nextHub,
+      reward: "More demand slots",
+      priority: 70,
+    });
+  }
+
+  const cashTargets = [100_000, 500_000, 1_000_000, 5_000_000, 10_000_000];
+  const nextCash = cashTargets.find((t) => state.cash < t);
+  if (nextCash) {
+    goals.push({
+      id: `cash-${nextCash}`,
+      category: "CASH",
+      icon: "cash-outline",
+      label: `Reach ${fmtCash(nextCash)} cash`,
+      current: state.cash,
+      target: nextCash,
+      reward: "Upgrade power",
+      priority: 55,
+    });
+  }
+
   const achTargets = [100, 250, 500, 1000, 2000];
   const nextAch = achTargets.find((t) => state.achPoints < t);
-  if (nextAch)
+  if (nextAch) {
     goals.push({
       id: `ach-${nextAch}`,
-      category: "ACHIEVEMENTS",
+      category: "TROPHY",
       icon: "trophy-outline",
       label: `Earn ${nextAch} achievement points`,
       current: state.achPoints,
       target: nextAch,
       reward: `${nextAch}pt club`,
+      priority: 40,
     });
+  }
 
-  return goals;
+  return goals.sort((a, b) => {
+    const priorityDiff = b.priority - a.priority;
+    if (priorityDiff !== 0) return priorityDiff;
+    return pct(b) - pct(a);
+  });
 }
 
-// ─────────────────────────────────────────────────────────────────
-// GOAL ROW
-// ─────────────────────────────────────────────────────────────────
-
 function GoalRow({ goal, color }: { goal: Goal; color: string }) {
-  const pct = Math.min(100, Math.round((goal.current / goal.target) * 100));
-  const isClose = pct >= 75;
-  const accent = isClose ? "#22c55e" : color;
+  const progress = pct(goal);
+  const hot = goal.category === "RUSH" || goal.category === "FLOW";
+  const accent = hot ? "#22c55e" : color;
 
   return (
-    <View style={gr.row}>
-      <View style={[gr.iconWrap, { backgroundColor: accent + "15" }]}>
-        <Ionicons name={goal.icon as any} size={14} color={accent} />
+    <View style={[gr.row, hot && gr.hotRow]}>
+      <View style={[gr.iconWrap, { backgroundColor: accent + "18" }]}>
+        <Ionicons name={goal.icon as any} size={15} color={accent} />
       </View>
+
       <View style={gr.body}>
         <View style={gr.topRow}>
-          <Text style={gr.category}>{goal.category}</Text>
-          <Text style={[gr.pct, { color: accent }]}>{pct}%</Text>
+          <Text style={[gr.category, { color: accent }]}>{goal.category}</Text>
+          <Text style={[gr.pct, { color: accent }]}>{progress}%</Text>
         </View>
+
         <Text style={gr.label} numberOfLines={1}>
           {goal.label}
         </Text>
+
         <View style={gr.barTrack}>
           <View
             style={[
               gr.barFill,
-              { width: `${pct}%` as any, backgroundColor: accent },
+              {
+                width: `${progress}%` as any,
+                backgroundColor: accent,
+              },
             ]}
           />
         </View>
+
         <Text style={gr.reward}>{goal.reward}</Text>
       </View>
     </View>
   );
 }
-
-const gr = StyleSheet.create({
-  row: {
-    flexDirection: "row",
-    gap: Spacing.sm,
-    paddingVertical: Spacing.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.border,
-  },
-  iconWrap: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    alignItems: "center",
-    justifyContent: "center",
-    flexShrink: 0,
-  },
-  body: { flex: 1, gap: 3 },
-  topRow: { flexDirection: "row", justifyContent: "space-between" },
-  category: {
-    fontSize: 7,
-    color: Colors.dim,
-    letterSpacing: 2,
-    fontWeight: "700",
-  },
-  pct: { fontSize: 9, fontWeight: "700" },
-  label: { fontSize: 12, color: Colors.text, fontWeight: "600" },
-  barTrack: {
-    height: 3,
-    backgroundColor: "rgba(255,255,255,.08)",
-    borderRadius: 2,
-    overflow: "hidden",
-  },
-  barFill: { height: "100%", borderRadius: 2 },
-  reward: { fontSize: 9, color: Colors.dim },
-});
-
-// ─────────────────────────────────────────────────────────────────
-// GOALS OVERLAY
-// ─────────────────────────────────────────────────────────────────
 
 export default function GoalsOverlay() {
   const insets = useSafeAreaInsets();
@@ -241,6 +222,7 @@ export default function GoalsOverlay() {
   const routes = useRoutes();
   const hubs = useHubs();
   const planes = useOwnedPlanes();
+  const demands = useDemands();
   const earned = useEarnedAchievements();
   const isCreating = useRouteCreationActive();
   const [open, setOpen] = useState(false);
@@ -248,52 +230,62 @@ export default function GoalsOverlay() {
   if (isCreating || !airline) return null;
 
   const color = airline.color ?? Colors.sky;
-  const netWorth = Math.max(0, cash - loan);
+  const activeRoutes = routes.filter((r) => r.active).length;
+  const pendingDemands = demands.filter((d) => d.status === "pending");
+  const servedDemands = demands.filter((d) => d.status === "served").length;
+
+  const totalDemandPax = pendingDemands.reduce(
+    (sum, d) => sum + Math.max(0, d.pax_day),
+    0,
+  );
+
+  const deliveredDemandPax = pendingDemands.reduce(
+    (sum, d) => sum + Math.max(0, d.delivered_pax_today ?? 0),
+    0,
+  );
+
   const achPoints = ACHIEVEMENTS.filter(
     (a) => earned[a.id] !== undefined,
-  ).reduce((s, a) => s + a.points, 0);
+  ).reduce((sum, a) => sum + a.points, 0);
 
-  const allGoals = buildGoals({
-    netWorth,
-    routes: routes.filter((r) => r.active).length,
+  const goals = buildGoals({
+    cash,
+    netWorth: Math.max(0, cash - loan),
+    routes: activeRoutes,
     hubs: hubs.length,
     planes: planes.length,
     achPoints,
+    pendingDemands: pendingDemands.length,
+    servedDemands,
+    totalDemandPax,
+    deliveredDemandPax,
   });
 
-  // Next 3 goals — show the ones with highest % completion first
-  const topGoals = [...allGoals]
-    .sort((a, b) => b.current / b.target - a.current / a.target)
-    .slice(0, 3);
-
-  // First incomplete goal for pill display
-  const nextGoal = topGoals[0];
+  const nextGoal = goals[0];
   if (!nextGoal) return null;
 
-  const nextPct = Math.min(
-    100,
-    Math.round((nextGoal.current / nextGoal.target) * 100),
-  );
+  const nextPct = pct(nextGoal);
 
   return (
     <>
-      {/* Pill — always visible */}
       <TouchableOpacity
         style={[
           s.pill,
-          { top: hudH + Spacing.sm + 46, borderColor: color + "55" },
+          {
+            top: hudH + GOAL_TOP_OFFSET + 10,
+            borderColor: color + "55",
+          },
         ]}
         onPress={() => setOpen(true)}
-        activeOpacity={0.85}
+        activeOpacity={0.88}
       >
-        <Ionicons name="trophy-outline" size={12} color={color} />
-        <Text style={[s.pillTxt, { color }]}>{nextPct}%</Text>
+        <View style={[s.pulseDot, { backgroundColor: color }]} />
+        <Text style={[s.pillPct, { color }]}>{nextPct}%</Text>
         <Text style={s.pillLabel} numberOfLines={1}>
           {nextGoal.label}
         </Text>
       </TouchableOpacity>
 
-      {/* Full goals panel — modal */}
       <Modal
         visible={open}
         transparent
@@ -302,14 +294,22 @@ export default function GoalsOverlay() {
       >
         <View style={s.modalBackdrop}>
           <View
-            style={[s.panel, { paddingBottom: insets.bottom + Spacing.lg }]}
+            style={[
+              s.panel,
+              {
+                paddingBottom: insets.bottom + Spacing.lg,
+              },
+            ]}
           >
-            {/* Header */}
             <View style={s.panelHeader}>
               <View style={s.panelHdrL}>
-                <Ionicons name="trophy-outline" size={18} color={color} />
-                <Text style={s.panelTitle}>Goals</Text>
+                <Ionicons name="flash-outline" size={19} color={color} />
+                <View>
+                  <Text style={s.panelTitle}>Rush Goals</Text>
+                  <Text style={s.panelSub}>Keep passengers moving</Text>
+                </View>
               </View>
+
               <TouchableOpacity
                 onPress={() => setOpen(false)}
                 hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
@@ -318,12 +318,11 @@ export default function GoalsOverlay() {
               </TouchableOpacity>
             </View>
 
-            {/* Stats summary */}
             <View style={[s.statBar, { borderColor: color + "33" }]}>
               {[
-                { label: "Net Worth", val: fmtCash(netWorth) },
-                { label: "Routes", val: routes.filter((r) => r.active).length },
-                { label: "Ach Pts", val: achPoints },
+                { label: "Demand", val: pendingDemands.length },
+                { label: "Routes", val: activeRoutes },
+                { label: "Cash", val: fmtCash(cash) },
               ].map(({ label, val }) => (
                 <View key={label} style={s.stat}>
                   <Text style={[s.statVal, { color }]}>{val}</Text>
@@ -332,10 +331,10 @@ export default function GoalsOverlay() {
               ))}
             </View>
 
-            <Text style={s.sectionHdr}>YOUR NEXT GOALS</Text>
+            <Text style={s.sectionHdr}>NEXT OBJECTIVES</Text>
 
             <ScrollView showsVerticalScrollIndicator={false}>
-              {allGoals.map((goal) => (
+              {goals.map((goal) => (
                 <GoalRow key={goal.id} goal={goal} color={color} />
               ))}
               <View style={{ height: 20 }} />
@@ -347,35 +346,108 @@ export default function GoalsOverlay() {
   );
 }
 
+const gr = StyleSheet.create({
+  row: {
+    flexDirection: "row",
+    gap: Spacing.sm,
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.xs,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+  },
+  hotRow: {
+    backgroundColor: "rgba(34,197,94,0.035)",
+  },
+  iconWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+  },
+  body: {
+    flex: 1,
+    gap: 4,
+  },
+  topRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  category: {
+    fontSize: 8,
+    letterSpacing: 2,
+    fontWeight: "800",
+  },
+  pct: {
+    fontSize: 10,
+    fontWeight: "800",
+  },
+  label: {
+    fontSize: 13,
+    color: Colors.text,
+    fontWeight: "700",
+  },
+  barTrack: {
+    height: 4,
+    backgroundColor: "rgba(255,255,255,.08)",
+    borderRadius: 999,
+    overflow: "hidden",
+  },
+  barFill: {
+    height: "100%",
+    borderRadius: 999,
+  },
+  reward: {
+    fontSize: 10,
+    color: Colors.dim,
+  },
+});
+
 const s = StyleSheet.create({
-  // Pill
   pill: {
     position: "absolute",
     right: Spacing.md,
-    zIndex: 30,
+    zIndex: 29,
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
+    gap: 5,
+    minHeight: 32,
     paddingHorizontal: Spacing.sm + 2,
-    paddingVertical: Spacing.xs + 1,
+    paddingVertical: Spacing.xs + 2,
     borderRadius: Radius.full,
     borderWidth: 1,
-    backgroundColor: "rgba(8,15,30,0.92)",
-    maxWidth: 160,
+    backgroundColor: "rgba(8,15,30,0.94)",
+    maxWidth: 220,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 6,
-    elevation: 6,
+    shadowOpacity: 0.35,
+    shadowRadius: 7,
+    elevation: 7,
   },
-  pillTxt: { fontSize: 10, fontWeight: "700" },
-  pillLabel: { fontSize: 9, color: Colors.muted, flex: 1 },
+  pulseDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 999,
+    flexShrink: 0,
+  },
+  pillPct: {
+    fontSize: 10,
+    fontWeight: "900",
+    flexShrink: 0,
+  },
+  pillLabel: {
+    fontSize: 9,
+    color: Colors.muted,
+    flex: 1,
+    fontWeight: "700",
+    minWidth: 0,
+  },
 
-  // Modal
   modalBackdrop: {
     flex: 1,
     justifyContent: "flex-end",
-    backgroundColor: "rgba(0,0,0,0.6)",
+    backgroundColor: "rgba(0,0,0,0.62)",
   },
   panel: {
     backgroundColor: "rgba(8,15,30,0.98)",
@@ -393,8 +465,21 @@ const s = StyleSheet.create({
     justifyContent: "space-between",
     marginBottom: Spacing.md,
   },
-  panelHdrL: { flexDirection: "row", alignItems: "center", gap: Spacing.sm },
-  panelTitle: { fontSize: 20, color: Colors.text, fontWeight: "700" },
+  panelHdrL: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
+  panelTitle: {
+    fontSize: 20,
+    color: Colors.text,
+    fontWeight: "800",
+  },
+  panelSub: {
+    fontSize: 10,
+    color: Colors.dim,
+    marginTop: 1,
+  },
 
   statBar: {
     flexDirection: "row",
@@ -402,15 +487,28 @@ const s = StyleSheet.create({
     borderWidth: 1,
     marginBottom: Spacing.md,
     overflow: "hidden",
+    backgroundColor: "rgba(255,255,255,0.025)",
   },
-  stat: { flex: 1, alignItems: "center", paddingVertical: Spacing.sm },
-  statVal: { fontSize: 16, fontWeight: "700" },
-  statLbl: { fontSize: 8, color: Colors.dim, letterSpacing: 1 },
-
+  stat: {
+    flex: 1,
+    alignItems: "center",
+    paddingVertical: Spacing.sm,
+  },
+  statVal: {
+    fontSize: 16,
+    fontWeight: "900",
+  },
+  statLbl: {
+    fontSize: 8,
+    color: Colors.dim,
+    letterSpacing: 1,
+    marginTop: 2,
+  },
   sectionHdr: {
     fontSize: 9,
     color: Colors.dim,
     letterSpacing: 2.5,
     marginBottom: Spacing.xs,
+    fontWeight: "800",
   },
 });

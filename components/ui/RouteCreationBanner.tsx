@@ -1,15 +1,7 @@
 /**
  * components/ui/RouteCreationBanner.tsx
  *
- * Shown whenever routeCreationMode is active.
- * Slides down from below the TopHUD with a spring animation.
- * The dot pulses/blinks when waiting for a tap.
- *
- * States:
- *   0 waypoints → "Tap your hub to start"
- *   1 waypoint  → "Tap destination airport"
- *   2 waypoints → "Tap to add a connecting stop — or open sheet to confirm"
- *   3 waypoints → "Route ready — open sheet to confirm"
+ * WorldWide Rush-style route creation banner.
  */
 
 import { Colors, Radius, Spacing } from "@/constants/theme";
@@ -25,7 +17,6 @@ import {
   View,
 } from "react-native";
 
-// Pull these as simple selectors — no object return
 const useActive = () => useGameStore((s) => s.routeCreationMode);
 const useWaypoints = () => useGameStore((s) => s.creationWaypoints);
 
@@ -39,134 +30,141 @@ export default function RouteCreationBanner() {
 
   const color = airline?.color ?? Colors.sky;
 
-  // Slide in/out
-  const slideY = useRef(new Animated.Value(-100)).current;
+  const slideY = useRef(new Animated.Value(-90)).current;
+  const pulse = useRef(new Animated.Value(1)).current;
+
   useEffect(() => {
     Animated.spring(slideY, {
-      toValue: active ? 0 : -100,
-      friction: 9,
-      tension: 80,
+      toValue: active ? 0 : -90,
+      friction: 8,
+      tension: 85,
       useNativeDriver: true,
     }).start();
-  }, [active]);
+  }, [active, slideY]);
 
-  // Blink animation for the waiting dot
-  const blink = useRef(new Animated.Value(1)).current;
   useEffect(() => {
-    if (!active || waypoints.length >= 3) {
-      blink.setValue(1);
+    if (!active) {
+      pulse.setValue(1);
       return;
     }
+
     const anim = Animated.loop(
       Animated.sequence([
-        Animated.timing(blink, {
-          toValue: 0.2,
-          duration: 600,
+        Animated.timing(pulse, {
+          toValue: 0.35,
+          duration: 520,
           useNativeDriver: true,
         }),
-        Animated.timing(blink, {
-          toValue: 1.0,
-          duration: 600,
+        Animated.timing(pulse, {
+          toValue: 1,
+          duration: 520,
           useNativeDriver: true,
         }),
       ]),
     );
+
     anim.start();
     return () => anim.stop();
-  }, [active, waypoints.length]);
+  }, [active, pulse]);
 
   if (!active) return null;
 
   const count = waypoints.length;
+  const canConfirm = count >= 2;
 
   const instruction =
     count === 0
-      ? "Tap your hub airport to start"
+      ? "Tap a hub"
       : count === 1
-        ? "Now tap the destination airport"
+        ? "Tap destination"
         : count === 2
-          ? "Tap an airport to add a connecting stop"
-          : "Route ready — tap the button below to confirm";
+          ? "Confirm route or add 1 stop"
+          : "Route ready";
 
-  const canOpen = count >= 2;
+  const status =
+    count === 0
+      ? "START"
+      : count === 1
+        ? "DESTINATION"
+        : count === 2
+          ? "READY"
+          : "CONNECTING";
 
   return (
     <Animated.View
       style={[
         s.container,
-        { top: hudH + Spacing.sm, transform: [{ translateY: slideY }] },
+        {
+          top: hudH + Spacing.sm,
+          transform: [{ translateY: slideY }],
+        },
       ]}
       pointerEvents="box-none"
     >
       <View style={[s.banner, { borderColor: color + "55" }]}>
-        {/* Left — blinking dot + instruction */}
-        <View style={s.left}>
-          <Animated.View
-            style={[s.blinker, { backgroundColor: color, opacity: blink }]}
-          />
-          <View style={s.textWrap}>
-            <Text style={s.mode}>CREATE ROUTE</Text>
-            <Text style={s.instruction}>{instruction}</Text>
-          </View>
+        <View style={[s.iconWrap, { backgroundColor: color + "18" }]}>
+          <Animated.View style={{ opacity: pulse }}>
+            <Ionicons name="flash-outline" size={15} color={color} />
+          </Animated.View>
         </View>
 
-        {/* Waypoint chain — shows selected airports so far */}
-        {count > 0 && (
+        <View style={s.main}>
+          <View style={s.topLine}>
+            <Text style={[s.mode, { color }]}>{status}</Text>
+            <Text style={s.instruction}>{instruction}</Text>
+          </View>
+
           <View style={s.chain}>
-            {waypoints.map((wp, i) => {
-              const isVia = i > 0 && i < waypoints.length - 1;
-              const dotColor = isVia ? Colors.purple : color;
-              return (
-                <View key={wp.iata} style={s.chainStop}>
-                  {i > 0 && (
-                    <View
-                      style={[s.chainLine, { backgroundColor: color + "44" }]}
-                    />
-                  )}
-                  <View style={[s.chainDot, { backgroundColor: dotColor }]} />
-                  <Text style={[s.chainIata, { color: dotColor }]}>
-                    {wp.iata}
-                  </Text>
-                </View>
-              );
-            })}
-            {/* Pending dot — shows if waiting for more taps */}
-            {count < 3 && count < 2 && (
-              <View style={s.chainStop}>
-                <View
-                  style={[s.chainLine, { backgroundColor: color + "44" }]}
-                />
+            {waypoints.length === 0 ? (
+              <Text style={s.emptyChain}>Choose airport on map</Text>
+            ) : (
+              waypoints.map((wp, index) => {
+                const isVia = index > 0 && index < waypoints.length - 1;
+                const dotColor = isVia ? Colors.purple : color;
+
+                return (
+                  <View key={`${wp.iata}-${index}`} style={s.stop}>
+                    {index > 0 && (
+                      <View
+                        style={[s.line, { backgroundColor: color + "44" }]}
+                      />
+                    )}
+                    <View style={[s.dot, { backgroundColor: dotColor }]} />
+                    <Text style={[s.iata, { color: dotColor }]}>{wp.iata}</Text>
+                  </View>
+                );
+              })
+            )}
+
+            {count > 0 && count < 2 && (
+              <View style={s.stop}>
+                <View style={[s.line, { backgroundColor: color + "44" }]} />
                 <Animated.View
-                  style={[
-                    s.chainDotEmpty,
-                    { borderColor: color, opacity: blink },
-                  ]}
+                  style={[s.emptyDot, { borderColor: color, opacity: pulse }]}
                 />
-                <Text style={[s.chainIata, { color: Colors.dim }]}>?</Text>
+                <Text style={s.question}>?</Text>
               </View>
             )}
           </View>
-        )}
+        </View>
 
-        {/* Right — actions */}
         <View style={s.actions}>
-          {canOpen && (
+          {canConfirm && (
             <TouchableOpacity
-              style={[
-                s.openBtn,
-                { backgroundColor: color + "20", borderColor: color + "55" },
-              ]}
+              style={[s.confirmBtn, { backgroundColor: color }]}
               onPress={() => openSheet("create-route")}
-              activeOpacity={0.8}
+              activeOpacity={0.86}
             >
-              <Ionicons name="arrow-up" size={14} color={color} />
+              <Text style={s.confirmText}>Go</Text>
             </TouchableOpacity>
           )}
+
           <TouchableOpacity
+            style={s.closeBtn}
             onPress={clearCreation}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
-            <Ionicons name="close-circle" size={20} color={Colors.dim} />
+            <Ionicons name="close" size={18} color={Colors.dim} />
           </TouchableOpacity>
         </View>
       </View>
@@ -189,52 +187,105 @@ const s = StyleSheet.create({
     borderRadius: Radius.xl,
     borderWidth: 1,
     paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm + 2,
+    paddingVertical: Spacing.sm,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.45,
+    shadowOpacity: 0.42,
     shadowRadius: 12,
     elevation: 10,
   },
-
-  // Left
-  left: {
-    flexDirection: "row",
+  iconWrap: {
+    width: 30,
+    height: 30,
+    borderRadius: 999,
     alignItems: "center",
-    gap: Spacing.sm,
+    justifyContent: "center",
+    flexShrink: 0,
+  },
+  main: {
     flex: 1,
     minWidth: 0,
+    gap: 4,
   },
-  blinker: { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
-  textWrap: { flex: 1, minWidth: 0 },
-  mode: { fontSize: 7, color: Colors.dim, letterSpacing: 2, marginBottom: 1 },
+  topLine: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  mode: {
+    fontSize: 8,
+    fontWeight: "900",
+    letterSpacing: 1.5,
+  },
   instruction: {
-    fontSize: 11,
+    flex: 1,
+    fontSize: 12,
     color: Colors.text,
-    fontWeight: "500",
-    lineHeight: 15,
+    fontWeight: "800",
   },
-
-  // Chain
-  chain: { flexDirection: "row", alignItems: "center", flexShrink: 0 },
-  chainStop: { flexDirection: "row", alignItems: "center", gap: 3 },
-  chainLine: { width: 10, height: 1.5 },
-  chainDot: { width: 7, height: 7, borderRadius: 4 },
-  chainDotEmpty: { width: 7, height: 7, borderRadius: 4, borderWidth: 1.5 },
-  chainIata: { fontSize: 10, fontWeight: "700", letterSpacing: 0.3 },
-
-  // Actions
+  chain: {
+    flexDirection: "row",
+    alignItems: "center",
+    minHeight: 16,
+  },
+  emptyChain: {
+    fontSize: 9,
+    color: Colors.dim,
+  },
+  stop: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+  },
+  line: {
+    width: 12,
+    height: 2,
+    borderRadius: 999,
+  },
+  dot: {
+    width: 7,
+    height: 7,
+    borderRadius: 999,
+  },
+  emptyDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 999,
+    borderWidth: 1.5,
+  },
+  iata: {
+    fontSize: 10,
+    fontWeight: "900",
+    letterSpacing: 0.4,
+  },
+  question: {
+    fontSize: 10,
+    color: Colors.dim,
+    fontWeight: "900",
+  },
   actions: {
     flexDirection: "row",
     alignItems: "center",
-    gap: Spacing.sm,
+    gap: Spacing.xs,
     flexShrink: 0,
   },
-  openBtn: {
-    width: 30,
+  confirmBtn: {
+    minWidth: 36,
     height: 30,
-    borderRadius: 15,
-    borderWidth: 1,
+    borderRadius: Radius.full,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 10,
+  },
+  confirmText: {
+    fontSize: 11,
+    color: Colors.bg,
+    fontWeight: "900",
+  },
+  closeBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 999,
     alignItems: "center",
     justifyContent: "center",
   },

@@ -1,12 +1,7 @@
 /**
  * components/hud/TabBar.tsx
  *
- * 4 tabs + FAB in centre.
- * Layout: Routes | Fleet | [FAB] | Finance | Settings
- *
- * FAB enters route creation mode.
- * Missions accessible via long-press on FAB or from Settings.
- * Pending mission count shown as badge on FAB.
+ * WorldWide Rush-style bottom controls.
  */
 
 import { Colors, MIN_TOUCH, Radius, Spacing } from "@/constants/theme";
@@ -42,7 +37,7 @@ interface TabDef {
 const LEFT_TABS: TabDef[] = [
   {
     id: "routes",
-    label: "Routes",
+    label: "Flow",
     Icon: ({ color, size }) => (
       <MaterialCommunityIcons name="routes" size={size} color={color} />
     ),
@@ -59,16 +54,16 @@ const LEFT_TABS: TabDef[] = [
 const RIGHT_TABS: TabDef[] = [
   {
     id: "finance",
-    label: "Finance",
+    label: "Cash",
     Icon: ({ color, size }) => (
-      <MaterialCommunityIcons name="chart-line" size={size} color={color} />
+      <Ionicons name="cash-outline" size={size} color={color} />
     ),
   },
   {
     id: "settings",
-    label: "Settings",
+    label: "More",
     Icon: ({ color, size }) => (
-      <Ionicons name="settings-outline" size={size} color={color} />
+      <Ionicons name="grid-outline" size={size} color={color} />
     ),
   },
 ];
@@ -88,38 +83,43 @@ export default function TabBar() {
 
   const color = airline?.color ?? Colors.sky;
   const ownedPlanes = useOwnedPlanes();
-  const activeRoutes = useRoutes().filter((r) => r.active);
-  const busyPlaneIds = new Set(activeRoutes.map((r) => r.plane.id));
-  const idleCount = ownedPlanes.filter((p) => !busyPlaneIds.has(p.id)).length;
+  const activeRoutes = useRoutes().filter((route) => route.active);
+  const busyPlaneIds = new Set(activeRoutes.map((route) => route.plane.id));
+  const idleCount = ownedPlanes.filter(
+    (plane) => !busyPlaneIds.has(plane.id),
+  ).length;
 
-  // Pending missions count for FAB badge
-  const pendingMissions = dailyMissions.filter((m) => !m.completed).length;
+  const pendingMissions = dailyMissions.filter(
+    (mission) => !mission.completed,
+  ).length;
   const allMissionsDone = pendingMissions === 0 && dailyMissions.length > 0;
 
-  // Pulse animation while in creation mode
   const pulse = useRef(new Animated.Value(1)).current;
+
   useEffect(() => {
-    if (isCreating) {
-      const anim = Animated.loop(
-        Animated.sequence([
-          Animated.timing(pulse, {
-            toValue: 1.12,
-            duration: 700,
-            useNativeDriver: true,
-          }),
-          Animated.timing(pulse, {
-            toValue: 1.0,
-            duration: 700,
-            useNativeDriver: true,
-          }),
-        ]),
-      );
-      anim.start();
-      return () => anim.stop();
-    } else {
+    if (!isCreating) {
       pulse.setValue(1);
+      return;
     }
-  }, [isCreating]);
+
+    const anim = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, {
+          toValue: 1.12,
+          duration: 520,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulse, {
+          toValue: 1,
+          duration: 520,
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+
+    anim.start();
+    return () => anim.stop();
+  }, [isCreating, pulse]);
 
   const handleTab = (id: ActiveSheet) => {
     haptics.tap();
@@ -127,18 +127,19 @@ export default function TabBar() {
     activeSheet === id ? closeSheet() : openSheet(id);
   };
 
-  const handleFAB = () => {
+  const handleFab = () => {
     haptics.confirm();
+
     if (isCreating) {
       clearCreation();
-    } else {
-      closeSheet();
-      startCreation();
+      return;
     }
+
+    closeSheet();
+    startCreation();
   };
 
-  // Long press FAB → open missions
-  const handleFABLongPress = () => {
+  const handleFabLongPress = () => {
     haptics.confirm();
     if (isCreating) clearCreation();
     openSheet("missions");
@@ -146,31 +147,43 @@ export default function TabBar() {
 
   const renderTab = ({ id, label, Icon }: TabDef) => {
     const active = activeSheet === id && !isCreating;
-    const c = active ? Colors.sky : Colors.dim;
-    const showBadge = id === "routes" && routeCount > 0 && !isCreating;
-    const showIdle = id === "fleet" && idleCount > 0 && !isCreating;
+    const tabColor = active ? color : Colors.dim;
+
+    const showRoutesBadge = id === "routes" && routeCount > 0 && !isCreating;
+    const showIdleBadge = id === "fleet" && idleCount > 0 && !isCreating;
 
     return (
       <TouchableOpacity
         key={id}
         style={s.tab}
         onPress={() => handleTab(id)}
-        activeOpacity={0.7}
+        activeOpacity={0.78}
       >
-        <View style={[s.iconWrap, active && s.iconWrapActive]}>
-          <Icon color={c} size={22} />
-          {showBadge && (
-            <View style={s.badge}>
+        <View
+          style={[
+            s.iconWrap,
+            active && {
+              backgroundColor: color + "18",
+              borderColor: color + "44",
+            },
+          ]}
+        >
+          <Icon color={tabColor} size={22} />
+
+          {showRoutesBadge && (
+            <View style={[s.badge, { backgroundColor: color }]}>
               <Text style={s.badgeText}>{routeCount}</Text>
             </View>
           )}
-          {showIdle && (
-            <View style={[s.badge, s.badgeAmber]}>
+
+          {showIdleBadge && (
+            <View style={[s.badge, { backgroundColor: Colors.amber }]}>
               <Text style={s.badgeText}>{idleCount}</Text>
             </View>
           )}
         </View>
-        <Text style={[s.label, active && s.labelActive]}>{label}</Text>
+
+        <Text style={[s.label, active && { color }]}>{label}</Text>
       </TouchableOpacity>
     );
   };
@@ -179,37 +192,36 @@ export default function TabBar() {
     <View
       style={[
         s.container,
-        { paddingBottom: Math.max(insets.bottom, Spacing.sm) },
+        {
+          paddingBottom: Math.max(insets.bottom, Spacing.sm),
+        },
       ]}
     >
       <View style={s.inner}>
         {LEFT_TABS.map(renderTab)}
 
-        {/* FAB — Create Route / Cancel */}
         <View style={s.fabWrap}>
           <Animated.View style={{ transform: [{ scale: pulse }] }}>
             <TouchableOpacity
               style={[
                 s.fab,
                 {
-                  backgroundColor: isCreating
-                    ? Colors.red + "20"
-                    : color + "18",
-                  borderColor: isCreating ? Colors.red : color,
+                  backgroundColor: isCreating ? Colors.red : color,
+                  borderColor: isCreating ? Colors.red + "66" : color + "77",
                 },
               ]}
-              onPress={handleFAB}
-              onLongPress={handleFABLongPress}
+              onPress={handleFab}
+              onLongPress={handleFabLongPress}
               delayLongPress={400}
-              activeOpacity={0.85}
+              activeOpacity={0.88}
             >
               <Ionicons
-                name={isCreating ? "close" : "add"}
+                name={isCreating ? "close" : "flash-outline"}
                 size={26}
-                color={isCreating ? Colors.red : color}
+                color={Colors.bg}
               />
-              {/* Mission badge — shows pending count */}
-              {!isCreating && pendingMissions > 0 && (
+
+              {!isCreating && dailyMissions.length > 0 && (
                 <View
                   style={[
                     s.missionBadge,
@@ -220,20 +232,23 @@ export default function TabBar() {
                     },
                   ]}
                 >
-                  <Text style={s.missionBadgeTxt}>
+                  <Text style={s.missionBadgeText}>
                     {allMissionsDone ? "✓" : pendingMissions}
                   </Text>
                 </View>
               )}
             </TouchableOpacity>
           </Animated.View>
+
           <Text
             style={[
               s.fabLabel,
-              { color: isCreating ? Colors.red : Colors.dim },
+              {
+                color: isCreating ? Colors.red : color,
+              },
             ]}
           >
-            {isCreating ? "Cancel" : "Route"}
+            {isCreating ? "Cancel" : "Build"}
           </Text>
         </View>
 
@@ -250,7 +265,7 @@ const s = StyleSheet.create({
     left: 0,
     right: 0,
     zIndex: 20,
-    backgroundColor: "rgba(8,15,30,0.97)",
+    backgroundColor: "rgba(8,15,30,0.98)",
     borderTopWidth: 1,
     borderTopColor: Colors.border,
   },
@@ -269,66 +284,79 @@ const s = StyleSheet.create({
     justifyContent: "center",
   },
   iconWrap: {
-    width: 40,
+    width: 42,
     height: 40,
     borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: "transparent",
     alignItems: "center",
     justifyContent: "center",
   },
-  iconWrapActive: { backgroundColor: Colors.skyDim },
-  label: { fontSize: 9, color: Colors.dim, letterSpacing: 0.5 },
-  labelActive: { color: Colors.sky },
-  badgeAmber: { backgroundColor: Colors.amber },
+  label: {
+    fontSize: 9,
+    color: Colors.dim,
+    fontWeight: "800",
+    letterSpacing: 0.4,
+  },
   badge: {
     position: "absolute",
-    top: 4,
-    right: 4,
-    backgroundColor: Colors.sky,
-    borderRadius: 6,
-    minWidth: 12,
-    height: 12,
+    top: 3,
+    right: 3,
+    borderRadius: 999,
+    minWidth: 14,
+    height: 14,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 2,
+    paddingHorizontal: 3,
+    borderWidth: 1.5,
+    borderColor: "rgba(8,15,30,0.98)",
   },
-  badgeText: { fontSize: 7, color: Colors.bg, fontWeight: "700" },
-
-  // FAB
+  badgeText: {
+    fontSize: 7,
+    color: Colors.bg,
+    fontWeight: "900",
+  },
   fabWrap: {
     alignItems: "center",
     justifyContent: "center",
     paddingBottom: 2,
     gap: 3,
-    width: 64,
+    width: 66,
   },
   fab: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    borderWidth: 2.5,
+    width: 54,
+    height: 54,
+    borderRadius: 999,
+    borderWidth: 3,
     alignItems: "center",
     justifyContent: "center",
-    marginTop: -14,
+    marginTop: -16,
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
-    elevation: 8,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.42,
+    shadowRadius: 9,
+    elevation: 9,
   },
-  fabLabel: { fontSize: 9, letterSpacing: 0.5 },
-
-  // Mission badge on FAB
+  fabLabel: {
+    fontSize: 9,
+    fontWeight: "900",
+    letterSpacing: 0.5,
+  },
   missionBadge: {
     position: "absolute",
-    top: -4,
-    right: -4,
-    width: 18,
-    height: 18,
-    borderRadius: 9,
+    top: -5,
+    right: -5,
+    width: 19,
+    height: 19,
+    borderRadius: 999,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1.5,
-    borderColor: "rgba(8,15,30,0.97)",
+    borderColor: "rgba(8,15,30,0.98)",
   },
-  missionBadgeTxt: { fontSize: 8, fontWeight: "700", color: Colors.bg },
+  missionBadgeText: {
+    fontSize: 8,
+    fontWeight: "900",
+    color: Colors.bg,
+  },
 });

@@ -193,7 +193,7 @@ export function useGameClock() {
     if (Notifications) {
       Notifications.setNotificationHandler?.({
         handleNotification: async () => ({
-          shouldShowAlert: true,
+          shouldShowBanner: true,
           shouldPlaySound: false,
           shouldSetBadge: false,
         }),
@@ -211,10 +211,26 @@ export function useGameClock() {
   const startClock = useCallback(() => {
     stopClock();
     if (speed === 0 || phase !== "playing") return;
-    const ms = BASE_DAY_MS / speed;
+
+    const tickMs = 500;
+    const msPerDay = BASE_DAY_MS / speed;
+    let lastTick = Date.now();
+
     timerRef.current = setInterval(() => {
-      advanceDay();
-    }, ms);
+      const now = Date.now();
+      const elapsed = now - lastTick;
+      lastTick = now;
+
+      const store = useGameStore.getState();
+      const nextProgress = store.dayProgress + elapsed / msPerDay;
+
+      if (nextProgress >= 1) {
+        advanceDay();
+        store.setDayProgress(nextProgress % 1);
+      } else {
+        store.setDayProgress(nextProgress);
+      }
+    }, tickMs);
   }, [speed, phase, advanceDay, stopClock]);
 
   // ── Clock lifecycle ────────────────────────────────────────────

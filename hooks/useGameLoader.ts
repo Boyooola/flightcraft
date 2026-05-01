@@ -6,6 +6,7 @@
  * Column mapping adapts to common schema variants.
  */
 
+import { setDemandSeed } from "@/lib/demands";
 import { supabase } from "@/lib/supabase";
 import type {
   AirlineConfig,
@@ -24,7 +25,7 @@ import { useGameStore } from "@/store";
 import { useEffect, useRef } from "react";
 
 // ── Column mappers ────────────────────────────────────────────────
-
+ 
 function rowToAirport(row: any): Airport {
   return {
     iata: row.iata_code ?? row.iata,
@@ -41,6 +42,7 @@ function rowToAirport(row: any): Airport {
   };
 }
 
+ 
 function rowToPlaneModel(row: any): PlaneModel {
   return {
     id: String(row.id),
@@ -105,7 +107,9 @@ export function useGameLoader() {
       const { data, error } = await supabase
         .from("airports")
         .select("*")
-        .gte("pax_annual_m", 2);
+        .in("type", ["large_airport", "medium_airport"])
+        .eq("scheduled_service", "yes")
+        .not("iata_code", "is", null);
 
       if (error) throw error;
       const airports: Airport[] = (data ?? [])
@@ -177,11 +181,33 @@ export function useGameLoader() {
           speed: (data.speed ?? 1) as 0 | 1 | 2 | 3,
           reputation: Number(data.reputation ?? 0),
           demand_score: Number(data.demand_score ?? 0),
+          seed: data.seed ?? "DEFAULT",
+          ai_count: Number(data.ai_count ?? 0),
+          ai_difficulty: data.ai_difficulty ?? "balanced",
         };
         // Store whether this is a guest/anonymous session
         const isAnon = session.user.is_anonymous ?? false;
         useGameStore.setState({ isAnonymous: isAnon });
         setAirline(airline);
+        // Wire seed so demand generation uses correct game seed
+        setDemandSeed(airline.seed ?? "DEFAULT");
+
+        // Initialise AI airlines
+        if ((airline.ai_count ?? 0) > 0) {
+          const { computeAIState } = await import("@/lib/AIAirline");
+          const { setAIAirlines } = useGameStore.getState();
+          const count = airline.ai_count ?? 0;
+          const difficulty = (airline.ai_difficulty ?? "balanced") as
+            | "passive"
+            | "balanced"
+            | "aggressive";
+          const gameSeed = airline.seed ?? "DEFAULT";
+          const { airports } = useGameStore.getState();
+          const aiAirlines = Array.from({ length: count }, (_, i) =>
+            computeAIState(gameSeed, i, airline.day, difficulty, airports),
+          );
+          setAIAirlines(aiAirlines);
+        }
         // Load earned achievements and missions count from DB
         if (data.achievements && typeof data.achievements === "object") {
           const { useGameStore: gs } = await import("@/store");

@@ -17,6 +17,7 @@ import { useAirline, useGameStore } from "@/store";
 import MapboxGL from "@rnmapbox/maps";
 import { useCallback, useRef } from "react";
 import { StyleSheet, View } from "react-native";
+import AIRouteLayer from "./AIRouteLayer";
 import AirportLayer from "./AirportLayer";
 import RouteLayer from "./RouteLayer";
 import RoutePreviewLayer from "./RoutePreviewLayer";
@@ -132,6 +133,9 @@ export default function GameMap({ airlineColor, onMapReady }: GameMapProps) {
             style={{ visibility: "none" }}
           />
         ))}
+
+        {/* AI routes — rendered behind player routes */}
+        <AIRouteLayer />
 
         <RouteLayer airlineColor={color} speed={speed} paused={speed === 0} />
 

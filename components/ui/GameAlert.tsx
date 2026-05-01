@@ -1,23 +1,7 @@
 /**
  * components/ui/GameAlert.tsx
  *
- * In-game slide-up modal that replaces native Alert.alert.
- * Matches the dark game aesthetic — no jarring OS dialogs.
- *
- * Usage:
- *   const alert = useGameAlert();
- *
- *   alert.show({
- *     title:   "Remove Route",
- *     message: "Stop flying MNL → SIN?",
- *     buttons: [
- *       { label: "Cancel",       style: "cancel",      onPress: () => {} },
- *       { label: "Remove Route", style: "destructive",  onPress: handleRemove },
- *     ],
- *   });
- *
- *   // In JSX:
- *   <GameAlert ref={alert.ref} />
+ * WorldWide Rush-style in-game alert.
  */
 
 import { Colors, Radius, Spacing } from "@/constants/theme";
@@ -39,10 +23,6 @@ import {
   View,
 } from "react-native";
 
-// ─────────────────────────────────────────────────────────────────
-// TYPES
-// ─────────────────────────────────────────────────────────────────
-
 export interface GameAlertButton {
   label: string;
   style?: "default" | "cancel" | "destructive";
@@ -61,60 +41,89 @@ export interface GameAlertHandle {
   hide: () => void;
 }
 
-// ─────────────────────────────────────────────────────────────────
-// COMPONENT
-// ─────────────────────────────────────────────────────────────────
-
-const SLIDE_MS = 280;
+const SLIDE_MS = 220;
 
 export const GameAlert = forwardRef<GameAlertHandle>((_, ref) => {
   const [visible, setVisible] = useState(false);
   const [config, setConfig] = useState<GameAlertConfig | null>(null);
-  const slideY = useRef(new Animated.Value(80)).current;
+  const slideY = useRef(new Animated.Value(90)).current;
   const opacity = useRef(new Animated.Value(0)).current;
+  const scale = useRef(new Animated.Value(0.96)).current;
 
-  const show = useCallback((cfg: GameAlertConfig) => {
-    setConfig(cfg);
-    setVisible(true);
-    slideY.setValue(80);
-    opacity.setValue(0);
-    Animated.parallel([
-      Animated.spring(slideY, {
-        toValue: 0,
-        friction: 9,
-        tension: 70,
-        useNativeDriver: true,
-      }),
-      Animated.timing(opacity, {
-        toValue: 1,
-        duration: SLIDE_MS,
-        useNativeDriver: true,
-      }),
-    ]).start();
-  }, []);
+  const show = useCallback(
+    (cfg: GameAlertConfig) => {
+      setConfig(cfg);
+      setVisible(true);
 
-  const hide = useCallback((onDone?: () => void) => {
-    Animated.parallel([
-      Animated.timing(slideY, {
-        toValue: 80,
-        duration: SLIDE_MS,
-        useNativeDriver: true,
-      }),
-      Animated.timing(opacity, {
-        toValue: 0,
-        duration: SLIDE_MS,
-        useNativeDriver: true,
-      }),
-    ]).start(() => {
-      setVisible(false);
-      setConfig(null);
-      onDone?.();
-    });
-  }, []);
+      slideY.setValue(90);
+      opacity.setValue(0);
+      scale.setValue(0.96);
 
-  useImperativeHandle(ref, () => ({ show, hide }));
+      Animated.parallel([
+        Animated.spring(slideY, {
+          toValue: 0,
+          friction: 8,
+          tension: 85,
+          useNativeDriver: true,
+        }),
+        Animated.spring(scale, {
+          toValue: 1,
+          friction: 8,
+          tension: 90,
+          useNativeDriver: true,
+        }),
+        Animated.timing(opacity, {
+          toValue: 1,
+          duration: SLIDE_MS,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    },
+    [opacity, scale, slideY],
+  );
+
+  const hide = useCallback(
+    (onDone?: () => void) => {
+      Animated.parallel([
+        Animated.timing(slideY, {
+          toValue: 90,
+          duration: SLIDE_MS,
+          useNativeDriver: true,
+        }),
+        Animated.timing(scale, {
+          toValue: 0.96,
+          duration: SLIDE_MS,
+          useNativeDriver: true,
+        }),
+        Animated.timing(opacity, {
+          toValue: 0,
+          duration: SLIDE_MS,
+          useNativeDriver: true,
+        }),
+      ]).start(() => {
+        setVisible(false);
+        setConfig(null);
+        onDone?.();
+      });
+    },
+    [opacity, scale, slideY],
+  );
+
+  useImperativeHandle(ref, () => ({ show, hide }), [show, hide]);
 
   if (!visible || !config) return null;
+
+  const primary =
+    config.buttons.find((b) => b.style === "destructive") ??
+    config.buttons.find((b) => b.style === "default");
+
+  const cancel = config.buttons.find((b) => b.style === "cancel");
+
+  const extraButtons = config.buttons.filter(
+    (button) => button !== primary && button !== cancel,
+  );
+
+  const iconColor = primary?.style === "destructive" ? Colors.red : Colors.sky;
 
   const handleButton = (btn: GameAlertButton) => {
     hide(() => btn.onPress?.());
@@ -128,69 +137,80 @@ export const GameAlert = forwardRef<GameAlertHandle>((_, ref) => {
       statusBarTranslucent
       onRequestClose={() => hide()}
     >
-      {/* Backdrop */}
       <TouchableWithoutFeedback
         onPress={() => {
-          // Only dismiss on backdrop tap if there's a cancel button
-          const cancel = config.buttons.find((b) => b.style === "cancel");
           if (cancel) hide(() => cancel.onPress?.());
         }}
       >
         <Animated.View style={[s.backdrop, { opacity }]} />
       </TouchableWithoutFeedback>
 
-      {/* Card */}
       <Animated.View
-        style={[s.wrap, { transform: [{ translateY: slideY }], opacity }]}
+        style={[
+          s.wrap,
+          {
+            opacity,
+            transform: [{ translateY: slideY }, { scale }],
+          },
+        ]}
       >
         <View style={s.card}>
-          {/* Icon */}
+          <View style={s.handle} />
+
           {config.icon && (
-            <View style={s.iconWrap}>
-              <Ionicons
-                name={config.icon as any}
-                size={28}
-                color={Colors.sky}
-              />
+            <View
+              style={[
+                s.iconWrap,
+                {
+                  backgroundColor: iconColor + "18",
+                  borderColor: iconColor + "44",
+                },
+              ]}
+            >
+              <Ionicons name={config.icon as any} size={28} color={iconColor} />
             </View>
           )}
 
-          {/* Text */}
           <Text style={s.title}>{config.title}</Text>
           <Text style={s.message}>{config.message}</Text>
 
-          {/* Divider */}
-          <View style={s.divider} />
-
-          {/* Buttons */}
-          <View style={[s.btnRow, config.buttons.length > 2 && s.btnCol]}>
-            {config.buttons.map((btn, i) => (
+          <View style={s.actions}>
+            {primary && (
               <TouchableOpacity
-                key={i}
                 style={[
-                  s.btn,
-                  config.buttons.length > 2 && s.btnFull,
-                  btn.style === "cancel" && s.btnCancel,
-                  btn.style === "destructive" && s.btnDestructive,
-                  btn.style === "default" && s.btnDefault,
-                  i > 0 && config.buttons.length <= 2 && s.btnBorderLeft,
-                  i > 0 && config.buttons.length > 2 && s.btnBorderTop,
+                  s.primaryBtn,
+                  {
+                    backgroundColor:
+                      primary.style === "destructive" ? Colors.red : Colors.sky,
+                  },
                 ]}
-                onPress={() => handleButton(btn)}
-                activeOpacity={0.75}
+                onPress={() => handleButton(primary)}
+                activeOpacity={0.86}
               >
-                <Text
-                  style={[
-                    s.btnTxt,
-                    btn.style === "cancel" && s.btnTxtCancel,
-                    btn.style === "destructive" && s.btnTxtDestructive,
-                    btn.style === "default" && s.btnTxtDefault,
-                  ]}
-                >
-                  {btn.label}
-                </Text>
+                <Text style={s.primaryText}>{primary.label}</Text>
+              </TouchableOpacity>
+            )}
+
+            {extraButtons.map((btn, index) => (
+              <TouchableOpacity
+                key={`${btn.label}-${index}`}
+                style={s.secondaryBtn}
+                onPress={() => handleButton(btn)}
+                activeOpacity={0.78}
+              >
+                <Text style={s.secondaryText}>{btn.label}</Text>
               </TouchableOpacity>
             ))}
+
+            {cancel && (
+              <TouchableOpacity
+                style={s.cancelBtn}
+                onPress={() => handleButton(cancel)}
+                activeOpacity={0.75}
+              >
+                <Text style={s.cancelText}>{cancel.label}</Text>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
       </Animated.View>
@@ -199,10 +219,6 @@ export const GameAlert = forwardRef<GameAlertHandle>((_, ref) => {
 });
 
 GameAlert.displayName = "GameAlert";
-
-// ─────────────────────────────────────────────────────────────────
-// HOOK — creates ref and exposes show/hide
-// ─────────────────────────────────────────────────────────────────
 
 export function useGameAlert() {
   const ref = useRef<GameAlertHandle>(null);
@@ -218,54 +234,54 @@ export function useGameAlert() {
   return { ref, show, hide };
 }
 
-// ─────────────────────────────────────────────────────────────────
-// STYLES
-// ─────────────────────────────────────────────────────────────────
-
 const s = StyleSheet.create({
   backdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0,0,0,0.65)",
+    backgroundColor: "rgba(0,0,0,0.68)",
   },
   wrap: {
     position: "absolute",
-    bottom: 20,
     left: 0,
     right: 0,
+    bottom: 18,
     paddingHorizontal: Spacing.lg,
-    paddingBottom: Spacing.xl + Spacing.lg,
+    paddingBottom: Spacing.xl,
   },
   card: {
-    backgroundColor: "rgba(12,20,38,0.99)",
     borderRadius: Radius.xl,
     borderWidth: 1,
     borderColor: Colors.border,
-    overflow: "hidden",
-    paddingTop: Spacing.xl,
+    backgroundColor: "rgba(8,15,30,0.98)",
+    padding: Spacing.lg,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.4,
+    shadowOpacity: 0.42,
     shadowRadius: 20,
     elevation: 20,
   },
+  handle: {
+    alignSelf: "center",
+    width: 44,
+    height: 4,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.14)",
+    marginBottom: Spacing.lg,
+  },
   iconWrap: {
     alignSelf: "center",
-    width: 56,
-    height: 56,
-    borderRadius: 16,
-    backgroundColor: Colors.sky + "18",
+    width: 58,
+    height: 58,
+    borderRadius: 18,
     borderWidth: 1,
-    borderColor: Colors.sky + "33",
     alignItems: "center",
     justifyContent: "center",
     marginBottom: Spacing.md,
   },
   title: {
-    fontSize: 18,
-    fontWeight: "700",
+    fontSize: 19,
     color: Colors.text,
+    fontWeight: "900",
     textAlign: "center",
-    paddingHorizontal: Spacing.lg,
     marginBottom: Spacing.sm,
   },
   message: {
@@ -273,60 +289,44 @@ const s = StyleSheet.create({
     color: Colors.muted,
     textAlign: "center",
     lineHeight: 20,
-    paddingHorizontal: Spacing.lg,
     marginBottom: Spacing.lg,
   },
-  divider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: Colors.border,
+  actions: {
+    gap: Spacing.sm,
   },
-  btnRow: {
-    flexDirection: "row",
-  },
-  btnCol: {
-    flexDirection: "column",
-  },
-  btn: {
-    flex: 1,
-    paddingVertical: Spacing.md + 2,
+  primaryBtn: {
+    minHeight: 46,
+    borderRadius: Radius.lg,
     alignItems: "center",
     justifyContent: "center",
   },
-  btnFull: {
-    flex: 0,
+  primaryText: {
+    fontSize: 14,
+    color: Colors.bg,
+    fontWeight: "900",
   },
-  btnCancel: {
-    backgroundColor: "transparent",
+  secondaryBtn: {
+    minHeight: 44,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.035)",
   },
-  btnDestructive: {
-    backgroundColor: "rgba(239,68,68,0.08)",
+  secondaryText: {
+    fontSize: 13,
+    color: Colors.text,
+    fontWeight: "800",
   },
-  btnDefault: {
-    backgroundColor: "rgba(56,189,248,0.08)",
+  cancelBtn: {
+    minHeight: 42,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  btnBorderLeft: {
-    borderLeftWidth: StyleSheet.hairlineWidth,
-    borderLeftColor: Colors.border,
-  },
-  btnBorderTop: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Colors.border,
-  },
-  btnTxt: {
-    fontSize: 15,
-    fontWeight: "600",
-    color: Colors.muted,
-  },
-  btnTxtCancel: {
-    color: Colors.muted,
-    fontWeight: "500",
-  },
-  btnTxtDestructive: {
-    color: "#ef4444",
-    fontWeight: "700",
-  },
-  btnTxtDefault: {
-    color: Colors.sky,
-    fontWeight: "700",
+  cancelText: {
+    fontSize: 13,
+    color: Colors.dim,
+    fontWeight: "800",
   },
 });

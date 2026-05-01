@@ -1,14 +1,7 @@
 /**
  * components/sheets/LeaderboardSheet.tsx
  *
- * Global leaderboard — top 50 airlines by score.
- * Score = netWorth × 0.4 + demand_score × 1000 × 0.4 + reputation × 500 × 0.2
- *
- * Features:
- *   - Manual refresh button with last-updated timestamp
- *   - Loading indicator during fetch
- *   - Current player highlighted
- *   - Rank badge coloured by position (gold/silver/bronze/default)
+ * WorldWide Rush-style leaderboard.
  */
 
 import { Colors, Radius, Spacing } from "@/constants/theme";
@@ -16,8 +9,8 @@ import { useTabBarHeight } from "@/hooks/useSheetLayout";
 import { ACHIEVEMENTS } from "@/lib/achievements";
 import { fmtCash } from "@/lib/revenue";
 import { supabase } from "@/lib/supabase";
-import { useAirline, useGameStore } from "@/store";
-import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { useAIAirlines, useAirline, useGameStore } from "@/store";
+import { Ionicons } from "@expo/vector-icons";
 import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -42,11 +35,9 @@ interface LeaderRow {
 
 function calcScore(row: Omit<LeaderRow, "score">): number {
   const netWorth = Math.max(0, row.cash - row.loan);
-
-  // Sum achievement points from earned achievements
   const earnedIds = Object.keys(row.achievements ?? {});
   const achPoints = ACHIEVEMENTS.filter((a) => earnedIds.includes(a.id)).reduce(
-    (s, a) => s + a.points,
+    (sum, achievement) => sum + achievement.points,
     0,
   );
 
@@ -58,58 +49,118 @@ function calcScore(row: Omit<LeaderRow, "score">): number {
   );
 }
 
-const RANK_COLORS: Record<number, string> = {
-  1: "#F59E0B", // gold
-  2: "#94A3B8", // silver
-  3: "#CD7C4A", // bronze
-};
+function rankColor(rank: number) {
+  if (rank === 1) return "#F59E0B";
+  if (rank === 2) return "#94A3B8";
+  if (rank === 3) return "#CD7C4A";
+  return Colors.dim;
+}
 
-function rankColor(rank: number): string {
-  return RANK_COLORS[rank] ?? Colors.dim;
+function shortScore(score: number) {
+  if (score >= 1_000_000) return `${(score / 1_000_000).toFixed(1)}M`;
+  if (score >= 1_000) return `${Math.round(score / 1_000)}K`;
+  return score.toLocaleString();
+}
+
+function formatLastUpdated(date: Date | null) {
+  if (!date) return "Never";
+  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (seconds < 60) return "Just now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  return `${Math.floor(seconds / 3600)}h ago`;
 }
 
 function RankBadge({ rank }: { rank: number }) {
   const color = rankColor(rank);
-  const isTop = rank <= 3;
+  const top = rank <= 3;
+
   return (
     <View
       style={[
         rb.badge,
-        { backgroundColor: color + "18", borderColor: color + "44" },
+        {
+          backgroundColor: color + "18",
+          borderColor: color + "44",
+        },
       ]}
     >
-      {isTop && <Ionicons name="trophy" size={9} color={color} />}
-      <Text style={[rb.txt, { color }]}>#{rank}</Text>
+      {top && <Ionicons name="trophy" size={9} color={color} />}
+      <Text style={[rb.text, { color }]}>#{rank}</Text>
     </View>
   );
 }
 
-const rb = StyleSheet.create({
-  badge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 3,
-    borderRadius: Radius.full,
-    borderWidth: 1,
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-  },
-  txt: { fontSize: 11, fontWeight: "700" },
-});
+function LeaderRowCard({
+  row,
+  rank,
+  isMe,
+}: {
+  row: LeaderRow;
+  rank: number;
+  isMe: boolean;
+}) {
+  const color = row.color ?? Colors.sky;
+  const netWorth = Math.max(0, row.cash - row.loan);
+  const isAI = row.name.endsWith(" ✦");
 
-function formatLastUpdated(date: Date | null): string {
-  if (!date) return "Never";
-  const secs = Math.floor((Date.now() - date.getTime()) / 1000);
-  if (secs < 60) return "Just now";
-  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
-  return `${Math.floor(secs / 3600)}h ago`;
+  return (
+    <View
+      style={[
+        rowStyles.card,
+        isMe && {
+          borderColor: color + "55",
+          backgroundColor: color + "0c",
+        },
+      ]}
+    >
+      <RankBadge rank={rank} />
+
+      <View style={[rowStyles.dot, { backgroundColor: color }]} />
+
+      <View style={rowStyles.body}>
+        <View style={rowStyles.nameRow}>
+          <Text style={[rowStyles.name, isMe && { color }]} numberOfLines={1}>
+            {isAI ? row.name.slice(0, -2) : row.name}
+            {isMe ? " (You)" : ""}
+          </Text>
+
+          {isAI && (
+            <View style={rowStyles.aiBadge}>
+              <Text style={rowStyles.aiText}>AI</Text>
+            </View>
+          )}
+        </View>
+
+        <Text style={rowStyles.meta} numberOfLines={1}>
+          {fmtCash(netWorth)} net · {row.demand_score} cleared ·{" "}
+          {Object.keys(row.achievements ?? {}).length} trophies
+        </Text>
+      </View>
+
+      <View style={rowStyles.scoreBox}>
+        <Text
+          style={[
+            rowStyles.score,
+            {
+              color: rank <= 3 ? rankColor(rank) : Colors.text,
+            },
+          ]}
+        >
+          {shortScore(row.score)}
+        </Text>
+        <Text style={rowStyles.scoreLabel}>score</Text>
+      </View>
+    </View>
+  );
 }
 
 export default function LeaderboardSheet() {
   const airline = useAirline();
   const closeSheet = useGameStore((s) => s.closeSheet);
   const tabBarH = useTabBarHeight();
+  const aiAirlines = useAIAirlines();
 
+  const [tab, setTab] = useState<"global" | "rivals">("global");
   const [rows, setRows] = useState<LeaderRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
@@ -120,6 +171,7 @@ export default function LeaderboardSheet() {
   const fetchLeaderboard = useCallback(async () => {
     setLoading(true);
     setError(null);
+
     try {
       const { data, error: err } = await supabase
         .from("airlines")
@@ -132,10 +184,13 @@ export default function LeaderboardSheet() {
       if (err) throw new Error(err.message);
 
       const scored: LeaderRow[] = (data ?? [])
-        .map((r: any) => ({ ...r, score: calcScore(r) }))
+        .map((row: any) => ({
+          ...row,
+          score: calcScore(row),
+        }))
         .sort((a: LeaderRow, b: LeaderRow) => b.score - a.score);
 
-      setRows(scored);
+      setRows(scored.slice(0, 50));
       setLastUpdated(new Date());
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load leaderboard");
@@ -144,12 +199,35 @@ export default function LeaderboardSheet() {
     }
   }, []);
 
-  // Fetch on open
   useEffect(() => {
     fetchLeaderboard();
-  }, []);
+  }, [fetchLeaderboard]);
 
-  const myRank = airline ? rows.findIndex((r) => r.id === airline.id) + 1 : 0;
+  useEffect(() => {
+    if (rows.length === 0) return;
+
+    const realRows = rows.filter((row) => !row.name.endsWith("✦"));
+    const aiRows: LeaderRow[] = aiAirlines.map((ai) => ({
+      id: ai.id,
+      name: `${ai.name} ✦`,
+      color: ai.color,
+      cash: ai.cash,
+      loan: ai.cash - ai.netWorth,
+      demand_score: ai.demandScore,
+      reputation: ai.reputation,
+      achievements: null,
+      score: ai.score,
+    }));
+
+    setRows(
+      [...realRows, ...aiRows].sort((a, b) => b.score - a.score).slice(0, 50),
+    );
+  }, [aiAirlines]);
+
+  const myRank = airline
+    ? rows.findIndex((row) => row.id === airline.id) + 1
+    : 0;
+  const topRow = rows[0];
 
   return (
     <BottomSheetScrollView
@@ -160,23 +238,21 @@ export default function LeaderboardSheet() {
       ]}
       showsVerticalScrollIndicator={false}
     >
-      {/* Header */}
       <View style={s.header}>
         <View style={s.hdrL}>
-          <MaterialCommunityIcons
-            name="trophy-outline"
-            size={20}
-            color={color}
-          />
-          <Text style={s.title}>Leaderboard</Text>
+          <Ionicons name="flash-outline" size={21} color={color} />
+          <View>
+            <Text style={s.title}>Rank Rush</Text>
+            <Text style={s.subtitle}>Climb by moving passengers</Text>
+          </View>
         </View>
+
         <View style={s.hdrR}>
-          {/* Refresh button */}
           <TouchableOpacity
             style={[s.refreshBtn, { borderColor: color + "44" }]}
             onPress={fetchLeaderboard}
             disabled={loading}
-            activeOpacity={0.7}
+            activeOpacity={0.75}
           >
             {loading ? (
               <ActivityIndicator size="small" color={color} />
@@ -184,6 +260,7 @@ export default function LeaderboardSheet() {
               <Ionicons name="refresh-outline" size={16} color={color} />
             )}
           </TouchableOpacity>
+
           <TouchableOpacity
             onPress={closeSheet}
             hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
@@ -193,118 +270,215 @@ export default function LeaderboardSheet() {
         </View>
       </View>
 
-      {/* Last updated */}
-      <View style={s.metaRow}>
-        <Text style={s.lastUpdated}>
-          Updated {formatLastUpdated(lastUpdated)}
-        </Text>
-        {myRank > 0 && (
-          <View
-            style={[
-              s.myRankBadge,
-              { borderColor: color + "44", backgroundColor: color + "12" },
-            ]}
-          >
-            <Text style={[s.myRankTxt, { color }]}>You&apos;re #{myRank}</Text>
+      <View style={s.tabs}>
+        {(["global", "rivals"] as const).map((value) => {
+          const active = tab === value;
+
+          return (
+            <TouchableOpacity
+              key={value}
+              style={[s.tab, active && { borderColor: color + "44" }]}
+              onPress={() => setTab(value)}
+              activeOpacity={0.82}
+            >
+              <Text style={[s.tabText, { color: active ? color : Colors.dim }]}>
+                {value === "global" ? "Global" : `Rivals ${aiAirlines.length}`}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      <View style={[s.hero, { borderColor: color + "44" }]}>
+        <View>
+          <Text style={s.heroLabel}>YOUR RANK</Text>
+          <Text style={[s.heroValue, { color }]}>
+            {myRank > 0 ? `#${myRank}` : "—"}
+          </Text>
+          <Text style={s.heroSub}>
+            Updated {formatLastUpdated(lastUpdated)}
+          </Text>
+        </View>
+
+        {topRow && (
+          <View style={s.topBox}>
+            <Text style={s.topLabel}>TOP AIRLINE</Text>
+            <Text style={s.topName} numberOfLines={1}>
+              {topRow.name.replace(" ✦", "")}
+            </Text>
+            <Text style={s.topScore}>{shortScore(topRow.score)} score</Text>
           </View>
         )}
       </View>
 
-      <View style={s.divider} />
+      {tab === "rivals" ? (
+        <View style={s.section}>
+          {aiAirlines.length === 0 ? (
+            <View style={s.empty}>
+              <Ionicons name="people-outline" size={40} color={Colors.dim} />
+              <Text style={s.emptyTitle}>No rivals yet</Text>
+              <Text style={s.emptySub}>Add AI rivals during setup.</Text>
+            </View>
+          ) : (
+            [...aiAirlines]
+              .sort((a, b) => b.score - a.score)
+              .map((ai, index) => {
+                const rank = index + 1;
 
-      {/* Error */}
-      {error && (
-        <View style={s.errorBox}>
-          <Ionicons name="warning-outline" size={14} color={Colors.red} />
-          <Text style={s.errorTxt}>{error}</Text>
-          <TouchableOpacity onPress={fetchLeaderboard} style={s.retryBtn}>
-            <Text style={s.retryTxt}>Retry</Text>
-          </TouchableOpacity>
+                return (
+                  <View key={ai.id} style={s.rivalCard}>
+                    <RankBadge rank={rank} />
+                    <View style={[s.rivalDot, { backgroundColor: ai.color }]} />
+
+                    <View style={s.rivalBody}>
+                      <Text style={s.rivalName}>{ai.name}</Text>
+                      <Text style={s.rivalMeta}>
+                        {ai.routeCount} routes · {ai.hubIatas.length} hubs ·
+                        trust {ai.trust}%
+                      </Text>
+                    </View>
+
+                    <Text style={[s.rivalScore, { color: ai.color }]}>
+                      {shortScore(ai.score)}
+                    </Text>
+                  </View>
+                );
+              })
+          )}
         </View>
-      )}
+      ) : (
+        <View style={s.section}>
+          {error && (
+            <View style={s.errorBox}>
+              <Ionicons name="warning-outline" size={14} color={Colors.red} />
+              <Text style={s.errorText}>{error}</Text>
+              <TouchableOpacity onPress={fetchLeaderboard}>
+                <Text style={s.retryText}>Retry</Text>
+              </TouchableOpacity>
+            </View>
+          )}
 
-      {/* Loading skeleton */}
-      {loading && rows.length === 0 && (
-        <View style={s.loadingWrap}>
-          <ActivityIndicator color={color} size="large" />
-          <Text style={s.loadingTxt}>Fetching rankings...</Text>
-        </View>
-      )}
+          {loading && rows.length === 0 && (
+            <View style={s.loading}>
+              <ActivityIndicator color={color} size="large" />
+              <Text style={s.loadingText}>Fetching rankings...</Text>
+            </View>
+          )}
 
-      {/* Rows */}
-      {rows.map((row, i) => {
-        const rank = i + 1;
-        const isMe = row.id === airline?.id;
-        const rc = rankColor(rank);
-
-        return (
-          <View
-            key={row.id}
-            style={[
-              s.row,
-              isMe && {
-                backgroundColor: color + "0a",
-                borderColor: color + "33",
-              },
-            ]}
-          >
-            <RankBadge rank={rank} />
-
-            {/* Airline colour dot */}
-            <View
-              style={[s.dot, { backgroundColor: row.color ?? Colors.sky }]}
+          {rows.map((row, index) => (
+            <LeaderRowCard
+              key={row.id}
+              row={row}
+              rank={index + 1}
+              isMe={row.id === airline?.id}
             />
+          ))}
 
-            {/* Name + score */}
-            <View style={s.rowBody}>
-              <Text style={[s.rowName, isMe && { color }]} numberOfLines={1}>
-                {row.name}
-                {isMe ? " (You)" : ""}
-              </Text>
-              <Text style={s.rowMeta}>
-                {fmtCash(row.cash - row.loan)} net · {row.demand_score} routes ·{" "}
-                {Object.keys(row.achievements ?? {}).length} achievements
+          {!loading && !error && rows.length === 0 && (
+            <View style={s.empty}>
+              <Ionicons name="trophy-outline" size={40} color={Colors.dim} />
+              <Text style={s.emptyTitle}>No rankings yet</Text>
+              <Text style={s.emptySub}>Play more to appear on the board.</Text>
+            </View>
+          )}
+
+          {rows.length > 0 && (
+            <View style={s.note}>
+              <Ionicons
+                name="information-circle-outline"
+                size={13}
+                color={Colors.dim}
+              />
+              <Text style={s.noteText}>
+                Score rewards net worth, cleared demand, reputation, and
+                trophies.
               </Text>
             </View>
-
-            {/* Score */}
-            <Text
-              style={[s.rowScore, { color: rank <= 3 ? rc : Colors.muted }]}
-            >
-              {row.score.toLocaleString()}
-            </Text>
-          </View>
-        );
-      })}
-
-      {/* Empty */}
-      {!loading && !error && rows.length === 0 && (
-        <View style={s.empty}>
-          <MaterialCommunityIcons
-            name="trophy-broken"
-            size={40}
-            color={Colors.dim}
-          />
-          <Text style={s.emptyTxt}>No rankings yet</Text>
-        </View>
-      )}
-
-      {/* Score explanation */}
-      {rows.length > 0 && (
-        <View style={s.scoreNote}>
-          <Ionicons
-            name="information-circle-outline"
-            size={12}
-            color={Colors.dim}
-          />
-          <Text style={s.scoreNoteTxt}>
-            Score = net worth × 0.4 + routes × 0.4 + reputation × 0.2
-          </Text>
+          )}
         </View>
       )}
     </BottomSheetScrollView>
   );
 }
+
+const rb = StyleSheet.create({
+  badge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+  },
+  text: {
+    fontSize: 11,
+    fontWeight: "900",
+  },
+});
+
+const rowStyles = StyleSheet.create({
+  card: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: "rgba(255,255,255,.025)",
+    padding: Spacing.md,
+    marginBottom: Spacing.sm,
+  },
+  dot: {
+    width: 9,
+    height: 9,
+    borderRadius: 999,
+    flexShrink: 0,
+  },
+  body: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  nameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  name: {
+    flex: 1,
+    fontSize: 13,
+    color: Colors.text,
+    fontWeight: "900",
+  },
+  aiBadge: {
+    borderRadius: Radius.sm,
+    backgroundColor: "rgba(255,255,255,.08)",
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+  },
+  aiText: {
+    fontSize: 7,
+    color: Colors.dim,
+    fontWeight: "900",
+    letterSpacing: 0.5,
+  },
+  meta: {
+    fontSize: 9,
+    color: Colors.dim,
+  },
+  scoreBox: {
+    alignItems: "flex-end",
+  },
+  score: {
+    fontSize: 15,
+    fontWeight: "900",
+  },
+  scoreLabel: {
+    fontSize: 8,
+    color: Colors.dim,
+  },
+});
 
 const s = StyleSheet.create({
   root: { flex: 1 },
@@ -316,101 +490,206 @@ const s = StyleSheet.create({
     justifyContent: "space-between",
     paddingHorizontal: Spacing.lg,
     paddingTop: Spacing.sm,
-    paddingBottom: Spacing.sm,
+    paddingBottom: Spacing.md,
   },
-  hdrL: { flexDirection: "row", alignItems: "center", gap: Spacing.sm },
-  hdrR: { flexDirection: "row", alignItems: "center", gap: Spacing.sm },
-  title: { fontSize: 20, color: Colors.text, fontWeight: "700" },
+  hdrL: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
+  hdrR: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
+  title: {
+    fontSize: 20,
+    color: Colors.text,
+    fontWeight: "900",
+  },
+  subtitle: {
+    fontSize: 10,
+    color: Colors.dim,
+    marginTop: 1,
+  },
   refreshBtn: {
     width: 32,
     height: 32,
-    borderRadius: 16,
+    borderRadius: 999,
     borderWidth: 1,
     alignItems: "center",
     justifyContent: "center",
   },
 
-  metaRow: {
+  tabs: {
+    flexDirection: "row",
+    gap: Spacing.sm,
+    paddingHorizontal: Spacing.lg,
+    marginBottom: Spacing.md,
+  },
+  tab: {
+    flex: 1,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: "rgba(255,255,255,.025)",
+    paddingVertical: Spacing.sm,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  tabText: {
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  tabDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 999,
+    marginTop: 3,
+  },
+
+  hero: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: Spacing.lg,
-    paddingBottom: Spacing.sm,
-  },
-  lastUpdated: { fontSize: 10, color: Colors.dim },
-  myRankBadge: {
-    borderRadius: Radius.full,
+    gap: Spacing.md,
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.md,
+    borderRadius: Radius.xl,
     borderWidth: 1,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
+    backgroundColor: "rgba(255,255,255,.035)",
+    padding: Spacing.md,
   },
-  myRankTxt: { fontSize: 11, fontWeight: "700" },
-
-  divider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: Colors.border,
-    marginBottom: Spacing.xs,
+  heroLabel: {
+    fontSize: 8,
+    color: Colors.dim,
+    letterSpacing: 1.8,
+    fontWeight: "900",
+  },
+  heroValue: {
+    fontSize: 34,
+    fontWeight: "900",
+  },
+  heroSub: {
+    fontSize: 10,
+    color: Colors.dim,
+  },
+  topBox: {
+    maxWidth: "55%",
+    alignItems: "flex-end",
+  },
+  topLabel: {
+    fontSize: 8,
+    color: Colors.dim,
+    letterSpacing: 1.4,
+    fontWeight: "900",
+  },
+  topName: {
+    fontSize: 13,
+    color: Colors.text,
+    fontWeight: "900",
+    marginTop: 2,
+  },
+  topScore: {
+    fontSize: 10,
+    color: Colors.green,
+    marginTop: 1,
+    fontWeight: "800",
   },
 
+  section: {
+    paddingHorizontal: Spacing.lg,
+  },
   errorBox: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    marginHorizontal: Spacing.lg,
-    marginVertical: Spacing.md,
-    backgroundColor: "rgba(248,113,113,.08)",
-    borderRadius: Radius.md,
+    borderRadius: Radius.lg,
     borderWidth: 1,
-    borderColor: "rgba(248,113,113,.25)",
-    padding: Spacing.sm,
+    borderColor: Colors.red + "33",
+    backgroundColor: Colors.red + "08",
+    padding: Spacing.md,
+    marginBottom: Spacing.md,
   },
-  errorTxt: { fontSize: 11, color: Colors.red, flex: 1 },
-  retryBtn: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    backgroundColor: Colors.red + "20",
-    borderRadius: Radius.sm,
+  errorText: {
+    flex: 1,
+    fontSize: 11,
+    color: Colors.red,
   },
-  retryTxt: { fontSize: 10, color: Colors.red, fontWeight: "700" },
-
-  loadingWrap: {
+  retryText: {
+    fontSize: 11,
+    color: Colors.red,
+    fontWeight: "900",
+  },
+  loading: {
     paddingVertical: Spacing.xxl * 2,
     alignItems: "center",
     gap: Spacing.md,
   },
-  loadingTxt: { fontSize: 12, color: Colors.dim },
+  loadingText: {
+    fontSize: 12,
+    color: Colors.dim,
+  },
+  empty: {
+    alignItems: "center",
+    paddingVertical: Spacing.xxl * 2,
+    gap: Spacing.sm,
+  },
+  emptyTitle: {
+    fontSize: 15,
+    color: Colors.text,
+    fontWeight: "900",
+  },
+  emptySub: {
+    fontSize: 11,
+    color: Colors.dim,
+    textAlign: "center",
+  },
+  note: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginTop: Spacing.md,
+    opacity: 0.75,
+  },
+  noteText: {
+    flex: 1,
+    fontSize: 10,
+    color: Colors.dim,
+    lineHeight: 15,
+  },
 
-  row: {
+  rivalCard: {
     flexDirection: "row",
     alignItems: "center",
     gap: Spacing.sm,
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.sm + 2,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.border,
-    borderWidth: 0,
-    borderRadius: 0,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: "rgba(255,255,255,.025)",
+    padding: Spacing.md,
+    marginBottom: Spacing.sm,
   },
-  dot: { width: 10, height: 10, borderRadius: 5, flexShrink: 0 },
-  rowBody: { flex: 1, minWidth: 0, gap: 1 },
-  rowName: { fontSize: 13, color: Colors.text, fontWeight: "600" },
-  rowMeta: { fontSize: 9, color: Colors.dim },
-  rowScore: { fontSize: 13, fontWeight: "700", flexShrink: 0 },
-
-  empty: {
-    paddingVertical: Spacing.xxl * 2,
-    alignItems: "center",
-    gap: Spacing.md,
+  rivalDot: {
+    width: 9,
+    height: 9,
+    borderRadius: 999,
   },
-  emptyTxt: { fontSize: 12, color: Colors.dim },
-
-  scoreNote: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    marginHorizontal: Spacing.lg,
-    marginTop: Spacing.md,
-    opacity: 0.6,
+  rivalBody: {
+    flex: 1,
+    gap: 2,
   },
-  scoreNoteTxt: { fontSize: 9, color: Colors.dim, flex: 1 },
+  rivalName: {
+    fontSize: 13,
+    color: Colors.text,
+    fontWeight: "900",
+  },
+  rivalMeta: {
+    fontSize: 9,
+    color: Colors.dim,
+  },
+  rivalScore: {
+    fontSize: 15,
+    fontWeight: "900",
+  },
 });

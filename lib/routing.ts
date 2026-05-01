@@ -1,166 +1,450 @@
 /**
  * lib/routing.ts
  *
- * Multi-leg routing logic.
+ * WorldWide Rush-style plane routing.
  *
- * Rules:
- *   - A route is DIRECT if demand.dist_nm <= plane.range_nm
- *   - A route is CONNECTING if a mid-point airport exists where
- *     leg1 (origin→via) AND leg2 (via→dest) are each <= plane.range_nm
- *   - Player only needs to OWN the origin hub — not the via or dest
- *   - Revenue uses total_dist_nm (both legs combined)
- *   - Daily flights use the LONGEST leg (bottleneck determines turnaround)
- *   - Connecting adds a 1h ground stop at the via airport
+ * CORE IDEA:
+ *   - Keep routing readable and game-like.
+ *   - Prefer DIRECT routes.
+ *   - If direct is not possible, find one clean connection.
+ *   - Do not overwhelm the player with 30 route options.
+ *   - Passenger movement should feel like:
+ *       demand appears → assign plane → plane carries pax → demand completes
  */
 
 import type { Airport } from "@/store";
 
-const TURNAROUND_H = 1; // hours on ground at each end
-const GROUND_STOP_H = 1; // extra ground stop at connecting airport
+const TURNAROUND_H = 1;
+const CONNECTION_STOP_H = 1.5;
+
+const MAX_CONNECTION_OPTIONS = 5;
+const MAX_DETOUR_PCT = 60;
 
 export interface DirectRoute {
   type: "direct";
-  distNm: number; // total distance
-  maxLegNm: number; // = distNm (just one leg)
+  canServe: true;
+  distNm: number;
+  maxLegNm: number;
   dailyFlights: number;
+  routeLabel: string;
+  stops: Airport[];
+  travelTimeH: number;
 }
 
 export interface ConnectingRoute {
   type: "connecting";
+  canServe: true;
   via: Airport;
-  leg1Nm: number; // origin → via
-  leg2Nm: number; // via → dest
-  distNm: number; // leg1 + leg2 (total billed distance)
-  maxLegNm: number; // max(leg1, leg2) — determines turnaround
+  leg1Nm: number;
+  leg2Nm: number;
+  distNm: number;
+  maxLegNm: number;
   dailyFlights: number;
-  detourPct: number; // how much longer than direct (0 = same)
+  detourPct: number;
+  routeLabel: string;
+  stops: Airport[];
+  travelTimeH: number;
+}
+
+export interface BlockedRoute {
+  type: "blocked";
+  canServe: false;
+  reason: "out_of_range" | "no_connection";
+  distNm: number;
+  maxLegNm: number;
+  dailyFlights: 0;
+  routeLabel: string;
+  stops: Airport[];
+  travelTimeH: 0;
 }
 
 export type RouteOption = DirectRoute | ConnectingRoute;
+export type RouteResult = RouteOption | BlockedRoute;
 
 // ─────────────────────────────────────────────────────────────────
-// HAVERSINE DISTANCE
+// DISTANCE
 // ─────────────────────────────────────────────────────────────────
 
 export function distNm(a: Airport, b: Airport): number {
   const R = 3440.065;
   const dLat = ((b.lat - a.lat) * Math.PI) / 180;
   const dLng = ((b.lng - a.lng) * Math.PI) / 180;
+
   const x =
     Math.sin(dLat / 2) ** 2 +
     Math.cos((a.lat * Math.PI) / 180) *
       Math.cos((b.lat * Math.PI) / 180) *
       Math.sin(dLng / 2) ** 2;
+
   return Math.round(R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x)));
 }
 
 // ─────────────────────────────────────────────────────────────────
-// DAILY FLIGHTS
+// FLIGHT CADENCE
 // ─────────────────────────────────────────────────────────────────
 
-function calcDailyFlights(
-  maxLegNm: number,
+function calcTravelTimeH(
+  totalDistNm: number,
   speedKts: number,
-  extraStopH: number = 0,
+  connectionStops = 0,
 ): number {
-  const legH = maxLegNm / speedKts;
-  const cycleH = legH * 2 + TURNAROUND_H + extraStopH;
-  return Math.max(1, Math.floor(24 / cycleH));
+  return totalDistNm / speedKts + connectionStops * CONNECTION_STOP_H;
+}
+
+function calcDailyFlights(params: {
+  maxLegNm: number;
+  speedKts: number;
+  connectionStops?: number;
+}): number {
+  const { maxLegNm, speedKts, connectionStops = 0 } = params;
+
+  const oneWayH =
+    maxLegNm / speedKts + TURNAROUND_H + connectionStops * CONNECTION_STOP_H;
+
+  const roundTripH = oneWayH * 2;
+
+  return Math.max(1, Math.floor(24 / roundTripH));
 }
 
 // ─────────────────────────────────────────────────────────────────
-// FIND CONNECTING AIRPORTS
+// AIRPORT FILTERS
 // ─────────────────────────────────────────────────────────────────
 
-/**
- * Find all airports that can serve as a mid-point for origin→dest
- * given a plane with rangeNm.
- *
- * Filters by:
- *   - leg1 (origin→via) <= rangeNm
- *   - leg2 (via→dest)   <= rangeNm
- *   - via is not origin or dest
- *   - via is a scheduled international/major airport (tier = major)
- *   - total detour is not more than 50% longer than direct distance
- *
- * Returns sorted by total distance (shortest connection first).
- * Capped at 30 results to keep UI manageable.
- */
+function canBeConnectionAirport(airport: Airport): boolean {
+  return (
+    airport.tier === "mega" ||
+    airport.tier === "large" ||
+    airport.tier === "major"
+  );
+}
+
+function airportConnectionScore(airport: Airport): number {
+  const pax = airport.pax_annual_m ?? 0;
+
+  if (pax >= 40) return 100;
+  if (pax >= 10) return 70;
+  if (pax >= 2) return 40;
+
+  if (airport.tier === "mega") return 90;
+  if (airport.tier === "large") return 65;
+  if (airport.tier === "major") return 45;
+
+  return 10;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// DIRECT ROUTE
+// ─────────────────────────────────────────────────────────────────
+
+export function createDirectRoute(
+  origin: Airport,
+  dest: Airport,
+  speedKts: number,
+): DirectRoute {
+  const direct = distNm(origin, dest);
+
+  return {
+    type: "direct",
+    canServe: true,
+    distNm: direct,
+    maxLegNm: direct,
+    dailyFlights: calcDailyFlights({
+      maxLegNm: direct,
+      speedKts,
+    }),
+    routeLabel: `${origin.iata} → ${dest.iata}`,
+    stops: [origin, dest],
+    travelTimeH: calcTravelTimeH(direct, speedKts),
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────
+// CONNECTING ROUTES
+// ─────────────────────────────────────────────────────────────────
+
 export function findConnectingAirports(
   origin: Airport,
   dest: Airport,
   rangeNm: number,
   allAirports: Airport[],
   directNm: number,
+  speedKts: number = 450,
 ): ConnectingRoute[] {
   const results: ConnectingRoute[] = [];
 
   for (const via of allAirports) {
+    if (!via.iata) continue;
     if (via.iata === origin.iata) continue;
     if (via.iata === dest.iata) continue;
-    if (via.tier !== "major") continue; // only route through major airports
+    if (!canBeConnectionAirport(via)) continue;
 
-    const leg1 = distNm(origin, via);
-    const leg2 = distNm(via, dest);
+    const leg1Nm = distNm(origin, via);
+    const leg2Nm = distNm(via, dest);
 
-    if (leg1 > rangeNm) continue;
-    if (leg2 > rangeNm) continue;
+    if (leg1Nm > rangeNm) continue;
+    if (leg2Nm > rangeNm) continue;
 
-    const total = leg1 + leg2;
-    const detourPct = Math.round(((total - directNm) / directNm) * 100);
-    if (detourPct > 80) continue; // skip routes more than 80% longer
+    const totalNm = leg1Nm + leg2Nm;
+    const detourPct = Math.round(((totalNm - directNm) / directNm) * 100);
 
-    const maxLeg = Math.max(leg1, leg2);
-    const flights = calcDailyFlights(maxLeg, 450, GROUND_STOP_H); // 450kts avg
+    if (detourPct < 0) continue;
+    if (detourPct > MAX_DETOUR_PCT) continue;
+
+    const maxLegNm = Math.max(leg1Nm, leg2Nm);
 
     results.push({
       type: "connecting",
+      canServe: true,
       via,
-      leg1Nm: leg1,
-      leg2Nm: leg2,
-      distNm: total,
-      maxLegNm: maxLeg,
-      dailyFlights: flights,
+      leg1Nm,
+      leg2Nm,
+      distNm: totalNm,
+      maxLegNm,
+      dailyFlights: calcDailyFlights({
+        maxLegNm,
+        speedKts,
+        connectionStops: 1,
+      }),
       detourPct,
+      routeLabel: `${origin.iata} → ${via.iata} → ${dest.iata}`,
+      stops: [origin, via, dest],
+      travelTimeH: calcTravelTimeH(totalNm, speedKts, 1),
     });
   }
 
-  // Sort by total distance (shortest = least detour)
-  results.sort((a, b) => a.distNm - b.distNm);
-  return results.slice(0, 30);
+  results.sort((a, b) => {
+    const scoreA = a.detourPct - airportConnectionScore(a.via) / 20;
+    const scoreB = b.detourPct - airportConnectionScore(b.via) / 20;
+    return scoreA - scoreB;
+  });
+
+  return results.slice(0, MAX_CONNECTION_OPTIONS);
 }
 
 // ─────────────────────────────────────────────────────────────────
-// REVENUE ESTIMATE FOR DISPLAY
+// BEST ROUTE
+// This is the main function you should use in-game.
 // ─────────────────────────────────────────────────────────────────
 
-/**
- * Estimate daily revenue for a route option.
- * Uses total distance for yield (passengers pay full journey).
- * Uses daily flights from the longest leg.
- */
+export function findBestRoute(params: {
+  origin: Airport;
+  dest: Airport;
+  planeRangeNm: number;
+  planeSpeedKts: number;
+  allAirports: Airport[];
+  allowConnections?: boolean;
+}): RouteResult {
+  const {
+    origin,
+    dest,
+    planeRangeNm,
+    planeSpeedKts,
+    allAirports,
+    allowConnections = true,
+  } = params;
+
+  const directNm = distNm(origin, dest);
+
+  if (directNm <= planeRangeNm) {
+    return createDirectRoute(origin, dest, planeSpeedKts);
+  }
+
+  if (!allowConnections) {
+    return {
+      type: "blocked",
+      canServe: false,
+      reason: "out_of_range",
+      distNm: directNm,
+      maxLegNm: directNm,
+      dailyFlights: 0,
+      routeLabel: `${origin.iata} → ${dest.iata}`,
+      stops: [origin, dest],
+      travelTimeH: 0,
+    };
+  }
+
+  const connections = findConnectingAirports(
+    origin,
+    dest,
+    planeRangeNm,
+    allAirports,
+    directNm,
+    planeSpeedKts,
+  );
+
+  if (connections.length > 0) {
+    return connections[0];
+  }
+
+  return {
+    type: "blocked",
+    canServe: false,
+    reason: "no_connection",
+    distNm: directNm,
+    maxLegNm: directNm,
+    dailyFlights: 0,
+    routeLabel: `${origin.iata} → ${dest.iata}`,
+    stops: [origin, dest],
+    travelTimeH: 0,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────
+// ROUTE OPTIONS FOR UI
+// Use this when showing route choices to player.
+// ─────────────────────────────────────────────────────────────────
+
+export function getRouteOptions(params: {
+  origin: Airport;
+  dest: Airport;
+  planeRangeNm: number;
+  planeSpeedKts: number;
+  allAirports: Airport[];
+  allowConnections?: boolean;
+}): RouteResult[] {
+  const {
+    origin,
+    dest,
+    planeRangeNm,
+    planeSpeedKts,
+    allAirports,
+    allowConnections = true,
+  } = params;
+
+  const directNm = distNm(origin, dest);
+
+  if (directNm <= planeRangeNm) {
+    return [createDirectRoute(origin, dest, planeSpeedKts)];
+  }
+
+  if (!allowConnections) {
+    return [
+      {
+        type: "blocked",
+        canServe: false,
+        reason: "out_of_range",
+        distNm: directNm,
+        maxLegNm: directNm,
+        dailyFlights: 0,
+        routeLabel: `${origin.iata} → ${dest.iata}`,
+        stops: [origin, dest],
+        travelTimeH: 0,
+      },
+    ];
+  }
+
+  const connections = findConnectingAirports(
+    origin,
+    dest,
+    planeRangeNm,
+    allAirports,
+    directNm,
+    planeSpeedKts,
+  );
+
+  if (connections.length > 0) return connections;
+
+  return [
+    {
+      type: "blocked",
+      canServe: false,
+      reason: "no_connection",
+      distNm: directNm,
+      maxLegNm: directNm,
+      dailyFlights: 0,
+      routeLabel: `${origin.iata} → ${dest.iata}`,
+      stops: [origin, dest],
+      travelTimeH: 0,
+    },
+  ];
+}
+
+// ─────────────────────────────────────────────────────────────────
+// WORLDWIDE RUSH-STYLE REVENUE ESTIMATE
+// For display only.
+// Real reward should still come from lib/revenue.ts.
+// ─────────────────────────────────────────────────────────────────
+
 export function estimateRouteRevenue(
   paxDay: number,
-  option: RouteOption,
+  option: RouteResult,
   paxCap: number,
   speedKts: number,
   trustPct: number,
-  haul: string,
+  _haul: string,
 ): { dailyRev: number; fillPct: number } {
+  if (!option.canServe) {
+    return {
+      dailyRev: 0,
+      fillPct: 0,
+    };
+  }
+
   const flights =
     option.type === "direct"
-      ? calcDailyFlights(option.distNm, speedKts)
-      : calcDailyFlights(option.maxLegNm, speedKts, GROUND_STOP_H);
+      ? calcDailyFlights({
+          maxLegNm: option.maxLegNm,
+          speedKts,
+        })
+      : calcDailyFlights({
+          maxLegNm: option.maxLegNm,
+          speedKts,
+          connectionStops: 1,
+        });
 
   const capacity = paxCap * flights;
   const paxCarried = Math.min(paxDay, capacity);
-  const fillPct = Math.min(100, Math.round((paxCarried / paxDay) * 100));
+  const fillPct =
+    paxDay > 0 ? Math.min(100, Math.round((paxCarried / paxDay) * 100)) : 0;
 
-  const base = haul === "short" ? 0.12 : haul === "medium" ? 0.09 : 0.07;
-  const distFactor = Math.sqrt(option.distNm / 500);
-  const trustBonus = 1 + (trustPct / 100) * 0.5;
-  const ypp = base * distFactor * trustBonus;
-  const dailyRev = Math.round(paxCarried * ypp * option.distNm);
+  const trustMultiplier =
+    0.9 + (Math.max(0, Math.min(100, trustPct)) / 100) * 0.35;
 
-  return { dailyRev, fillPct };
+  const distanceMultiplier =
+    option.distNm < 500
+      ? 18
+      : option.distNm < 1_500
+        ? 32
+        : option.distNm < 3_500
+          ? 58
+          : 110;
+
+  const connectionPenalty = option.type === "connecting" ? 0.9 : 1.0;
+
+  const dailyRev = Math.round(
+    paxCarried * distanceMultiplier * trustMultiplier * connectionPenalty,
+  );
+
+  return {
+    dailyRev,
+    fillPct,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────
+// UI HELPERS
+// ─────────────────────────────────────────────────────────────────
+
+export function formatRouteTime(hours: number): string {
+  if (hours <= 0) return "—";
+
+  const h = Math.floor(hours);
+  const m = Math.round((hours - h) * 60);
+
+  if (h <= 0) return `${m}m`;
+  if (m <= 0) return `${h}h`;
+
+  return `${h}h ${m}m`;
+}
+
+export function routeDifficulty(
+  option: RouteResult,
+): "easy" | "medium" | "hard" | "blocked" {
+  if (!option.canServe) return "blocked";
+
+  if (option.type === "direct" && option.distNm < 1_000) return "easy";
+  if (option.type === "direct") return "medium";
+
+  if (option.detourPct <= 25) return "medium";
+  return "hard";
 }

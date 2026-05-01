@@ -18,6 +18,8 @@ import LoadingScreen from "@/components/ui/LoadingScreen";
 import MissionsPill from "@/components/ui/MissionsPill";
 import RouteCreationBanner from "@/components/ui/RouteCreationBanner";
 import ToastStack from "@/components/ui/ToastStack";
+import { useAICompetition } from "@/hooks/useAICompetition";
+import { useAITick } from "@/hooks/useAITick";
 import { useAchievementChecker } from "@/hooks/useAchievementChecker";
 import { useDailyEvents } from "@/hooks/useDailyEvents";
 import { useGameClock } from "@/hooks/useGameClock";
@@ -45,6 +47,8 @@ function GameContent() {
   useNotifications();
   useRateUs();
   useLeaderboardPush();
+  useAITick();
+  useAICompetition();
 
   const loadComplete = useLoadComplete();
   const loadSteps = useLoadSteps();

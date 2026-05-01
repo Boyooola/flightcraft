@@ -1,14 +1,12 @@
 /**
  * components/ui/AwayEarningsCard.tsx
  *
- * Shown when player returns to the app after being away.
- * Slides up from bottom, shows days elapsed + earnings/loss.
- * Dismisses after 6s or on tap.
+ * WorldWide Rush-style away earnings card.
  */
 
 import { Colors, Radius, Spacing } from "@/constants/theme";
 import { fmtCash } from "@/lib/revenue";
-import { useAirline, useAwayEarnings, useGameStore } from "@/store";
+import { useAwayEarnings, useGameStore } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -21,33 +19,32 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const TAB_H = 72;
-const HOLD_MS = 6000;
-const SLIDE_MS = 300;
+const HOLD_MS = 4200;
+const SLIDE_MS = 220;
 
 export default function AwayEarningsCard() {
   const insets = useSafeAreaInsets();
   const awayEarnings = useAwayEarnings();
-  const airline = useAirline();
   const setAway = useGameStore((s) => s.setAwayEarnings);
 
-  const slideY = useRef(new Animated.Value(300)).current;
+  const slideY = useRef(new Animated.Value(260)).current;
   const opacity = useRef(new Animated.Value(0)).current;
+  const scale = useRef(new Animated.Value(0.96)).current;
   const progress = useRef(new Animated.Value(1)).current;
+
   const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const progAnim = useRef<Animated.CompositeAnimation | null>(null);
   const [shown, setShown] = useState(false);
 
   const bottom = insets.bottom + TAB_H + Spacing.sm;
-  const color = airline?.color ?? Colors.sky;
-  const isGain = (awayEarnings?.amount ?? 0) >= 0;
-  const accent = isGain ? "#22c55e" : "#ef4444";
 
-  function dismiss() {
+  const dismiss = () => {
     if (holdTimer.current) clearTimeout(holdTimer.current);
     if (progAnim.current) progAnim.current.stop();
+
     Animated.parallel([
       Animated.timing(slideY, {
-        toValue: 300,
+        toValue: 260,
         duration: SLIDE_MS,
         useNativeDriver: true,
       }),
@@ -56,24 +53,37 @@ export default function AwayEarningsCard() {
         duration: SLIDE_MS,
         useNativeDriver: true,
       }),
+      Animated.timing(scale, {
+        toValue: 0.96,
+        duration: SLIDE_MS,
+        useNativeDriver: true,
+      }),
     ]).start(() => {
       setShown(false);
       setAway(null);
-      slideY.setValue(300);
+      slideY.setValue(260);
       opacity.setValue(0);
+      scale.setValue(0.96);
       progress.setValue(1);
     });
-  }
+  };
 
   useEffect(() => {
     if (!awayEarnings || shown) return;
+
     setShown(true);
 
     Animated.parallel([
       Animated.spring(slideY, {
         toValue: 0,
-        friction: 9,
-        tension: 70,
+        friction: 8,
+        tension: 90,
+        useNativeDriver: true,
+      }),
+      Animated.spring(scale, {
+        toValue: 1,
+        friction: 8,
+        tension: 100,
         useNativeDriver: true,
       }),
       Animated.timing(opacity, {
@@ -88,76 +98,60 @@ export default function AwayEarningsCard() {
       duration: HOLD_MS,
       useNativeDriver: false,
     });
-    progAnim.current.start();
 
+    progAnim.current.start();
     holdTimer.current = setTimeout(dismiss, HOLD_MS);
   }, [awayEarnings]);
 
   if (!awayEarnings || !shown) return null;
 
   const { days, amount } = awayEarnings;
+  const isGain = amount >= 0;
+  const accent = isGain ? "#22c55e" : "#ef4444";
+  const perDay = Math.round(Math.abs(amount) / Math.max(1, days));
 
   return (
     <Animated.View
-      style={[s.wrap, { bottom, opacity, transform: [{ translateY: slideY }] }]}
+      style={[
+        s.wrap,
+        {
+          bottom,
+          opacity,
+          transform: [{ translateY: slideY }, { scale }],
+        },
+      ]}
     >
       <TouchableOpacity
-        style={[s.card, { borderColor: color + "44" }]}
+        style={[s.card, { borderColor: accent + "44" }]}
         onPress={dismiss}
-        activeOpacity={0.95}
+        activeOpacity={0.94}
       >
-        {/* Icon + header */}
-        <View style={s.header}>
-          <View style={[s.iconWrap, { backgroundColor: color + "18" }]}>
-            <Ionicons name="airplane" size={20} color={color} />
-          </View>
-          <View style={s.headerText}>
-            <Text style={[s.welcome, { color }]}>Welcome back!</Text>
-            <Text style={s.subtitle}>
-              {days} game-day{days !== 1 ? "s" : ""} passed while you were away
-            </Text>
-          </View>
-          <Ionicons name="close" size={14} color={Colors.dim} />
+        <View style={[s.icon, { backgroundColor: accent + "18" }]}>
+          <Ionicons
+            name={isGain ? "flash-outline" : "warning-outline"}
+            size={20}
+            color={accent}
+          />
         </View>
 
-        <View style={s.divider} />
-
-        {/* Earnings row */}
-        <View style={s.earningsRow}>
-          <View style={s.earningsLeft}>
-            <Ionicons
-              name={isGain ? "trending-up-outline" : "trending-down-outline"}
-              size={16}
-              color={accent}
-            />
-            <Text style={s.earningsLabel}>
-              {isGain ? "Revenue earned" : "Net loss"}
-            </Text>
-          </View>
-          <Text style={[s.earningsAmount, { color: accent }]}>
+        <View style={s.body}>
+          <Text style={[s.label, { color: accent }]}>WELCOME BACK</Text>
+          <Text style={[s.amount, { color: accent }]}>
             {isGain ? "+" : "-"}
             {fmtCash(Math.abs(amount))}
           </Text>
-        </View>
-
-        {/* Days detail */}
-        <View style={s.detailRow}>
-          <Ionicons name="time-outline" size={12} color={Colors.dim} />
-          <Text style={s.detailTxt}>
-            {days} day{days !== 1 ? "s" : ""} × ~
-            {fmtCash(Math.abs(Math.round(amount / Math.max(1, days))))} per day
+          <Text style={s.sub}>
+            {days} day{days !== 1 ? "s" : ""} away · {fmtCash(perDay)}/day
           </Text>
         </View>
 
-        {/* Tap hint */}
-        <Text style={s.tapHint}>Tap anywhere to dismiss</Text>
+        <Ionicons name="close" size={14} color={Colors.dim} />
 
-        {/* Progress bar */}
         <Animated.View
           style={[
             s.progress,
             {
-              backgroundColor: color,
+              backgroundColor: accent,
               width: progress.interpolate({
                 inputRange: [0, 1],
                 outputRange: ["0%", "100%"],
@@ -175,70 +169,54 @@ const s = StyleSheet.create({
     position: "absolute",
     left: Spacing.md,
     right: Spacing.md,
-    zIndex: 70, // above everything except modals
+    zIndex: 70,
   },
   card: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
     backgroundColor: "rgba(8,15,30,0.98)",
     borderRadius: Radius.xl,
     borderWidth: 1,
     paddingHorizontal: Spacing.md,
-    paddingTop: Spacing.md,
-    paddingBottom: Spacing.md + 4,
+    paddingVertical: Spacing.sm + 2,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.5,
-    shadowRadius: 16,
+    shadowOpacity: 0.45,
+    shadowRadius: 14,
     elevation: 12,
     overflow: "hidden",
   },
-
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.sm,
-    marginBottom: Spacing.sm,
-  },
-  iconWrap: {
+  icon: {
     width: 40,
     height: 40,
-    borderRadius: 10,
+    borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
-    flexShrink: 0,
   },
-  headerText: { flex: 1, gap: 2 },
-  welcome: { fontSize: 15, fontWeight: "700" },
-  subtitle: { fontSize: 11, color: Colors.muted },
-
-  divider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: Colors.border,
-    marginBottom: Spacing.sm,
+  body: {
+    flex: 1,
+    minWidth: 0,
   },
-
-  earningsRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 4,
+  label: {
+    fontSize: 8,
+    fontWeight: "900",
+    letterSpacing: 1.8,
   },
-  earningsLeft: { flexDirection: "row", alignItems: "center", gap: 6 },
-  earningsLabel: { fontSize: 13, color: Colors.text, fontWeight: "600" },
-  earningsAmount: { fontSize: 22, fontWeight: "700" },
-
-  detailRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    marginBottom: Spacing.sm,
+  amount: {
+    fontSize: 23,
+    fontWeight: "900",
+    marginTop: 1,
   },
-  detailTxt: { fontSize: 10, color: Colors.dim },
-
-  tapHint: {
-    fontSize: 9,
+  sub: {
+    fontSize: 10,
     color: Colors.dim,
-    textAlign: "center",
-    opacity: 0.6,
+    fontWeight: "700",
   },
-  progress: { position: "absolute", bottom: 0, left: 0, height: 3 },
+  progress: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    height: 3,
+  },
 });

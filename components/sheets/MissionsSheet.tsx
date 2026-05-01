@@ -1,9 +1,7 @@
 /**
  * components/sheets/MissionsSheet.tsx
  *
- * Today's 3 missions with LIVE progress bars.
- * Progress computed in real-time from store — no need to wait for day tick.
- * Reward still credited at day advance, but player sees completion immediately.
+ * Worldwide Rush-style mission board.
  */
 
 import { Colors, Radius, Spacing } from "@/constants/theme";
@@ -31,26 +29,21 @@ import { useMemo } from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
 const GREEN = "#22c55e";
+const AMBER = "#F59E0B";
 
 const MISSION_ICONS: Record<string, string> = {
   route_create: "airplane-outline",
   pax_carry: "people-outline",
-  revenue_earn: "trending-up-outline",
+  revenue_earn: "cash-outline",
   trust_grow: "heart-outline",
   loan_repay: "shield-checkmark-outline",
-  hub_buy: "location-outline",
   fill_rate: "speedometer-outline",
   clear_crowding: "alert-circle-outline",
   plane_buy: "construct-outline",
   no_crowding: "checkmark-done-outline",
 };
 
-// ─── Compute live progress 0-1 for a mission ─────────────────────
-
-function useMissionProgress(mission: Mission): {
-  progress: number; // 0.0 → 1.0
-  liveComplete: boolean;
-} {
+function useMissionProgress(mission: Mission) {
   const demands = useDemands();
   const routes = useRoutes();
   const hubs = useHubs();
@@ -59,62 +52,64 @@ function useMissionProgress(mission: Mission): {
   const boughtPlane = useBoughtPlaneToday();
 
   return useMemo(() => {
-    if (mission.completed) return { progress: 1, liveComplete: true };
+    if (mission.completed) return { progress: 1, complete: true };
     const t = mission.target;
 
     switch (mission.type) {
       case "route_create": {
-        if (t.originIata && t.destIata) {
-          const found = routes.some(
-            (r) =>
-              r.active &&
-              r.demand.origin.iata === t.originIata &&
-              r.demand.dest.iata === t.destIata,
-          );
-          return { progress: found ? 1 : 0, liveComplete: found };
-        }
-        const found = routes.some((r) => r.active && r.demand.haul === t.haul);
-        return { progress: found ? 1 : 0, liveComplete: found };
+        const found =
+          t.originIata && t.destIata
+            ? routes.some(
+                (r) =>
+                  r.active &&
+                  r.demand.origin.iata === t.originIata &&
+                  r.demand.dest.iata === t.destIata,
+              )
+            : routes.some((r) => r.active && r.demand.haul === t.haul);
+
+        return { progress: found ? 1 : 0, complete: found };
       }
 
       case "pax_carry": {
-        const total = demands.reduce(
-          (s, d) => s + (d.delivered_pax_today ?? 0),
+        const moved = demands.reduce(
+          (sum, d) => sum + (d.delivered_pax_today ?? 0),
           0,
         );
-        const prog = Math.min(1, total / (t.paxTarget ?? 1));
-        return { progress: prog, liveComplete: prog >= 1 };
+        const progress = Math.min(1, moved / (t.paxTarget ?? 1));
+        return { progress, complete: progress >= 1 };
       }
 
       case "revenue_earn": {
         const day = airline?.day ?? 1;
-        const rev = ledger
+        const earned = ledger
           .filter(
             (e) =>
               e.day === day &&
               e.type === "revenue" &&
               !e.label.startsWith("Mission:"),
           )
-          .reduce((s, e) => s + e.amount, 0);
-        // Floor at 0 — negative net revenue doesn't drain the bar
-        const prog = Math.max(0, Math.min(1, rev / (t.revenueTarget ?? 1)));
-        return { progress: prog, liveComplete: prog >= 1 };
+          .reduce((sum, e) => sum + e.amount, 0);
+
+        const progress = Math.max(
+          0,
+          Math.min(1, earned / (t.revenueTarget ?? 1)),
+        );
+
+        return { progress, complete: progress >= 1 };
       }
 
       case "trust_grow": {
         const hub = hubs.find((h) => h.airport.iata === t.hubIata);
-        const prog = hub ? Math.min(1, hub.trust / (t.trustTarget ?? 1)) : 0;
-        return { progress: prog, liveComplete: prog >= 1 };
+        const progress = hub
+          ? Math.min(1, hub.trust / (t.trustTarget ?? 1))
+          : 0;
+        return { progress, complete: progress >= 1 };
       }
 
       case "loan_repay": {
-        // Progress = how much loan has dropped vs the repay target
-        // We approximate using current loan vs stored loan on airline
-        // Full completion only confirmed at day tick via loanRepaidRef
         const currentLoan = airline?.loan ?? 0;
-        if (currentLoan <= 0) return { progress: 1, liveComplete: true };
-        // Show indeterminate — repay missions complete at day advance
-        return { progress: 0.5, liveComplete: false };
+        if (currentLoan <= 0) return { progress: 1, complete: true };
+        return { progress: 0.5, complete: false };
       }
 
       case "fill_rate": {
@@ -122,27 +117,28 @@ function useMissionProgress(mission: Mission): {
           if (d.pax_day <= 0) return max;
           return Math.max(max, (d.delivered_pax_today ?? 0) / d.pax_day);
         }, 0);
-        const prog = Math.min(1, best / ((t.fillTarget ?? 100) / 100));
-        return { progress: prog, liveComplete: prog >= 1 };
+
+        const progress = Math.min(1, best / ((t.fillTarget ?? 100) / 100));
+        return { progress, complete: progress >= 1 };
       }
 
       case "clear_crowding": {
-        // Simplified — check if the overcrowded hub has more served routes now
-        const overcrowdedDemands = demands.filter(
+        const remaining = demands.filter(
           (d) => d.hub_iata === t.crowdHubIata && d.status === "pending",
         );
-        const done = overcrowdedDemands.length === 0;
-        return { progress: done ? 1 : 0.5, liveComplete: done };
+
+        const complete = remaining.length === 0;
+        return { progress: complete ? 1 : 0.5, complete };
       }
 
       case "plane_buy":
-        return { progress: boughtPlane ? 1 : 0, liveComplete: boughtPlane };
+        return { progress: boughtPlane ? 1 : 0, complete: boughtPlane };
 
       case "no_crowding":
-        return { progress: 0, liveComplete: false };
+        return { progress: 0, complete: false };
 
       default:
-        return { progress: 0, liveComplete: false };
+        return { progress: 0, complete: false };
     }
   }, [
     mission,
@@ -155,318 +151,182 @@ function useMissionProgress(mission: Mission): {
   ]);
 }
 
-// ─── Mission Card ─────────────────────────────────────────────────
-
 function MissionCard({ mission, color }: { mission: Mission; color: string }) {
-  const { progress, liveComplete } = useMissionProgress(mission);
-  const isComplete = mission.completed || liveComplete;
-  const accent = isComplete ? GREEN : color;
-  const icon = MISSION_ICONS[mission.type] ?? "checkmark-outline";
-  const progressPct = Math.round(progress * 100);
+  const { progress, complete } = useMissionProgress(mission);
+  const done = mission.completed || complete;
+  const accent = done ? GREEN : color;
+  const icon = MISSION_ICONS[mission.type] ?? "flag-outline";
+  const pct = Math.round(progress * 100);
 
   return (
     <View
       style={[
         mc.card,
-        isComplete && {
+        done && {
           borderColor: GREEN + "44",
-          backgroundColor: GREEN + "06",
+          backgroundColor: GREEN + "07",
         },
-        !isComplete && { borderColor: Colors.border },
       ]}
     >
       <View style={[mc.stripe, { backgroundColor: accent }]} />
+
       <View style={mc.body}>
-        {/* Top row */}
-        <View style={mc.topRow}>
-          <View style={[mc.iconWrap, { backgroundColor: accent + "18" }]}>
-            <Ionicons name={icon as any} size={16} color={accent} />
+        <View style={mc.top}>
+          <View style={[mc.icon, { backgroundColor: accent + "18" }]}>
+            <Ionicons name={icon as any} size={17} color={accent} />
           </View>
-          <View style={mc.titleWrap}>
-            <Text
-              style={[
-                mc.title,
-                isComplete && {
-                  color: Colors.dim,
-                  textDecorationLine: "line-through",
-                },
-              ]}
-            >
-              {mission.title}
-            </Text>
+
+          <View style={{ flex: 1 }}>
+            <View style={mc.titleRow}>
+              <Text style={[mc.title, done && mc.doneTitle]} numberOfLines={1}>
+                {mission.title}
+              </Text>
+              <View
+                style={[
+                  mc.status,
+                  {
+                    backgroundColor: accent + "15",
+                    borderColor: accent + "33",
+                  },
+                ]}
+              >
+                <Text style={[mc.statusText, { color: accent }]}>
+                  {done ? "CLEARED" : "ACTIVE"}
+                </Text>
+              </View>
+            </View>
+
             <Text style={mc.desc} numberOfLines={2}>
               {mission.desc}
             </Text>
           </View>
-          {isComplete && (
-            <Ionicons name="checkmark-circle" size={22} color={GREEN} />
-          )}
         </View>
 
-        {/* Progress bar — always visible */}
-        <View style={mc.progRow}>
-          <View style={mc.progTrack}>
+        <View style={mc.progressRow}>
+          <View style={mc.track}>
             <View
               style={[
-                mc.progFill,
+                mc.fill,
                 {
-                  width: `${progressPct}%` as any,
+                  width: `${pct}%` as any,
                   backgroundColor: accent,
                 },
               ]}
             />
           </View>
-          <Text style={[mc.progPct, { color: accent }]}>{progressPct}%</Text>
+          <Text style={[mc.pct, { color: accent }]}>{pct}%</Text>
         </View>
 
-        {/* Reward + status */}
-        <View style={mc.rewardRow}>
+        <View style={mc.footer}>
           <View
             style={[
-              mc.rewardBadge,
-              { backgroundColor: accent + "12", borderColor: accent + "33" },
+              mc.reward,
+              {
+                backgroundColor: accent + "12",
+                borderColor: accent + "33",
+              },
             ]}
           >
             <Ionicons name="cash-outline" size={11} color={accent} />
-            <Text style={[mc.rewardTxt, { color: accent }]}>
+            <Text style={[mc.rewardText, { color: accent }]}>
               {fmtCash(mission.reward)}
             </Text>
           </View>
-          {isComplete && !mission.completed && (
-            <Text style={mc.pendingNote}>Reward on day advance →</Text>
-          )}
-          {mission.completed && (
-            <Text style={[mc.pendingNote, { color: GREEN }]}>✓ Earned</Text>
-          )}
+
+          <Text style={[mc.note, done && { color: GREEN }]}>
+            {mission.completed
+              ? "Reward earned"
+              : done
+                ? "Reward on day advance"
+                : "Clear this contract"}
+          </Text>
         </View>
       </View>
     </View>
   );
 }
 
-const mc = StyleSheet.create({
-  card: {
-    flexDirection: "row",
-    borderRadius: Radius.xl,
-    borderWidth: 1,
-    overflow: "hidden",
-    marginBottom: Spacing.sm,
-  },
-  stripe: { width: 4 },
-  body: { flex: 1, padding: Spacing.md, gap: Spacing.sm },
-  topRow: { flexDirection: "row", alignItems: "flex-start", gap: Spacing.sm },
-  iconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    alignItems: "center",
-    justifyContent: "center",
-    flexShrink: 0,
-  },
-  titleWrap: { flex: 1, gap: 2 },
-  title: {
-    fontSize: 14,
-    color: Colors.text,
-    fontWeight: "700",
-    lineHeight: 19,
-  },
-  desc: { fontSize: 11, color: Colors.dim, lineHeight: 16 },
-  progRow: { flexDirection: "row", alignItems: "center", gap: Spacing.sm },
-  progTrack: {
-    flex: 1,
-    height: 4,
-    backgroundColor: "rgba(255,255,255,.08)",
-    borderRadius: 2,
-    overflow: "hidden",
-  },
-  progFill: { height: "100%", borderRadius: 2 },
-  progPct: {
-    fontSize: 10,
-    fontWeight: "700",
-    minWidth: 32,
-    textAlign: "right",
-  },
-  rewardRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  rewardBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    borderRadius: Radius.full,
-    borderWidth: 1,
-    paddingHorizontal: 9,
-    paddingVertical: 3,
-  },
-  rewardTxt: { fontSize: 11, fontWeight: "700" },
-  pendingNote: { fontSize: 9, color: Colors.dim },
-});
-
-// ─── Weekly Challenge Card ────────────────────────────────────────
-
 function WeeklyChallengeCard({
   challenge,
-  color,
   onComplete,
   completing,
 }: {
   challenge: import("@/hooks/useWeeklyChallenge").WeeklyChallenge;
-  color: string;
   onComplete: () => void;
   completing: boolean;
 }) {
   const progress = useWeeklyProgress(challenge);
   const pct = Math.round(progress * 100);
-  const accent = "#F59E0B"; // amber — weekly is special
+  const done = challenge.completed;
 
   return (
     <View
       style={[
         wc.card,
-        challenge.completed && {
-          borderColor: "#22c55e44",
-          backgroundColor: "#22c55e06",
+        done && {
+          borderColor: GREEN + "44",
+          backgroundColor: GREEN + "07",
         },
       ]}
     >
       <View style={wc.stripe} />
+
       <View style={wc.body}>
-        <View style={wc.hdr}>
-          <View
-            style={[
-              wc.badge,
-              { backgroundColor: accent + "18", borderColor: accent + "44" },
-            ]}
-          >
-            <Text style={[wc.badgeTxt, { color: accent }]}>
-              WEEKLY CHALLENGE
-            </Text>
-          </View>
-          {challenge.completed && (
-            <Ionicons name="checkmark-circle" size={16} color="#22c55e" />
-          )}
+        <View style={wc.badge}>
+          <Text style={wc.badgeText}>WEEKLY RUSH</Text>
         </View>
+
         <View style={wc.titleRow}>
-          <View style={[wc.iconWrap, { backgroundColor: accent + "18" }]}>
-            <Ionicons name={challenge.icon as any} size={16} color={accent} />
+          <View style={wc.icon}>
+            <Ionicons name={challenge.icon as any} size={17} color={AMBER} />
           </View>
           <Text style={wc.title}>{challenge.title}</Text>
         </View>
+
         <Text style={wc.desc}>{challenge.desc}</Text>
-        <View style={wc.progRow}>
-          <View style={wc.progTrack}>
+
+        <View style={wc.progressRow}>
+          <View style={wc.track}>
             <View
               style={[
-                wc.progFill,
-                { width: `${pct}%` as any, backgroundColor: accent },
+                wc.fill,
+                {
+                  width: `${pct}%` as any,
+                  backgroundColor: done ? GREEN : AMBER,
+                },
               ]}
             />
           </View>
-          <Text style={[wc.pct, { color: accent }]}>{pct}%</Text>
+          <Text style={[wc.pct, { color: done ? GREEN : AMBER }]}>{pct}%</Text>
         </View>
+
         <View style={wc.footer}>
-          <View
-            style={[
-              wc.reward,
-              { backgroundColor: accent + "12", borderColor: accent + "33" },
-            ]}
-          >
-            <Ionicons name="cash-outline" size={11} color={accent} />
-            <Text style={[wc.rewardTxt, { color: accent }]}>
-              {fmtCash(challenge.reward)} reward
-            </Text>
+          <View style={wc.reward}>
+            <Ionicons name="cash-outline" size={11} color={AMBER} />
+            <Text style={wc.rewardText}>{fmtCash(challenge.reward)}</Text>
           </View>
-          {!challenge.completed && progress >= 1 && (
+
+          {!done && progress >= 1 ? (
             <TouchableOpacity
-              style={[wc.claimBtn, { backgroundColor: "#22c55e" }]}
+              style={wc.claimBtn}
               onPress={onComplete}
               disabled={completing}
               activeOpacity={0.85}
             >
-              <Text style={wc.claimTxt}>
-                {completing ? "Claiming..." : "Claim Reward"}
+              <Text style={wc.claimText}>
+                {completing ? "Claiming..." : "Claim"}
               </Text>
             </TouchableOpacity>
-          )}
-          {challenge.completed && (
-            <Text style={wc.earnedTxt}>✓ Earned this week</Text>
+          ) : (
+            <Text style={[wc.note, done && { color: GREEN }]}>
+              {done ? "Earned this week" : "Big weekly reward"}
+            </Text>
           )}
         </View>
       </View>
     </View>
   );
 }
-
-const wc = StyleSheet.create({
-  card: {
-    flexDirection: "row",
-    borderRadius: Radius.xl,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    overflow: "hidden",
-    marginBottom: Spacing.md,
-  },
-  stripe: { width: 4, backgroundColor: "#F59E0B" },
-  body: { flex: 1, padding: Spacing.md, gap: Spacing.sm },
-  hdr: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  badge: {
-    borderRadius: Radius.full,
-    borderWidth: 1,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-  },
-  badgeTxt: { fontSize: 7, fontWeight: "700", letterSpacing: 1.5 },
-  titleRow: { flexDirection: "row", alignItems: "center", gap: Spacing.sm },
-  iconWrap: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  title: { fontSize: 15, color: Colors.text, fontWeight: "700", flex: 1 },
-  desc: { fontSize: 11, color: Colors.muted, lineHeight: 16 },
-  progRow: { flexDirection: "row", alignItems: "center", gap: Spacing.sm },
-  progTrack: {
-    flex: 1,
-    height: 4,
-    backgroundColor: "rgba(255,255,255,.08)",
-    borderRadius: 2,
-    overflow: "hidden",
-  },
-  progFill: { height: "100%", borderRadius: 2 },
-  pct: { fontSize: 10, fontWeight: "700", minWidth: 32, textAlign: "right" },
-  footer: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  reward: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    borderRadius: Radius.full,
-    borderWidth: 1,
-    paddingHorizontal: 9,
-    paddingVertical: 3,
-  },
-  rewardTxt: { fontSize: 11, fontWeight: "700" },
-  claimBtn: {
-    borderRadius: Radius.md,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
-  },
-  claimTxt: { fontSize: 11, fontWeight: "700", color: "#fff" },
-  earnedTxt: { fontSize: 10, color: "#22c55e", fontWeight: "600" },
-});
-
-// ─── Missions Sheet ───────────────────────────────────────────────
 
 export default function MissionsSheet() {
   const missions = useDailyMissions();
@@ -494,12 +354,15 @@ export default function MissionsSheet() {
       ]}
       showsVerticalScrollIndicator={false}
     >
-      {/* Header */}
       <View style={s.header}>
         <View style={s.hdrL}>
-          <Ionicons name="flag-outline" size={20} color={color} />
-          <Text style={s.title}>Daily Missions</Text>
+          <Ionicons name="flash-outline" size={21} color={color} />
+          <View>
+            <Text style={s.title}>Mission Rush</Text>
+            <Text style={s.subtitle}>Clear contracts before day ends</Text>
+          </View>
         </View>
+
         <TouchableOpacity
           onPress={closeSheet}
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
@@ -508,23 +371,31 @@ export default function MissionsSheet() {
         </TouchableOpacity>
       </View>
 
-      {/* Day + dots */}
-      <View style={s.meta}>
+      <View
+        style={[s.hero, { borderColor: allDone ? GREEN + "44" : color + "44" }]}
+      >
         <View>
-          <Text style={s.dayTxt}>Day {day}</Text>
-          <Text style={s.dayNote}>
-            Progress updates live · Reward on day advance
+          <Text style={s.heroLabel}>DAY {day} CONTRACTS</Text>
+          <Text style={[s.heroValue, { color: allDone ? GREEN : color }]}>
+            {doneCount}/3
+          </Text>
+          <Text style={s.heroSub}>
+            {allDone
+              ? "Board cleared. Rewards soon."
+              : "Complete missions to boost your airline."}
           </Text>
         </View>
+
         <View style={s.dots}>
           {[0, 1, 2].map((i) => (
             <View
               key={i}
               style={[
                 s.dot,
-                i < doneCount
-                  ? { backgroundColor: GREEN }
-                  : { backgroundColor: "rgba(255,255,255,.12)" },
+                {
+                  backgroundColor:
+                    i < doneCount ? GREEN : "rgba(255,255,255,.14)",
+                },
               ]}
             />
           ))}
@@ -534,52 +405,56 @@ export default function MissionsSheet() {
       {allDone && (
         <View style={s.allDone}>
           <Ionicons name="trophy" size={14} color={GREEN} />
-          <Text style={s.allDoneTxt}>
-            All missions complete! Rewards credited on next day advance.
+          <Text style={s.allDoneText}>
+            Daily board cleared. Rewards credit on next day advance.
           </Text>
         </View>
       )}
 
-      <View style={s.divider} />
-
-      {/* ── Weekly Challenge ── */}
       {weekly && (
-        <WeeklyChallengeCard
-          challenge={weekly}
-          color={color}
-          onComplete={completeWeekly}
-          completing={completing}
-        />
+        <View style={s.cards}>
+          <WeeklyChallengeCard
+            challenge={weekly}
+            onComplete={completeWeekly}
+            completing={completing}
+          />
+        </View>
       )}
 
-      {/* Mission cards */}
+      <Text style={s.sectionTitle}>TODAY&apos;S CONTRACTS</Text>
+
       {missions.length === 0 ? (
         <View style={s.empty}>
           <Ionicons name="flag-outline" size={40} color={Colors.dim} />
-          <Text style={s.emptyTxt}>
+          <Text style={s.emptyText}>
             Missions generate at the start of each day.
           </Text>
         </View>
       ) : (
         <View style={s.cards}>
-          {missions.map((m) => (
-            <MissionCard key={m.id} mission={m} color={color} />
+          {missions.map((mission) => (
+            <MissionCard key={mission.id} mission={mission} color={color} />
           ))}
         </View>
       )}
 
       <View style={s.divider} />
 
-      {/* Stats */}
       <View style={s.stats}>
-        <Text style={s.eyebrow}>ALL TIME</Text>
+        <Text style={s.sectionTitleNoPad}>ALL-TIME RUSH</Text>
+
         <View style={s.statsRow}>
           <View style={s.statBox}>
             <Text style={[s.statVal, { color }]}>{completed}</Text>
-            <Text style={s.statLbl}>Missions Done</Text>
+            <Text style={s.statLbl}>Completed</Text>
           </View>
+
           <View style={s.statBox}>
-            <Text style={[s.statVal, { color }]}>{doneCount}/3</Text>
+            <Text
+              style={[s.statVal, { color: doneCount >= 3 ? GREEN : color }]}
+            >
+              {doneCount}/3
+            </Text>
             <Text style={s.statLbl}>Today</Text>
           </View>
         </View>
@@ -588,9 +463,223 @@ export default function MissionsSheet() {
   );
 }
 
+const mc = StyleSheet.create({
+  card: {
+    flexDirection: "row",
+    borderRadius: Radius.xl,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    overflow: "hidden",
+    marginBottom: Spacing.sm,
+    backgroundColor: "rgba(255,255,255,.025)",
+  },
+  stripe: { width: 4 },
+  body: { flex: 1, padding: Spacing.md, gap: Spacing.sm },
+  top: { flexDirection: "row", alignItems: "flex-start", gap: Spacing.sm },
+  icon: {
+    width: 36,
+    height: 36,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  titleRow: { flexDirection: "row", alignItems: "center", gap: Spacing.sm },
+  title: {
+    flex: 1,
+    fontSize: 14,
+    color: Colors.text,
+    fontWeight: "900",
+  },
+  doneTitle: {
+    color: Colors.dim,
+    textDecorationLine: "line-through",
+  },
+  status: {
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  statusText: {
+    fontSize: 7,
+    fontWeight: "900",
+    letterSpacing: 1,
+  },
+  desc: {
+    fontSize: 11,
+    color: Colors.dim,
+    lineHeight: 16,
+    marginTop: 2,
+  },
+  progressRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
+  track: {
+    flex: 1,
+    height: 5,
+    backgroundColor: "rgba(255,255,255,.08)",
+    borderRadius: 999,
+    overflow: "hidden",
+  },
+  fill: {
+    height: "100%",
+    borderRadius: 999,
+  },
+  pct: {
+    fontSize: 10,
+    fontWeight: "900",
+    minWidth: 34,
+    textAlign: "right",
+  },
+  footer: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  reward: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+  },
+  rewardText: {
+    fontSize: 11,
+    fontWeight: "900",
+  },
+  note: {
+    fontSize: 9,
+    color: Colors.dim,
+  },
+});
+
+const wc = StyleSheet.create({
+  card: {
+    flexDirection: "row",
+    borderRadius: Radius.xl,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    overflow: "hidden",
+    marginBottom: Spacing.md,
+    backgroundColor: "rgba(255,255,255,.025)",
+  },
+  stripe: {
+    width: 4,
+    backgroundColor: AMBER,
+  },
+  body: {
+    flex: 1,
+    padding: Spacing.md,
+    gap: Spacing.sm,
+  },
+  badge: {
+    alignSelf: "flex-start",
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: AMBER + "44",
+    backgroundColor: AMBER + "16",
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  badgeText: {
+    fontSize: 7,
+    color: AMBER,
+    fontWeight: "900",
+    letterSpacing: 1.5,
+  },
+  titleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
+  icon: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: AMBER + "18",
+  },
+  title: {
+    flex: 1,
+    fontSize: 15,
+    color: Colors.text,
+    fontWeight: "900",
+  },
+  desc: {
+    fontSize: 11,
+    color: Colors.muted,
+    lineHeight: 16,
+  },
+  progressRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
+  track: {
+    flex: 1,
+    height: 5,
+    backgroundColor: "rgba(255,255,255,.08)",
+    borderRadius: 999,
+    overflow: "hidden",
+  },
+  fill: {
+    height: "100%",
+    borderRadius: 999,
+  },
+  pct: {
+    fontSize: 10,
+    fontWeight: "900",
+    minWidth: 34,
+    textAlign: "right",
+  },
+  footer: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  reward: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: AMBER + "33",
+    backgroundColor: AMBER + "12",
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+  },
+  rewardText: {
+    fontSize: 11,
+    color: AMBER,
+    fontWeight: "900",
+  },
+  claimBtn: {
+    borderRadius: Radius.md,
+    backgroundColor: GREEN,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+  },
+  claimText: {
+    fontSize: 11,
+    fontWeight: "900",
+    color: "#fff",
+  },
+  note: {
+    fontSize: 10,
+    color: Colors.dim,
+    fontWeight: "700",
+  },
+});
+
 const s = StyleSheet.create({
   root: { flex: 1 },
   content: { paddingBottom: Spacing.xxl },
+
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -599,47 +688,122 @@ const s = StyleSheet.create({
     paddingTop: Spacing.sm,
     paddingBottom: Spacing.md,
   },
-  hdrL: { flexDirection: "row", alignItems: "center", gap: Spacing.sm },
-  title: { fontSize: 20, color: Colors.text, fontWeight: "700" },
-  meta: {
+  hdrL: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
+  title: {
+    fontSize: 20,
+    color: Colors.text,
+    fontWeight: "900",
+  },
+  subtitle: {
+    fontSize: 10,
+    color: Colors.dim,
+    marginTop: 1,
+  },
+
+  hero: {
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.md,
+    borderRadius: Radius.xl,
+    borderWidth: 1,
+    backgroundColor: "rgba(255,255,255,.035)",
+    padding: Spacing.md,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: Spacing.lg,
-    marginBottom: Spacing.md,
   },
-  dayTxt: { fontSize: 15, color: Colors.text, fontWeight: "700" },
-  dayNote: { fontSize: 9, color: Colors.dim, marginTop: 2 },
-  dots: { flexDirection: "row", gap: 6 },
-  dot: { width: 10, height: 10, borderRadius: 5 },
+  heroLabel: {
+    fontSize: 8,
+    color: Colors.dim,
+    letterSpacing: 1.8,
+    fontWeight: "900",
+  },
+  heroValue: {
+    fontSize: 32,
+    fontWeight: "900",
+    marginTop: 3,
+  },
+  heroSub: {
+    fontSize: 10,
+    color: Colors.dim,
+    marginTop: 2,
+  },
+  dots: {
+    flexDirection: "row",
+    gap: 7,
+  },
+  dot: {
+    width: 11,
+    height: 11,
+    borderRadius: 999,
+  },
+
   allDone: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
     marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.sm,
+    marginBottom: Spacing.md,
     backgroundColor: GREEN + "10",
     borderRadius: Radius.lg,
     borderWidth: 1,
     borderColor: GREEN + "33",
     padding: Spacing.sm,
   },
-  allDoneTxt: { fontSize: 11, color: GREEN, flex: 1 },
-  divider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: Colors.border,
-    marginVertical: Spacing.sm,
+  allDoneText: {
+    fontSize: 11,
+    color: GREEN,
+    flex: 1,
+    fontWeight: "700",
   },
-  cards: { paddingHorizontal: Spacing.lg },
+
+  sectionTitle: {
+    fontSize: 9,
+    color: Colors.dim,
+    letterSpacing: 2.5,
+    fontWeight: "900",
+    paddingHorizontal: Spacing.lg,
+    marginBottom: Spacing.sm,
+  },
+  sectionTitleNoPad: {
+    fontSize: 9,
+    color: Colors.dim,
+    letterSpacing: 2.5,
+    fontWeight: "900",
+    marginBottom: Spacing.sm,
+  },
+  cards: {
+    paddingHorizontal: Spacing.lg,
+  },
+
   empty: {
     paddingVertical: Spacing.xxl * 2,
     alignItems: "center",
     gap: Spacing.md,
   },
-  emptyTxt: { fontSize: 12, color: Colors.dim, textAlign: "center" },
-  stats: { paddingHorizontal: Spacing.lg, gap: Spacing.sm },
-  eyebrow: { fontSize: 9, color: Colors.dim, letterSpacing: 2.5 },
-  statsRow: { flexDirection: "row", gap: Spacing.sm },
+  emptyText: {
+    fontSize: 12,
+    color: Colors.dim,
+    textAlign: "center",
+  },
+
+  divider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: Colors.border,
+    marginVertical: Spacing.md,
+  },
+
+  stats: {
+    paddingHorizontal: Spacing.lg,
+    gap: Spacing.sm,
+  },
+  statsRow: {
+    flexDirection: "row",
+    gap: Spacing.sm,
+  },
   statBox: {
     flex: 1,
     backgroundColor: "rgba(255,255,255,.04)",
@@ -650,6 +814,13 @@ const s = StyleSheet.create({
     alignItems: "center",
     gap: 3,
   },
-  statVal: { fontSize: 22, fontWeight: "700" },
-  statLbl: { fontSize: 9, color: Colors.dim, letterSpacing: 0.5 },
+  statVal: {
+    fontSize: 22,
+    fontWeight: "900",
+  },
+  statLbl: {
+    fontSize: 9,
+    color: Colors.dim,
+    letterSpacing: 0.5,
+  },
 });

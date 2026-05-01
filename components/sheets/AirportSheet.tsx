@@ -30,11 +30,19 @@ import {
   hubCrowdingLevel,
   hubPurchaseCost,
 } from "@/lib/demands";
+import {
+  hubFlowPercent,
+  hubOutboundDeliveredPax,
+  hubOutboundWaitingPax,
+  waitingPaxForDemand,
+} from "@/lib/passengerFlow";
 import { calcRouteRevenue, fmtCash } from "@/lib/revenue";
 import type { Airport, Demand, OwnedHub, Route } from "@/store";
 import {
+  useAIAirlines,
   useAirline,
   useCash,
+  useDayProgress,
   useDemands,
   useGameStore,
   useHubs,
@@ -105,7 +113,7 @@ function DepartureRow({
   route,
   hub,
   color,
-  day,
+  dayProgress,
   onCreateRoute,
   maxPlaneRange,
 }: {
@@ -113,7 +121,7 @@ function DepartureRow({
   route: Route | null; // null = unserved demand
   hub: OwnedHub;
   color: string;
-  day: number;
+  dayProgress: number;
   onCreateRoute: (d: Demand) => void;
   maxPlaneRange: number;
 }) {
@@ -127,6 +135,8 @@ function DepartureRow({
         : Colors.purple;
 
   const paxToday = demand.delivered_pax_today ?? 0;
+  const waitingPax = waitingPaxForDemand(demand, dayProgress);
+  const remainingPax = Math.max(0, demand.pax_day - paxToday);
   const fillPct =
     demand.pax_day > 0
       ? Math.min(100, Math.round((paxToday / demand.pax_day) * 100))
@@ -208,7 +218,10 @@ function DepartureRow({
               >
                 {paxToday > 0 ? `${paxToday.toLocaleString()}` : "–"}
               </Text>
-              <Text style={dep.paxLabel}>pax today</Text>
+              <Text style={dep.paxLabel}>moved today</Text>
+              <Text style={dep.waitingMini}>
+                {waitingPax.toLocaleString()} waiting
+              </Text>
               {revenue > 0 && (
                 <Text style={dep.revenue}>{fmtCash(revenue)}</Text>
               )}
@@ -219,13 +232,13 @@ function DepartureRow({
                 <Text style={dep.waitingTxt}>WAITING</Text>
               </View>
               <Text style={dep.waitingPax}>
-                {demand.pax_day.toLocaleString()} pax
+                {waitingPax.toLocaleString()} waiting
               </Text>
             </View>
           )}
         </View>
 
-        {/* Fill bar — served routes only */}
+        {/* Flow bar — served routes only */}
         {isServed && (
           <View style={dep.barRow}>
             <View style={dep.barTrack}>
@@ -249,6 +262,9 @@ function DepartureRow({
             <Ionicons name="airplane" size={9} color={Colors.dim} />{" "}
             {route.plane.plane_model.nickname}
             {route.via_iata ? `  ·  via ${route.via_iata}` : ""}
+            {remainingPax > 0
+              ? `  ·  ${remainingPax.toLocaleString()} left`
+              : "  ·  cleared"}
           </Text>
         )}
 
@@ -338,6 +354,7 @@ const dep = StyleSheet.create({
     letterSpacing: 1,
   },
   waitingPax: { fontSize: 9, color: Colors.dim },
+  waitingMini: { fontSize: 8, color: Colors.amber, fontWeight: "700" },
   barRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   barTrack: {
     flex: 1,
@@ -379,17 +396,25 @@ const dep = StyleSheet.create({
 // ARRIVAL ROW — return leg arriving at this airport
 // ─────────────────────────────────────────────────────────────────
 
-function ArrivalRow({ route, color }: { route: Route; color: string }) {
-  const paxToday = route.demand.delivered_pax_today ?? 0;
+function ArrivalRow({
+  route,
+  demand,
+  color,
+}: {
+  route: Route;
+  demand: Demand;
+  color: string;
+}) {
+  const paxToday = demand.delivered_pax_today ?? 0;
   return (
     <View style={arr.row}>
       <View style={[arr.dot, { backgroundColor: color + "60" }]} />
       <View style={arr.info}>
         <Text style={arr.origin}>
-          <CountryFlag isoCode={route.demand.origin.country} size={18} />{" "}
-          {route.demand.origin.iata}
+          <CountryFlag isoCode={demand.origin.country} size={18} />{" "}
+          {demand.origin.iata}
         </Text>
-        <Text style={arr.sub}>{route.demand.origin.city}</Text>
+        <Text style={arr.sub}>{demand.origin.city}</Text>
       </View>
       <View style={arr.right}>
         {paxToday > 0 && (
@@ -438,6 +463,7 @@ export default function AirportSheet() {
   const hubs = useHubs();
   const demands = useDemands();
   const routes = useRoutes();
+  const dayProgress = useDayProgress();
   const airline = useAirline();
   const cash = useCash();
   const airports = useGameStore((s) => s.airports);
@@ -461,11 +487,13 @@ export default function AirportSheet() {
 
   if (!airport) return null;
 
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  const aiAirlines = useAIAirlines();
   const isOwned = hubs.some((h) => h.airport.iata === airport.iata);
   const hub = hubs.find((h) => h.airport.iata === airport.iata);
   const color = airline?.color ?? Colors.sky;
   const cost = hubPurchaseCost(airport);
-  const canAfford = cash >= cost;
+
   const classification = airportClassification(airport);
   const tierColor = TIER_COLORS[classification.label] ?? Colors.dim;
   const day = airline?.day ?? 1;
@@ -480,6 +508,45 @@ export default function AirportSheet() {
   const allServed = hub ? allDemandsServed(airport.iata, demands) : false;
 
   // Overcrowding
+  // AI competitors at this airport
+  const aiCompetitors = aiAirlines.filter((ai) =>
+    ai.hubIatas.includes(airport.iata),
+  );
+  const hasCompetition = aiCompetitors.length > 0;
+
+  // Trust = player market share at this airport (shown for all airports)
+  const playerRoutes = routes.filter(
+    (r) =>
+      r.active &&
+      (r.demand.origin.iata === airport.iata ||
+        r.demand.dest.iata === airport.iata ||
+        r.hub_iata === airport.iata),
+  );
+  const playerPax = playerRoutes.reduce((sum, r) => {
+    const d = demands.find((d) => d.id === r.demand.id);
+    return sum + (d?.pax_day ?? 0);
+  }, 0);
+
+  const aiPax = aiCompetitors.reduce((sum, ai) => {
+    const routesAtHub = Math.max(
+      1,
+      Math.floor(ai.routeCount / Math.max(1, ai.hubIatas.length)),
+    );
+    return sum + routesAtHub * 150;
+  }, 0);
+  const airportTrust =
+    playerPax + aiPax > 0
+      ? Math.round((playerPax / (playerPax + aiPax)) * 100)
+      : isOwned
+        ? (hub?.trust ?? 0)
+        : 0;
+
+  // 75% trust required to buy a hub with competitors
+  const TRUST_BUY_THRESHOLD = 75;
+  const trustLocked =
+    hasCompetition && !isOwned && airportTrust < TRUST_BUY_THRESHOLD;
+  const canAfford = cash >= cost && !trustLocked;
+
   const crowding = isOwned
     ? hubCrowdingLevel(airport.iata, demands, airport)
     : null;
@@ -508,10 +575,17 @@ export default function AirportSheet() {
   }, [routes, airport.iata]);
 
   // Stats
-  const totalPaxToday = hubDemands.reduce(
-    (s, d) => s + (d.delivered_pax_today ?? 0),
-    0,
+  const outboundWaiting = hubOutboundWaitingPax(
+    airport.iata,
+    demands,
+    dayProgress,
   );
+  const outboundMoved = hubOutboundDeliveredPax(airport.iata, demands);
+  const outboundFlowPct = hubFlowPercent(airport.iata, demands);
+  const inboundToday = demands
+    .filter((d) => d.dest.iata === airport.iata)
+    .reduce((sum, d) => sum + (d.delivered_pax_today ?? 0), 0);
+  const totalPaxToday = outboundMoved;
   const servedCount = hubDemands.filter((d) => d.status === "served").length;
   const pendingCount = hubDemands.filter((d) => d.status === "pending").length;
 
@@ -656,17 +730,35 @@ export default function AirportSheet() {
                 .filter(Boolean)
                 .join("  ·  ")}
             </Text>
-            {isOwned && hub && (
+            {(isOwned || hasCompetition || playerPax > 0) && (
               <View style={s.trustWrap}>
                 <View style={s.trustTrack}>
                   <View
                     style={[
                       s.trustFill,
-                      { width: `${hub.trust}%` as any, backgroundColor: color },
+                      {
+                        width: `${airportTrust}%` as any,
+                        backgroundColor:
+                          airportTrust >= 75
+                            ? Colors.green
+                            : airportTrust >= 40
+                              ? color
+                              : Colors.red,
+                      },
                     ]}
                   />
+                  {!isOwned && hasCompetition && (
+                    <View style={[s.trustThreshold]} />
+                  )}
                 </View>
-                <Text style={s.trustLabel}>{Math.round(hub.trust)}% trust</Text>
+                <Text style={s.trustLabel}>
+                  {airportTrust}% market share
+                  {!isOwned &&
+                  hasCompetition &&
+                  airportTrust < TRUST_BUY_THRESHOLD
+                    ? ` · need ${TRUST_BUY_THRESHOLD}% to buy`
+                    : ""}
+                </Text>
               </View>
             )}
           </View>
@@ -720,7 +812,7 @@ export default function AirportSheet() {
               >
                 {fmtCash(cost)}
               </Text>
-              {!canAfford && (
+              {!canAfford && cash - cost < 0 && (
                 <Text style={s.shortfall}>
                   Need {fmtCash(cost - cash)} more
                 </Text>
@@ -733,6 +825,28 @@ export default function AirportSheet() {
               </Text>
             </View>
           </View>
+          {trustLocked && (
+            <View
+              style={[
+                s.errorBox,
+                {
+                  borderColor: Colors.amber + "44",
+                  backgroundColor: Colors.amber + "0a",
+                },
+              ]}
+            >
+              <Ionicons
+                name="lock-closed-outline"
+                size={13}
+                color={Colors.amber}
+              />
+              <Text style={[s.errorText, { color: Colors.amber }]}>
+                {aiCompetitors.map((a) => a.name).join(", ")} dominates this
+                airport. Serve more routes here to reach {TRUST_BUY_THRESHOLD}%
+                market share.
+              </Text>
+            </View>
+          )}
           {buyError && (
             <View style={s.errorBox}>
               <Ionicons name="warning-outline" size={13} color={Colors.red} />
@@ -780,18 +894,19 @@ export default function AirportSheet() {
           <View style={s.statsRow}>
             {[
               {
-                val:
-                  totalPaxToday > 0
-                    ? totalPaxToday.toLocaleString()
-                    : hubDemands.length.toString(),
-                lbl: totalPaxToday > 0 ? "Pax Today" : "Demands",
-                col: totalPaxToday > 0 ? Colors.green : Colors.text,
+                val: outboundWaiting.toLocaleString(),
+                lbl: "Waiting",
+                col: outboundWaiting > 0 ? Colors.amber : Colors.muted,
               },
-              { val: servedCount.toString(), lbl: "Served", col: Colors.green },
               {
-                val: pendingCount.toString(),
-                lbl: "Pending",
-                col: pendingCount > 0 ? Colors.amber : Colors.muted,
+                val: outboundMoved.toLocaleString(),
+                lbl: "Moved",
+                col: outboundMoved > 0 ? Colors.green : Colors.muted,
+              },
+              {
+                val: inboundToday.toLocaleString(),
+                lbl: "Inbound",
+                col: inboundToday > 0 ? Colors.sky : Colors.muted,
               },
             ].map(({ val, lbl, col }) => (
               <View key={lbl} style={s.statBox}>
@@ -799,6 +914,28 @@ export default function AirportSheet() {
                 <Text style={s.statLbl}>{lbl}</Text>
               </View>
             ))}
+          </View>
+          <View style={s.flowBanner}>
+            <View style={s.flowBar}>
+              <View
+                style={[
+                  s.flowBarFill,
+                  {
+                    width: `${outboundFlowPct}%` as any,
+                    backgroundColor:
+                      outboundFlowPct >= 80
+                        ? Colors.green
+                        : outboundFlowPct >= 35
+                          ? Colors.amber
+                          : Colors.red,
+                  },
+                ]}
+              />
+            </View>
+            <Text style={s.flowText}>
+              {outboundFlowPct}% outbound flow ·{" "}
+              {outboundWaiting.toLocaleString()} travelers waiting at origin
+            </Text>
           </View>
           {allServed && (
             <View style={s.allServedBanner}>
@@ -900,9 +1037,11 @@ export default function AirportSheet() {
           <Ionicons name="airplane" size={13} color={color} />
           <Text style={s.eyebrow}>DEPARTURES</Text>
         </View>
-        {isOwned && pendingCount > 0 && (
+        {isOwned && outboundWaiting > 0 && (
           <View style={s.waitingBadge}>
-            <Text style={s.waitingBadgeTxt}>{pendingCount} waiting</Text>
+            <Text style={s.waitingBadgeTxt}>
+              {outboundWaiting.toLocaleString()} waiting
+            </Text>
           </View>
         )}
       </View>
@@ -919,7 +1058,7 @@ export default function AirportSheet() {
             route={route}
             hub={hub!}
             color={color}
-            day={day}
+            dayProgress={dayProgress}
             onCreateRoute={handleCreateRoute}
             maxPlaneRange={maxPlaneRange}
           />
@@ -935,9 +1074,18 @@ export default function AirportSheet() {
               <Text style={s.eyebrow}>ARRIVALS</Text>
             </View>
           </View>
-          {arrivals.map((route) => (
-            <ArrivalRow key={route.id} route={route} color={color} />
-          ))}
+          {arrivals.map((route) => {
+            const demand =
+              demands.find((d) => d.id === route.demand.id) ?? route.demand;
+            return (
+              <ArrivalRow
+                key={route.id}
+                route={route}
+                demand={demand}
+                color={color}
+              />
+            );
+          })}
         </>
       )}
 
@@ -1014,6 +1162,14 @@ const s = StyleSheet.create({
     overflow: "hidden",
   },
   trustFill: { height: "100%", borderRadius: 2 },
+  trustThreshold: {
+    position: "absolute",
+    left: "75%",
+    top: 0,
+    bottom: 0,
+    width: 1.5,
+    backgroundColor: Colors.amber + "88",
+  },
   trustLabel: { fontSize: 9, color: Colors.dim, flexShrink: 0 },
   divider: {
     height: StyleSheet.hairlineWidth,
@@ -1077,6 +1233,24 @@ const s = StyleSheet.create({
   },
   statVal: { fontSize: 22, fontWeight: "700", marginBottom: 2 },
   statLbl: { fontSize: 8, color: Colors.dim, letterSpacing: 0.8 },
+  flowBanner: {
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.md,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: "rgba(255,255,255,.025)",
+    padding: Spacing.sm,
+    gap: 6,
+  },
+  flowBar: {
+    height: 5,
+    backgroundColor: "rgba(255,255,255,.08)",
+    borderRadius: 999,
+    overflow: "hidden",
+  },
+  flowBarFill: { height: "100%", borderRadius: 999 },
+  flowText: { fontSize: 10, color: Colors.dim, fontWeight: "700" },
   allServedBanner: {
     flexDirection: "row",
     alignItems: "center",
@@ -1157,6 +1331,20 @@ const s = StyleSheet.create({
     marginBottom: Spacing.sm,
   },
   sellHubTxt: { fontSize: 11, color: Colors.red, fontWeight: "600" },
+  competitorBanner: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    backgroundColor: "rgba(239,68,68,.06)",
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    padding: Spacing.sm,
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.sm,
+  },
+  competitorBody: { flex: 1 },
+  competitorTitle: { fontSize: 11, color: "#ef4444", fontWeight: "700" },
+  competitorNames: { fontSize: 10, color: Colors.muted },
   refreshDemandBtn: {
     flexDirection: "row",
     alignItems: "center",

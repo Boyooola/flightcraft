@@ -1,12 +1,7 @@
 /**
  * components/sheets/AchievementsSheet.tsx
  *
- * Trophy cabinet — shows all 27 achievements.
- * Earned: full colour, shows day earned.
- * Locked: dim, hidden achievements show as ???.
- *
- * Header shows total points earned / total possible.
- * Grouped by category with counts.
+ * Worldwide Rush-style achievements sheet.
  */
 
 import { Colors, Radius, Spacing } from "@/constants/theme";
@@ -28,39 +23,40 @@ const CATEGORY_META: Record<
   AchievementCategory,
   { label: string; icon: string; color: string }
 > = {
-  pioneer: { label: "Pioneer", icon: "rocket-outline", color: Colors.sky },
+  pioneer: { label: "Start Rush", icon: "rocket-outline", color: Colors.sky },
+  passenger: {
+    label: "Passenger Flow",
+    icon: "people-outline",
+    color: Colors.green,
+  },
   network: {
-    label: "Network",
+    label: "Route Web",
     icon: "git-network-outline",
-    color: Colors.green,
+    color: Colors.sky,
   },
-  fleet: { label: "Fleet", icon: "airplane-outline", color: Colors.amber },
-  financial: {
-    label: "Financial",
-    icon: "trending-up-outline",
-    color: Colors.green,
-  },
-  passenger: { label: "Passenger", icon: "people-outline", color: Colors.sky },
-  operations: {
-    label: "Operations",
-    icon: "settings-outline",
+  fleet: {
+    label: "Fleet Power",
+    icon: "airplane-outline",
     color: Colors.amber,
   },
-  prestige: { label: "Prestige", icon: "trophy-outline", color: PURPLE },
-  missions: {
-    label: "",
-    icon: "",
-    color: "",
+  operations: {
+    label: "Smooth Flow",
+    icon: "flash-outline",
+    color: Colors.orange,
   },
+  financial: { label: "Cash Rush", icon: "cash-outline", color: Colors.green },
+  missions: { label: "Contracts", icon: "checkbox-outline", color: PURPLE },
+  prestige: { label: "Prestige", icon: "trophy-outline", color: PURPLE },
 };
 
 const CATEGORY_ORDER: AchievementCategory[] = [
   "pioneer",
+  "passenger",
   "network",
   "fleet",
-  "financial",
-  "passenger",
   "operations",
+  "financial",
+  "missions",
   "prestige",
 ];
 
@@ -75,22 +71,48 @@ export default function AchievementsSheet() {
   const earnedPoints = useMemo(
     () =>
       ACHIEVEMENTS.reduce(
-        (sum, a) => (earned[a.id] !== undefined ? sum + a.points : sum),
+        (sum, achievement) =>
+          earned[achievement.id] !== undefined ? sum + achievement.points : sum,
         0,
       ),
     [earned],
   );
 
-  const earnedCount = Object.keys(earned).length;
+  const earnedCount = ACHIEVEMENTS.filter(
+    (achievement) => earned[achievement.id] !== undefined,
+  ).length;
 
-  // Group by category
+  const progressPct = Math.round(
+    (earnedPoints / Math.max(1, TOTAL_POINTS)) * 100,
+  );
+
   const grouped = useMemo(() => {
-    return CATEGORY_ORDER.map((cat) => ({
-      cat,
-      meta: CATEGORY_META[cat],
-      achievements: ACHIEVEMENTS.filter((a) => a.category === cat),
-    }));
-  }, []);
+    return CATEGORY_ORDER.map((category) => {
+      const achievements = ACHIEVEMENTS.filter(
+        (achievement) => achievement.category === category,
+      );
+
+      const sortedAchievements = [...achievements].sort((a, b) => {
+        const aEarned = earned[a.id] !== undefined;
+        const bEarned = earned[b.id] !== undefined;
+
+        if (aEarned !== bEarned) return aEarned ? -1 : 1;
+        return a.points - b.points;
+      });
+
+      return {
+        category,
+        meta: CATEGORY_META[category],
+        achievements: sortedAchievements,
+      };
+    }).filter((group) => group.achievements.length > 0);
+  }, [earned]);
+
+  const latestEarned = useMemo(() => {
+    return ACHIEVEMENTS.filter((a) => earned[a.id] !== undefined)
+      .sort((a, b) => (earned[b.id] ?? 0) - (earned[a.id] ?? 0))
+      .slice(0, 3);
+  }, [earned]);
 
   return (
     <BottomSheetScrollView
@@ -101,12 +123,15 @@ export default function AchievementsSheet() {
       ]}
       showsVerticalScrollIndicator={false}
     >
-      {/* Header */}
       <View style={s.header}>
         <View style={s.hdrL}>
-          <Ionicons name="trophy" size={20} color={PURPLE} />
-          <Text style={s.title}>Achievements</Text>
+          <Ionicons name="flash-outline" size={21} color={color} />
+          <View>
+            <Text style={s.title}>Trophy Rush</Text>
+            <Text style={s.subtitle}>Clear goals, earn points</Text>
+          </View>
         </View>
+
         <TouchableOpacity
           onPress={closeSheet}
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
@@ -115,56 +140,86 @@ export default function AchievementsSheet() {
         </TouchableOpacity>
       </View>
 
-      {/* Points summary */}
-      <View style={s.summary}>
-        <View style={[s.summaryCard, { borderColor: PURPLE + "44" }]}>
-          <Text style={[s.summaryPts, { color: PURPLE }]}>
-            {earnedPoints.toLocaleString()}
-          </Text>
-          <Text style={s.summaryOf}>
-            of {TOTAL_POINTS.toLocaleString()} pts
+      <View style={[s.hero, { borderColor: color + "44" }]}>
+        <View>
+          <Text style={s.heroLabel}>TROPHY PROGRESS</Text>
+          <Text style={[s.heroValue, { color }]}>{progressPct}%</Text>
+          <Text style={s.heroSub}>
+            {earnedPoints.toLocaleString()} / {TOTAL_POINTS.toLocaleString()}{" "}
+            pts
           </Text>
         </View>
-        <View style={s.summaryCard}>
-          <Text style={[s.summaryPts, { color: Colors.sky }]}>
+
+        <View style={s.heroRight}>
+          <Text style={[s.heroCount, { color: Colors.green }]}>
             {earnedCount}
           </Text>
-          <Text style={s.summaryOf}>of {ACHIEVEMENTS.length} earned</Text>
-        </View>
-        <View style={s.summaryCard}>
-          <Text style={[s.summaryPts, { color: Colors.green }]}>
-            {Math.round((earnedCount / ACHIEVEMENTS.length) * 100)}%
-          </Text>
-          <Text style={s.summaryOf}>complete</Text>
+          <Text style={s.heroCountLbl}>earned</Text>
         </View>
       </View>
 
-      {/* Points bar */}
       <View style={s.barWrap}>
         <View style={s.barTrack}>
           <View
             style={[
               s.barFill,
               {
-                width:
-                  `${Math.round((earnedPoints / TOTAL_POINTS) * 100)}%` as any,
-                backgroundColor: PURPLE,
+                width: `${progressPct}%` as any,
+                backgroundColor: color,
               },
             ]}
           />
         </View>
       </View>
 
+      {latestEarned.length > 0 && (
+        <View style={s.section}>
+          <Text style={s.sectionTitle}>LATEST CLEARS</Text>
+          {latestEarned.map((achievement) => {
+            const meta = CATEGORY_META[achievement.category];
+            return (
+              <View key={achievement.id} style={s.latestRow}>
+                <View
+                  style={[s.latestIcon, { backgroundColor: meta.color + "18" }]}
+                >
+                  <Ionicons
+                    name={achievement.icon as any}
+                    size={15}
+                    color={meta.color}
+                  />
+                </View>
+
+                <View style={{ flex: 1 }}>
+                  <Text style={s.latestTitle}>{achievement.title}</Text>
+                  <Text style={s.latestSub}>
+                    Day {earned[achievement.id]} · {achievement.points} pts
+                  </Text>
+                </View>
+
+                <Ionicons
+                  name="checkmark-circle"
+                  size={18}
+                  color={Colors.green}
+                />
+              </View>
+            );
+          })}
+        </View>
+      )}
+
       <View style={s.divider} />
 
-      {/* Achievement groups */}
-      {grouped.map(({ cat, meta, achievements }) => {
+      {grouped.map(({ category, meta, achievements }) => {
         const catEarned = achievements.filter(
-          (a) => earned[a.id] !== undefined,
+          (achievement) => earned[achievement.id] !== undefined,
         ).length;
+
+        const catPct = Math.round(
+          (catEarned / Math.max(1, achievements.length)) * 100,
+        );
+
         return (
-          <View key={cat} style={s.group}>
-            {/* Category header */}
+          <View key={category} style={s.group}>
             <View style={s.catHeader}>
               <View
                 style={[s.catIconWrap, { backgroundColor: meta.color + "18" }]}
@@ -175,15 +230,29 @@ export default function AchievementsSheet() {
                   color={meta.color}
                 />
               </View>
-              <Text style={[s.catLabel, { color: meta.color }]}>
-                {meta.label}
-              </Text>
+
+              <View style={{ flex: 1 }}>
+                <Text style={[s.catLabel, { color: meta.color }]}>
+                  {meta.label}
+                </Text>
+                <View style={s.catBar}>
+                  <View
+                    style={[
+                      s.catBarFill,
+                      {
+                        width: `${catPct}%` as any,
+                        backgroundColor: meta.color,
+                      },
+                    ]}
+                  />
+                </View>
+              </View>
+
               <Text style={s.catCount}>
                 {catEarned}/{achievements.length}
               </Text>
             </View>
 
-            {/* Achievement rows */}
             {achievements.map((achievement) => {
               const isEarned = earned[achievement.id] !== undefined;
               const dayEarned = earned[achievement.id];
@@ -195,13 +264,12 @@ export default function AchievementsSheet() {
                   style={[
                     s.achRow,
                     isEarned && {
-                      borderColor: meta.color + "33",
-                      backgroundColor: meta.color + "06",
+                      borderColor: meta.color + "44",
+                      backgroundColor: meta.color + "07",
                     },
-                    !isEarned && s.achRowLocked,
+                    !isEarned && s.lockedRow,
                   ]}
                 >
-                  {/* Icon */}
                   <View
                     style={[
                       s.achIcon,
@@ -219,14 +287,15 @@ export default function AchievementsSheet() {
                     />
                   </View>
 
-                  {/* Text */}
                   <View style={s.achBody}>
-                    <View style={s.achTitleRow}>
+                    <View style={s.achTop}>
                       <Text
                         style={[s.achTitle, !isEarned && { color: Colors.dim }]}
+                        numberOfLines={1}
                       >
-                        {isHidden ? "???" : achievement.title}
+                        {isHidden ? "Hidden Rush Goal" : achievement.title}
                       </Text>
+
                       <View
                         style={[
                           s.ptsBadge,
@@ -239,14 +308,15 @@ export default function AchievementsSheet() {
                       >
                         <Text
                           style={[
-                            s.ptsVal,
+                            s.ptsText,
                             { color: isEarned ? meta.color : Colors.dim },
                           ]}
                         >
-                          {achievement.points}pts
+                          {achievement.points}
                         </Text>
                       </View>
                     </View>
+
                     {!isHidden && (
                       <Text
                         style={[s.achDesc, !isEarned && { color: Colors.dim }]}
@@ -255,20 +325,22 @@ export default function AchievementsSheet() {
                         {isEarned ? achievement.flavor : achievement.desc}
                       </Text>
                     )}
+
                     {isEarned && dayEarned !== undefined && (
-                      <Text style={[s.achDay, { color: meta.color + "aa" }]}>
-                        Earned on day {dayEarned}
+                      <Text style={[s.earnedText, { color: meta.color }]}>
+                        Cleared on day {dayEarned}
                       </Text>
                     )}
                   </View>
 
-                  {/* Check */}
-                  {isEarned && (
+                  {isEarned ? (
                     <Ionicons
                       name="checkmark-circle"
                       size={18}
                       color={meta.color}
                     />
+                  ) : (
+                    <Ionicons name="lock-closed" size={15} color={Colors.dim} />
                   )}
                 </View>
               );
@@ -292,36 +364,118 @@ const s = StyleSheet.create({
     paddingTop: Spacing.sm,
     paddingBottom: Spacing.md,
   },
-  hdrL: { flexDirection: "row", alignItems: "center", gap: Spacing.sm },
-  title: { fontSize: 20, color: Colors.text, fontWeight: "700" },
-
-  summary: {
+  hdrL: {
     flexDirection: "row",
+    alignItems: "center",
     gap: Spacing.sm,
+  },
+  title: {
+    fontSize: 20,
+    color: Colors.text,
+    fontWeight: "900",
+  },
+  subtitle: {
+    fontSize: 10,
+    color: Colors.dim,
+    marginTop: 1,
+  },
+
+  hero: {
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.sm,
+    borderRadius: Radius.xl,
+    borderWidth: 1,
+    backgroundColor: "rgba(255,255,255,.035)",
+    padding: Spacing.md,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  heroLabel: {
+    fontSize: 8,
+    color: Colors.dim,
+    letterSpacing: 1.8,
+    fontWeight: "900",
+  },
+  heroValue: {
+    fontSize: 34,
+    fontWeight: "900",
+    marginTop: 2,
+  },
+  heroSub: {
+    fontSize: 10,
+    color: Colors.dim,
+  },
+  heroRight: {
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,.045)",
+    borderRadius: Radius.lg,
     paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.sm,
+  },
+  heroCount: {
+    fontSize: 22,
+    fontWeight: "900",
+  },
+  heroCountLbl: {
+    fontSize: 9,
+    color: Colors.dim,
+  },
+
+  barWrap: {
+    paddingHorizontal: Spacing.lg,
+    marginBottom: Spacing.md,
+  },
+  barTrack: {
+    height: 5,
+    backgroundColor: "rgba(255,255,255,.06)",
+    borderRadius: 999,
+    overflow: "hidden",
+  },
+  barFill: {
+    height: "100%",
+    borderRadius: 999,
+  },
+
+  section: {
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.lg,
+  },
+  sectionTitle: {
+    fontSize: 9,
+    color: Colors.dim,
+    letterSpacing: 2.2,
+    fontWeight: "900",
     marginBottom: Spacing.sm,
   },
-  summaryCard: {
-    flex: 1,
-    backgroundColor: "rgba(255,255,255,.04)",
+  latestRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
     borderRadius: Radius.lg,
     borderWidth: 1,
     borderColor: Colors.border,
-    paddingVertical: Spacing.sm,
+    backgroundColor: "rgba(255,255,255,.03)",
+    padding: Spacing.md,
+    marginBottom: Spacing.sm,
+  },
+  latestIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
     alignItems: "center",
-    gap: 2,
+    justifyContent: "center",
   },
-  summaryPts: { fontSize: 20, fontWeight: "700" },
-  summaryOf: { fontSize: 9, color: Colors.dim, letterSpacing: 0.3 },
-
-  barWrap: { paddingHorizontal: Spacing.lg, marginBottom: Spacing.md },
-  barTrack: {
-    height: 4,
-    backgroundColor: "rgba(255,255,255,.06)",
-    borderRadius: 2,
-    overflow: "hidden",
+  latestTitle: {
+    fontSize: 13,
+    color: Colors.text,
+    fontWeight: "900",
   },
-  barFill: { height: "100%", borderRadius: 2 },
+  latestSub: {
+    fontSize: 10,
+    color: Colors.dim,
+    marginTop: 1,
+  },
 
   divider: {
     height: StyleSheet.hairlineWidth,
@@ -329,7 +483,10 @@ const s = StyleSheet.create({
     marginBottom: Spacing.sm,
   },
 
-  group: { paddingHorizontal: Spacing.lg, marginBottom: Spacing.lg },
+  group: {
+    paddingHorizontal: Spacing.lg,
+    marginBottom: Spacing.lg,
+  },
   catHeader: {
     flexDirection: "row",
     alignItems: "center",
@@ -337,14 +494,32 @@ const s = StyleSheet.create({
     marginBottom: Spacing.sm,
   },
   catIconWrap: {
-    width: 24,
-    height: 24,
-    borderRadius: 6,
+    width: 26,
+    height: 26,
+    borderRadius: 8,
     alignItems: "center",
     justifyContent: "center",
   },
-  catLabel: { fontSize: 12, fontWeight: "700", flex: 1 },
-  catCount: { fontSize: 10, color: Colors.dim },
+  catLabel: {
+    fontSize: 12,
+    fontWeight: "900",
+    marginBottom: 4,
+  },
+  catBar: {
+    height: 3,
+    backgroundColor: "rgba(255,255,255,.07)",
+    borderRadius: 999,
+    overflow: "hidden",
+  },
+  catBarFill: {
+    height: "100%",
+    borderRadius: 999,
+  },
+  catCount: {
+    fontSize: 10,
+    color: Colors.dim,
+    fontWeight: "800",
+  },
 
   achRow: {
     flexDirection: "row",
@@ -357,24 +532,50 @@ const s = StyleSheet.create({
     marginBottom: Spacing.sm,
     backgroundColor: "rgba(255,255,255,.02)",
   },
-  achRowLocked: { opacity: 0.55 },
+  lockedRow: {
+    opacity: 0.55,
+  },
   achIcon: {
     width: 40,
     height: 40,
-    borderRadius: 10,
+    borderRadius: 11,
     alignItems: "center",
     justifyContent: "center",
     flexShrink: 0,
   },
-  achBody: { flex: 1, gap: 2, minWidth: 0 },
-  achTitleRow: { flexDirection: "row", alignItems: "center", gap: Spacing.sm },
-  achTitle: { fontSize: 13, color: Colors.text, fontWeight: "700", flex: 1 },
+  achBody: {
+    flex: 1,
+    gap: 2,
+    minWidth: 0,
+  },
+  achTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
+  achTitle: {
+    fontSize: 13,
+    color: Colors.text,
+    fontWeight: "900",
+    flex: 1,
+  },
   ptsBadge: {
     borderRadius: Radius.full,
-    paddingHorizontal: 6,
-    paddingVertical: 1,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
   },
-  ptsVal: { fontSize: 8, fontWeight: "700" },
-  achDesc: { fontSize: 11, color: Colors.muted, lineHeight: 16 },
-  achDay: { fontSize: 9, marginTop: 2 },
+  ptsText: {
+    fontSize: 8,
+    fontWeight: "900",
+  },
+  achDesc: {
+    fontSize: 11,
+    color: Colors.muted,
+    lineHeight: 16,
+  },
+  earnedText: {
+    fontSize: 9,
+    marginTop: 2,
+    fontWeight: "700",
+  },
 });

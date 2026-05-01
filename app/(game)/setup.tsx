@@ -16,6 +16,7 @@
 import { Colors, MIN_TOUCH, Radius, Spacing } from "@/constants/theme";
 import { useCreateAirline } from "@/hooks/useCreateAirline";
 import { useHaptics } from "@/hooks/useHaptics";
+import { generateSeed } from "@/lib/seed";
 import { Ionicons } from "@expo/vector-icons";
 import { useCallback, useRef, useState } from "react";
 import {
@@ -117,10 +118,13 @@ export default function SetupScreen() {
   const haptics = useHaptics();
   const createAirline = useCreateAirline();
 
-  const [step, setStep] = useState(0); // 0=name, 1=color, 2=difficulty
+  const [step, setStep] = useState(0); // 0=name, 1=color, 2=difficulty, 3=seed+ai
   const [name, setName] = useState("");
   const [color, setColor] = useState(BRAND_COLORS[0].hex);
   const [difficulty, setDifficulty] = useState("normal");
+  const [seed, setSeed] = useState(() => generateSeed());
+  const [aiCount, setAiCount] = useState(2);
+  const [aiDiff, setAiDiff] = useState("balanced");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -150,7 +154,15 @@ export default function SetupScreen() {
       color,
       difficulty,
       cash: diff.cash,
-      loan: diff.cash, // start with loan = starting cash
+      loan: diff.cash,
+      seed: (
+        seed
+          .trim()
+          .toUpperCase()
+          .replace(/[^A-F0-9]/g, "") || generateSeed()
+      ).slice(0, 16),
+      ai_count: aiCount,
+      ai_difficulty: aiDiff,
     });
 
     setLoading(false);
@@ -173,6 +185,7 @@ export default function SetupScreen() {
       style={{
         flex: 1,
         backgroundColor: Colors.bg,
+        paddingBottom: Spacing.xxl,
       }}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
@@ -188,7 +201,7 @@ export default function SetupScreen() {
         {/* Header */}
         <View style={s.header}>
           <Text style={s.headerTitle}>NEW AIRLINE</Text>
-          <StepDots current={step} total={3} />
+          <StepDots current={step} total={4} />
         </View>
 
         {/* Slides */}
@@ -399,6 +412,147 @@ export default function SetupScreen() {
                 </View>
               )}
             </View>
+
+            {/* ── Step 3: Seed + AI ── */}
+            <View style={s.slide}>
+              <Text style={s.slideTitle}>World Settings</Text>
+              <Text style={s.slideDesc}>
+                Configure your game world and competition.
+              </Text>
+
+              {/* Seed */}
+              <Text style={s.sectionLabel}>GAME SEED</Text>
+              <Text style={s.sectionSub}>
+                Same seed = same world. Share with friends to compare scores.
+              </Text>
+              <View style={s.seedRow}>
+                <TextInput
+                  style={[s.seedInput]}
+                  value={seed}
+                  onChangeText={(v) =>
+                    setSeed(
+                      v
+                        .toUpperCase()
+                        .replace(/[^A-F0-9]/g, "")
+                        .slice(0, 16),
+                    )
+                  }
+                  placeholder="e.g. 3F8A91BC4D2E7C01"
+                  placeholderTextColor={Colors.dim}
+                  autoCapitalize="characters"
+                  autoCorrect={false}
+                  maxLength={16}
+                />
+                <TouchableOpacity
+                  style={s.seedRoll}
+                  onPress={() => {
+                    haptics.tap();
+                    setSeed(generateSeed());
+                  }}
+                >
+                  <Ionicons name="dice-outline" size={18} color={Colors.sky} />
+                </TouchableOpacity>
+              </View>
+
+              {/* AI competitors */}
+              <Text style={[s.sectionLabel, { marginTop: Spacing.lg }]}>
+                AI COMPETITORS
+              </Text>
+              <Text style={s.sectionSub}>
+                How many rival airlines share your world?
+              </Text>
+
+              {/* Count selector */}
+              <View style={s.aiCountRow}>
+                {[0, 1, 2, 3, 4, 5].map((n) => (
+                  <TouchableOpacity
+                    key={n}
+                    style={[
+                      s.aiCountBtn,
+                      aiCount === n && {
+                        backgroundColor: diff.color + "22",
+                        borderColor: diff.color,
+                      },
+                    ]}
+                    onPress={() => {
+                      haptics.tap();
+                      setAiCount(n);
+                    }}
+                  >
+                    <Text
+                      style={[
+                        s.aiCountTxt,
+                        aiCount === n && { color: diff.color },
+                      ]}
+                    >
+                      {n === 0 ? "None" : n}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              {/* AI difficulty */}
+              {aiCount > 0 && (
+                <>
+                  <Text style={[s.sectionLabel, { marginTop: Spacing.md }]}>
+                    AI AGGRESSION
+                  </Text>
+                  <View style={s.aiDiffRow}>
+                    {[
+                      {
+                        id: "passive",
+                        label: "Passive",
+                        icon: "leaf-outline",
+                        desc: "Grows slowly, avoids your routes",
+                      },
+                      {
+                        id: "balanced",
+                        label: "Balanced",
+                        icon: "scale-outline",
+                        desc: "Moderate expansion, some overlap",
+                      },
+                      {
+                        id: "aggressive",
+                        label: "Aggressive",
+                        icon: "flame-outline",
+                        desc: "Expands fast, targets your routes",
+                      },
+                    ].map((opt) => (
+                      <TouchableOpacity
+                        key={opt.id}
+                        style={[
+                          s.aiDiffBtn,
+                          aiDiff === opt.id && {
+                            borderColor: diff.color,
+                            backgroundColor: diff.color + "12",
+                          },
+                        ]}
+                        onPress={() => {
+                          haptics.tap();
+                          setAiDiff(opt.id);
+                        }}
+                        activeOpacity={0.8}
+                      >
+                        <Ionicons
+                          name={opt.icon as any}
+                          size={16}
+                          color={aiDiff === opt.id ? diff.color : Colors.dim}
+                        />
+                        <Text
+                          style={[
+                            s.aiDiffLabel,
+                            aiDiff === opt.id && { color: diff.color },
+                          ]}
+                        >
+                          {opt.label}
+                        </Text>
+                        <Text style={s.aiDiffDesc}>{opt.desc}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </>
+              )}
+            </View>
           </Animated.View>
         </View>
 
@@ -414,7 +568,7 @@ export default function SetupScreen() {
             </TouchableOpacity>
           )}
 
-          {step < 2 ? (
+          {step < 3 ? (
             <TouchableOpacity
               style={[s.nextBtn, !canNext && s.nextBtnDisabled]}
               onPress={() => canNext && goToStep(step + 1)}
@@ -477,7 +631,7 @@ const s = StyleSheet.create({
   slideWrap: { flex: 1, overflow: "hidden" },
   slides: {
     flexDirection: "row",
-    width: CONTENT_W * 3,
+    width: CONTENT_W * 4,
   },
   slide: {
     width: CONTENT_W,
@@ -693,6 +847,70 @@ const s = StyleSheet.create({
     letterSpacing: 0.5,
   },
   nextTextDisabled: { color: Colors.dim },
+  // Seed + AI styles
+  sectionLabel: {
+    fontSize: 9,
+    color: Colors.dim,
+    letterSpacing: 2,
+    marginBottom: 4,
+    marginTop: Spacing.sm,
+  },
+  sectionSub: {
+    fontSize: 11,
+    color: Colors.muted,
+    lineHeight: 16,
+    marginBottom: Spacing.sm,
+  },
+  seedRow: {
+    flexDirection: "row",
+    gap: Spacing.sm,
+    alignItems: "center",
+    marginBottom: Spacing.sm,
+  },
+  seedInput: {
+    flex: 1,
+    backgroundColor: "rgba(255,255,255,.05)",
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    fontSize: 14,
+    color: Colors.sky,
+    fontWeight: "700",
+    letterSpacing: 2,
+  },
+  seedRoll: {
+    width: 44,
+    height: 44,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  aiCountRow: { flexDirection: "row", gap: 6, marginBottom: Spacing.sm },
+  aiCountBtn: {
+    flex: 1,
+    paddingVertical: Spacing.sm,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    alignItems: "center",
+  },
+  aiCountTxt: { fontSize: 11, color: Colors.muted, fontWeight: "600" },
+  aiDiffRow: { gap: Spacing.sm },
+  aiDiffBtn: {
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    padding: Spacing.md,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
+  aiDiffLabel: { fontSize: 13, color: Colors.text, fontWeight: "600", flex: 1 },
+  aiDiffDesc: { fontSize: 10, color: Colors.dim },
+
   iconBox: {
     width: 48,
     height: 48,

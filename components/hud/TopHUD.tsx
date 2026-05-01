@@ -1,29 +1,28 @@
 /**
  * components/hud/TopHUD.tsx
  *
- * Top bar: airline name · total cash · [DAY / pax] · today's revenue · speed
+ * WorldWide Rush-style top HUD.
  *
- * "Today's revenue" — live ticker showing earnings so far this game-day.
- * Derived from delivered_pax_today × yield so it ticks up as planes land.
- * Resets to $0 automatically when day advances (delivered_pax_today resets).
- *
- * Day number pulses (scale + colour) when day increments.
- * Today's revenue flashes green when it increases.
+ * Redesigned to be less compact:
+ *   Row 1: airline + cash · day · speed
+ *   Row 2: waiting · moved · today's reward
  */
 
 import { Colors, Radius, Spacing } from "@/constants/theme";
+import { waitingPaxForDemand } from "@/lib/passengerFlow";
 import { calcRouteRevenue, fmtCash } from "@/lib/revenue";
 import {
   useAirline,
   useCash,
   useDay,
+  useDayProgress,
   useDemands,
   useGameStore,
   useHubs,
   useRoutes,
 } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated,
   Platform,
@@ -37,18 +36,65 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 type GameSpeed = 0 | 1 | 2 | 3;
 
-const SPEEDS: { value: GameSpeed; icon: string }[] = [
-  { value: 0, icon: "pause" },
-  { value: 1, icon: "play" },
-  { value: 2, icon: "play-forward" },
-  { value: 3, icon: "play-skip-forward" },
+const SPEEDS: { value: GameSpeed; label: string; icon: string }[] = [
+  { value: 0, label: "0", icon: "pause" },
+  { value: 1, label: "1x", icon: "play" },
+  { value: 2, label: "2x", icon: "play-forward" },
+  { value: 3, label: "3x", icon: "play-skip-forward" },
 ];
+
+function shortPax(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 10_000) return `${Math.round(value / 1000)}K`;
+  return value.toLocaleString();
+}
+
+function FlowCard({
+  icon,
+  label,
+  value,
+  color,
+  scale,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  value: string;
+  color: string;
+  scale?: Animated.AnimatedInterpolation<string | number>;
+}) {
+  const ValueText: any = scale ? Animated.Text : Text;
+
+  return (
+    <View style={fc.card}>
+      <View style={[fc.iconWrap, { backgroundColor: color + "18" }]}>
+        <Ionicons name={icon} size={13} color={color} />
+      </View>
+
+      <View style={fc.body}>
+        <Text style={fc.label}>{label}</Text>
+        <ValueText
+          style={[
+            fc.value,
+            {
+              color,
+              ...(scale ? { transform: [{ scale }] } : {}),
+            },
+          ]}
+          numberOfLines={1}
+        >
+          {value}
+        </ValueText>
+      </View>
+    </View>
+  );
+}
 
 export default function TopHUD() {
   const insets = useSafeAreaInsets();
   const airline = useAirline();
   const cash = useCash();
   const day = useDay();
+  const dayProgress = useDayProgress();
   const demands = useDemands();
   const routes = useRoutes();
   const hubs = useHubs();
@@ -63,243 +109,291 @@ export default function TopHUD() {
       ? (StatusBar.currentHeight ?? insets.top ?? 24)
       : insets.top;
 
-  // ── Live stats derived from store ───────────────────────────────
-  // Today's revenue = sum of (deliveredPax × yield) per active route
-  // This ticks up live every time addPaxDelivered fires in RouteLayer
-  const todayRevenue = routes.reduce((total, route) => {
-    if (!route.active) return total;
-    const demand = demands.find((d) => d.id === route.demand.id);
-    if (!demand) return total;
-    const pax = demand.delivered_pax_today ?? 0;
-    if (pax === 0) return total;
-    const hub = hubs.find((h) => h.airport.iata === route.hub_iata);
-    const p = route.plane.plane_model;
-    const res = calcRouteRevenue({
-      distNm: route.total_dist_nm ?? demand.dist_nm,
-      speedKts: p.speed_kts,
-      trustPct: hub?.trust ?? 0,
-      deliveredPax: pax,
-      paxDay: demand.pax_day,
-      costPerSector: p.cost_per_sector ?? 500,
-      fuelPerNm: p.fuel_per_nm ?? 2.0,
-    });
-    return total + res.net;
-  }, 0);
+  const activeRoutes = useMemo(
+    () => routes.filter((route) => route.active),
+    [routes],
+  );
 
-  // ── Revenue counter listener ─────────────────────────────────────
-  useEffect(() => {
-    const id = displayedRev.addListener(({ value }) => {
-      setDisplayedRevVal(Math.round(value));
-    });
-    return () => displayedRev.removeListener(id);
-  }, []);
+  const waiting = useMemo(() => {
+    return demands
+      .filter((demand) => demand.status !== "served")
+      .reduce((sum, demand) => {
+        return sum + waitingPaxForDemand(demand, dayProgress);
+      }, 0);
+  }, [demands, dayProgress]);
 
-  // ── Day tick pulse ────────────────────────────────────────────────
+  const movedToday = useMemo(() => {
+    return demands.reduce(
+      (sum, demand) => sum + (demand.delivered_pax_today ?? 0),
+      0,
+    );
+  }, [demands]);
+
+  const todayReward = useMemo(() => {
+    return activeRoutes.reduce((total, route) => {
+      const demand = demands.find((d) => d.id === route.demand.id);
+      if (!demand) return total;
+
+      const deliveredPax = demand.delivered_pax_today ?? 0;
+      if (deliveredPax <= 0) return total;
+
+      const hub = hubs.find((h) => h.airport.iata === route.hub_iata);
+      const plane = route.plane.plane_model;
+
+      const result = calcRouteRevenue({
+        distNm: route.total_dist_nm ?? demand.dist_nm,
+        speedKts: plane.speed_kts,
+        trustPct: hub?.trust ?? 0,
+        deliveredPax,
+        paxDay: demand.pax_day,
+        costPerSector: plane.cost_per_sector ?? 500,
+        fuelPerNm: plane.fuel_per_nm ?? 2,
+      });
+
+      return total + result.net;
+    }, 0);
+  }, [activeRoutes, demands, hubs]);
+
   const dayScale = useRef(new Animated.Value(1)).current;
-  const dayColor = useRef(new Animated.Value(0)).current;
   const prevDay = useRef(day);
 
   useEffect(() => {
     if (day === prevDay.current) return;
     prevDay.current = day;
+
     Animated.sequence([
-      Animated.parallel([
-        Animated.spring(dayScale, {
-          toValue: 1.35,
-          friction: 4,
-          tension: 200,
-          useNativeDriver: true,
-        }),
-        Animated.timing(dayColor, {
-          toValue: 1,
-          duration: 150,
-          useNativeDriver: true,
-        }),
-      ]),
-      Animated.parallel([
-        Animated.spring(dayScale, {
-          toValue: 1.0,
-          friction: 6,
-          tension: 150,
-          useNativeDriver: true,
-        }),
-        Animated.timing(dayColor, {
-          toValue: 0,
-          duration: 250,
-          useNativeDriver: true,
-        }),
-      ]),
+      Animated.spring(dayScale, {
+        toValue: 1.25,
+        friction: 5,
+        tension: 180,
+        useNativeDriver: true,
+      }),
+      Animated.spring(dayScale, {
+        toValue: 1,
+        friction: 7,
+        tension: 150,
+        useNativeDriver: true,
+      }),
     ]).start();
-  }, [day]);
+  }, [day, dayScale]);
 
-  const animatedDayColor = dayColor.interpolate({
-    inputRange: [0, 1],
-    outputRange: [Colors.text, color],
-  });
-
-  // ── Yesterday's cash — for % change display ────────────────────
-  const yesterdayCash = useRef<number>(cash);
-  const prevDayRef = useRef<number>(day);
+  const movedPulse = useRef(new Animated.Value(0)).current;
+  const prevMoved = useRef(movedToday);
 
   useEffect(() => {
-    if (day !== prevDayRef.current) {
-      // Day just advanced — snapshot cash before new day starts
-      yesterdayCash.current = cash;
-      prevDayRef.current = day;
+    if (movedToday <= prevMoved.current) {
+      prevMoved.current = movedToday;
+      return;
     }
-  }, [day]);
 
-  const cashDelta = cash - yesterdayCash.current;
-  const cashPct =
-    yesterdayCash.current !== 0
-      ? Math.round((cashDelta / Math.abs(yesterdayCash.current)) * 100)
-      : 0;
-  const showCashPct = Math.abs(cashPct) > 0 && day > 1;
+    prevMoved.current = movedToday;
 
-  // ── Today's revenue ticker animation ────────────────────────────
-  const revAnim = useRef(new Animated.Value(0)).current;
-  const prevRev = useRef(0);
-  const displayedRev = useRef(new Animated.Value(0)).current;
-  const [displayedRevVal, setDisplayedRevVal] = useState(0);
+    Animated.sequence([
+      Animated.timing(movedPulse, {
+        toValue: 1,
+        duration: 120,
+        useNativeDriver: true,
+      }),
+      Animated.timing(movedPulse, {
+        toValue: 0,
+        duration: 360,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [movedToday, movedPulse]);
+
+  const rewardTicker = useRef(new Animated.Value(0)).current;
+  const [displayedReward, setDisplayedReward] = useState(0);
+  const rewardFlash = useRef(new Animated.Value(0)).current;
+  const prevReward = useRef(0);
 
   useEffect(() => {
-    if (todayRevenue !== prevRev.current) {
-      // Flash — green for positive, red for negative
+    const id = rewardTicker.addListener(({ value }) => {
+      setDisplayedReward(Math.round(value));
+    });
+
+    return () => rewardTicker.removeListener(id);
+  }, [rewardTicker]);
+
+  useEffect(() => {
+    if (todayReward !== prevReward.current) {
       Animated.sequence([
-        Animated.timing(revAnim, {
+        Animated.timing(rewardFlash, {
           toValue: 1,
           duration: 120,
           useNativeDriver: true,
         }),
-        Animated.timing(revAnim, {
+        Animated.timing(rewardFlash, {
           toValue: 0,
-          duration: 400,
+          duration: 360,
           useNativeDriver: true,
         }),
       ]).start();
-      Animated.timing(displayedRev, {
-        toValue: todayRevenue,
-        duration: 600,
-        useNativeDriver: true,
+
+      Animated.timing(rewardTicker, {
+        toValue: todayReward,
+        duration: 450,
+        useNativeDriver: false,
       }).start();
-      prevRev.current = todayRevenue;
-    }
-    if (todayRevenue === 0) {
-      prevRev.current = 0;
-      displayedRev.setValue(0);
-      setDisplayedRevVal(0);
-    }
-  }, [todayRevenue]);
 
-  const isNegRev = todayRevenue < 0;
-  const animatedRevColor = revAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: isNegRev
-      ? ["#ef4444", "#ffffff"] // red → flash white for losses
-      : ["#4ade80", "#ffffff"], // green → flash white for gains
-  });
+      prevReward.current = todayReward;
+    }
 
-  const animatedRevScale = revAnim.interpolate({
+    if (todayReward === 0) {
+      prevReward.current = 0;
+      rewardTicker.setValue(0);
+      setDisplayedReward(0);
+    }
+  }, [todayReward, rewardFlash, rewardTicker]);
+
+  const movedScale = movedPulse.interpolate({
     inputRange: [0, 0.5, 1],
-    outputRange: [1, 1.15, 1],
+    outputRange: [1, 1.1, 1],
   });
 
-  const setSpeed = (v: GameSpeed) => updateAirline({ speed: v });
+  const rewardScale = rewardFlash.interpolate({
+    inputRange: [0, 0.5, 1],
+    outputRange: [1, 1.1, 1],
+  });
+
+  const setSpeed = (value: GameSpeed) => updateAirline({ speed: value });
+
+  const waitingColor =
+    waiting <= 0 ? Colors.dim : waiting >= 500 ? Colors.red : Colors.amber;
+
+  const rewardColor = todayReward > 0 ? Colors.green : Colors.dim;
 
   return (
-    <View style={[st.container, { paddingTop: topInset + 4 }]}>
-      <View style={st.inner}>
-        {/* ── Left — airline name + total cash ── */}
-        <View style={st.left}>
-          <Text style={[st.airlineName, { color }]} numberOfLines={1}>
+    <View style={[st.container, { paddingTop: topInset + 5 }]}>
+      <View style={st.topRow}>
+        <View style={st.identity}>
+          <Text style={[st.airline, { color }]} numberOfLines={1}>
             {airline?.name ?? "FlightCraft"}
           </Text>
-          <View style={st.cashRow}>
-            <Text
-              style={[st.cash, { color: lowCash ? Colors.red : Colors.text }]}
-            >
-              {fmtCash(cash)}
-            </Text>
-            {showCashPct && (
-              <Text
-                style={[
-                  st.cashPct,
-                  { color: cashDelta >= 0 ? "#4ade80" : "#ef4444" },
-                ]}
-              >
-                {cashDelta >= 0 ? "▲" : "▼"}
-                {Math.abs(cashPct)}%
-              </Text>
-            )}
-          </View>
+          <Text
+            style={[st.cash, { color: lowCash ? Colors.red : Colors.text }]}
+            numberOfLines={1}
+          >
+            {fmtCash(cash)}
+          </Text>
         </View>
 
-        {/* ── Centre — day + pax ── */}
-        <View style={st.centre}>
+        <View style={[st.dayBox, { borderColor: color + "44" }]}>
           <Text style={st.dayLabel}>DAY</Text>
           <Animated.Text
-            style={[
-              st.dayNum,
-              { color: animatedDayColor, transform: [{ scale: dayScale }] },
-            ]}
+            style={[st.day, { color, transform: [{ scale: dayScale }] }]}
           >
             {day}
           </Animated.Text>
         </View>
 
-        {/* ── Today revenue ticker ── */}
-        <View style={st.revWrap}>
-          <Text style={st.revLabel}>TODAY</Text>
-          {todayRevenue !== 0 ? (
-            <Animated.Text
-              style={[
-                st.revAmount,
-                {
-                  color: animatedRevColor,
-                  transform: [{ scale: animatedRevScale }],
-                },
-              ]}
-            >
-              {todayRevenue >= 0 ? "+" : "-"}$
-              {Math.abs(
-                displayedRevVal !== 0 ? displayedRevVal : todayRevenue,
-              ).toLocaleString()}
-            </Animated.Text>
-          ) : (
-            <Text style={st.revZero}>$0</Text>
-          )}
-        </View>
-
-        {/* ── Speed controls ── */}
-        <View style={st.speeds}>
-          {SPEEDS.map(({ value, icon }) => {
+        <View style={st.speedGroup}>
+          {SPEEDS.map(({ value, label, icon }) => {
             const active = speed === value;
+
             return (
               <TouchableOpacity
                 key={value}
                 style={[
                   st.speedBtn,
                   active && {
-                    backgroundColor: color + "22",
-                    borderColor: color + "66",
+                    backgroundColor: color,
+                    borderColor: color,
                   },
                 ]}
                 onPress={() => setSpeed(value)}
-                activeOpacity={0.7}
+                activeOpacity={0.82}
               >
                 <Ionicons
                   name={icon as any}
-                  size={13}
-                  color={active ? color : Colors.dim}
+                  size={11}
+                  color={active ? Colors.bg : Colors.dim}
                 />
+                <Text
+                  style={[
+                    st.speedLabel,
+                    { color: active ? Colors.bg : Colors.dim },
+                  ]}
+                >
+                  {label}
+                </Text>
               </TouchableOpacity>
             );
           })}
         </View>
       </View>
+
+      <View style={st.flowRow}>
+        <FlowCard
+          icon="people-outline"
+          label="Waiting"
+          value={`${shortPax(waiting)} pax`}
+          color={waitingColor}
+        />
+
+        <FlowCard
+          icon="checkmark-done-outline"
+          label="Moved"
+          value={`${shortPax(movedToday)} pax`}
+          color={movedToday > 0 ? Colors.green : Colors.dim}
+          scale={movedScale}
+        />
+
+        <FlowCard
+          icon="cash-outline"
+          label="Today"
+          value={
+            todayReward > 0
+              ? `+${fmtCash(displayedReward || todayReward)}`
+              : "$0"
+          }
+          color={rewardColor}
+          scale={rewardScale}
+        />
+      </View>
     </View>
   );
 }
+
+const fc = StyleSheet.create({
+  card: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: "rgba(255,255,255,.035)",
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 7,
+    minWidth: 0,
+  },
+  iconWrap: {
+    width: 25,
+    height: 25,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+  },
+  body: {
+    flex: 1,
+    minWidth: 0,
+  },
+  label: {
+    fontSize: 7,
+    color: Colors.dim,
+    letterSpacing: 1.3,
+    fontWeight: "900",
+    textTransform: "uppercase",
+  },
+  value: {
+    fontSize: 12,
+    fontWeight: "900",
+    marginTop: 1,
+  },
+});
 
 const st = StyleSheet.create({
   container: {
@@ -308,50 +402,75 @@ const st = StyleSheet.create({
     left: 0,
     right: 0,
     zIndex: 20,
-    backgroundColor: "rgba(8,15,30,0.97)",
+    backgroundColor: "rgba(8,15,30,0.98)",
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
-  },
-  inner: {
-    flexDirection: "row",
-    alignItems: "center",
     paddingHorizontal: Spacing.md,
     paddingBottom: Spacing.sm,
     gap: Spacing.sm,
   },
-
-  // Left
-  left: { flex: 1, minWidth: 0, gap: 1 },
-  airlineName: { fontSize: 11, fontWeight: "700", letterSpacing: 0.3 },
-  cashRow: { flexDirection: "row", alignItems: "center", gap: 4 },
-  cash: { fontSize: 15, fontWeight: "700", letterSpacing: 0.3 },
-  cashPct: { fontSize: 9, fontWeight: "700" },
-
-  // Centre
-  centre: { alignItems: "center" },
-  dayLabel: { fontSize: 7, color: Colors.dim, letterSpacing: 2 },
-  dayNum: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: Colors.text,
-    minWidth: 36,
-    textAlign: "center",
+  topRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
   },
-  // Revenue ticker
-  revWrap: { alignItems: "center", minWidth: 64 },
-  revLabel: { fontSize: 7, color: Colors.dim, letterSpacing: 1.5 },
-  revAmount: { fontSize: 14, fontWeight: "700" },
-  revZero: { fontSize: 14, fontWeight: "700", color: Colors.dim },
-  // Speed
-  speeds: { flexDirection: "row", gap: 3 },
-  speedBtn: {
-    paddingHorizontal: 7,
+  identity: {
+    flex: 1,
+    minWidth: 0,
+  },
+  airline: {
+    fontSize: 11,
+    fontWeight: "900",
+    letterSpacing: 0.4,
+  },
+  cash: {
+    fontSize: 17,
+    fontWeight: "900",
+    marginTop: 1,
+  },
+  dayBox: {
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    backgroundColor: "rgba(255,255,255,.04)",
+    paddingHorizontal: Spacing.sm + 1,
     paddingVertical: 5,
-    borderRadius: Radius.sm,
+    minWidth: 52,
+  },
+  dayLabel: {
+    fontSize: 7,
+    color: Colors.dim,
+    letterSpacing: 1.8,
+    fontWeight: "900",
+  },
+  day: {
+    fontSize: 20,
+    fontWeight: "900",
+    lineHeight: 22,
+  },
+  speedGroup: {
+    flexDirection: "row",
+    gap: 4,
+  },
+  speedBtn: {
+    minWidth: 34,
+    minHeight: 31,
+    borderRadius: Radius.md,
     borderWidth: 1,
     borderColor: Colors.border,
-    backgroundColor: "rgba(255,255,255,.03)",
-    minWidth: 30,
+    backgroundColor: "rgba(255,255,255,.035)",
     alignItems: "center",
+    justifyContent: "center",
+    gap: 1,
+  },
+  speedLabel: {
+    fontSize: 7,
+    fontWeight: "900",
+    lineHeight: 8,
+  },
+  flowRow: {
+    flexDirection: "row",
+    gap: Spacing.sm,
   },
 });

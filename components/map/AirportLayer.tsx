@@ -10,9 +10,16 @@
 
 import { Colors } from "@/constants/theme";
 import { hubCrowdingLevel } from "@/lib/demands";
+import {
+  FlowDemand,
+  hubOutboundDeliveredPax,
+  hubOutboundWaitingPax,
+} from "@/lib/passengerFlow";
 import type { Airport, OwnedHub } from "@/store";
 import {
+  useAIAirlines,
   useAirports,
+  useDayProgress,
   useDemands,
   useHubs,
   useRoutes,
@@ -40,12 +47,19 @@ function toGeoJSON(airports: Airport[]): GeoJSON.FeatureCollection {
 
 function hubsToGeoJSON(
   hubs: OwnedHub[],
-  demands: { hub_iata: string; pax_day: number; delivered_pax_today: number }[],
+  demands: FlowDemand[],
+  dayProgress: number,
 ): GeoJSON.FeatureCollection {
   return {
     type: "FeatureCollection",
     features: hubs.map((h) => {
       const crowding = hubCrowdingLevel(h.airport.iata, demands, h.airport);
+      const waitingPax = hubOutboundWaitingPax(
+        h.airport.iata,
+        demands,
+        dayProgress,
+      );
+      const movedPax = hubOutboundDeliveredPax(h.airport.iata, demands);
       return {
         type: "Feature",
         id: h.airport.iata,
@@ -59,6 +73,8 @@ function hubsToGeoJSON(
           tier: h.tier,
           crowding: crowding.level, // "normal"|"busy"|"overcrowded"|"crisis"
           capPct: crowding.capacityPct,
+          waitingPax,
+          movedPax,
         },
       };
     }),
@@ -90,8 +106,10 @@ export default function AirportLayer({
   const airports = useAirports();
   const hubs = useHubs();
   const demands = useDemands();
+  const dayProgress = useDayProgress();
   const routes = useRoutes();
   const selectedAirport = useSelectedAirport();
+  const aiAirlines = useAIAirlines();
 
   // Pulse animation — loops 0→1→0
   const pulse = useRef(new Animated.Value(0)).current;
@@ -102,12 +120,12 @@ export default function AirportLayer({
         Animated.timing(pulse, {
           toValue: 1,
           duration: 1800,
-          useNativeDriver: true,
+          useNativeDriver: false,
         }),
         Animated.timing(pulse, {
           toValue: 0,
           duration: 1800,
-          useNativeDriver: true,
+          useNativeDriver: false,
         }),
       ]),
     );
@@ -128,8 +146,17 @@ export default function AirportLayer({
     return () => pulse.removeListener(id);
   }, [pulse]);
 
+  // Airports where any AI has a hub — for competition indicator
+  const aiHubIatas = new Set(aiAirlines.flatMap((ai) => ai.hubIatas));
+  const aiHubGeoJSON = toGeoJSON(
+    airports.filter(
+      (a) =>
+        aiHubIatas.has(a.iata) && !hubs.some((h) => h.airport.iata === a.iata),
+    ),
+  );
+
   const allGeoJSON = toGeoJSON(airports);
-  const ownedGeoJSON = hubsToGeoJSON(hubs, demands);
+  const ownedGeoJSON = hubsToGeoJSON(hubs, demands, dayProgress);
   const selectedGeoJSON = toGeoJSON(selectedAirport ? [selectedAirport] : []);
 
   const handlePress = (e: { features?: GeoJSON.Feature[] }) => {
@@ -353,6 +380,51 @@ export default function AirportLayer({
             }}
           />
 
+          {/* Waiting travelers ring — amber when queues are building */}
+          <MapboxGL.CircleLayer
+            id="owned-waiting-ring"
+            existing={false}
+            style={{
+              circleRadius: [
+                "interpolate",
+                ["linear"],
+                ["zoom"],
+                1,
+                ["case", [">", ["get", "waitingPax"], 0], 15, 0],
+                5,
+                ["case", [">", ["get", "waitingPax"], 0], 28, 0],
+                10,
+                ["case", [">", ["get", "waitingPax"], 0], 44, 0],
+              ],
+              circleColor: "transparent",
+              circleStrokeColor: Colors.amber,
+              circleStrokeWidth: [
+                "interpolate",
+                ["linear"],
+                ["get", "waitingPax"],
+                0,
+                0,
+                50,
+                1.5,
+                250,
+                3,
+              ],
+              circleStrokeOpacity: [
+                "interpolate",
+                ["linear"],
+                ["get", "waitingPax"],
+                0,
+                0,
+                50,
+                0.35,
+                250,
+                0.85,
+              ],
+              circleOpacity: 0,
+              circlePitchAlignment: "map",
+            }}
+          />
+
           {/* Hub glow */}
           <MapboxGL.CircleLayer
             id="owned-activity-glow"
@@ -397,6 +469,30 @@ export default function AirportLayer({
               circleStrokeWidth: 2,
               circleStrokeColor: "rgba(255,255,255,0.4)",
               circlePitchAlignment: "map",
+            }}
+          />
+
+          {/* Waiting count — shows when travelers are queued */}
+          <MapboxGL.SymbolLayer
+            id="owned-waiting-label"
+            existing={false}
+            minZoomLevel={5}
+            style={{
+              textField: [
+                "case",
+                [">", ["get", "waitingPax"], 0],
+                ["concat", ["to-string", ["get", "waitingPax"]], " waiting"],
+                "",
+              ],
+              textSize: ["interpolate", ["linear"], ["zoom"], 5, 9, 10, 12],
+              textOffset: [0, -1.7],
+              textAnchor: "bottom",
+              textColor: Colors.amber,
+              textOpacity: ["case", [">", ["get", "waitingPax"], 0], 0.95, 0],
+              textHaloColor: "rgba(4,9,15,0.95)",
+              textHaloWidth: 2,
+              textAllowOverlap: true,
+              textIgnorePlacement: true,
             }}
           />
 

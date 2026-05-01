@@ -10,6 +10,7 @@
  * Completion is tracked in Supabase (airlines.weekly_challenge_completed).
  */
 
+import { seedHash } from "@/lib/seed";
 import { supabase } from "@/lib/supabase";
 import { useGameStore } from "@/store";
 import { useEffect, useState } from "react";
@@ -346,8 +347,11 @@ const WEEKLY_POOL: Omit<WeeklyChallenge, "id" | "weekNumber" | "completed">[] =
 
 function getWeeklyChallenge(
   weekNumber: number,
+  gameSeed: string = "DEFAULT",
 ): Omit<WeeklyChallenge, "id" | "completed"> {
-  const base = WEEKLY_POOL[weekNumber % WEEKLY_POOL.length];
+  // Seeded by game seed + week — different seeds give different challenge rotations
+  const idx = seedHash(gameSeed, "weekly", weekNumber) % WEEKLY_POOL.length;
+  const base = WEEKLY_POOL[idx];
   return { ...base, weekNumber, id: `weekly-${weekNumber}` } as any;
 }
 
@@ -523,7 +527,8 @@ export function useWeeklyChallenge() {
     if (!airline) return;
 
     const weekNumber = getISOWeek();
-    const base = getWeeklyChallenge(weekNumber);
+    const gameSeed = useGameStore.getState().airline?.seed ?? "DEFAULT";
+    const base = getWeeklyChallenge(weekNumber, gameSeed);
 
     // Load completion status from DB
     const load = async () => {

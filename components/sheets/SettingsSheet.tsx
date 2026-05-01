@@ -1,9 +1,7 @@
 /**
  * components/sheets/SettingsSheet.tsx
  *
- * Settings — clean, no "Build with" row.
- * Sections: Account, Game, About, Links.
- * Missions link for quick access.
+ * Worldwide Rush-style settings panel.
  */
 
 import { GameAlert, useGameAlert } from "@/components/ui/GameAlert";
@@ -39,6 +37,7 @@ function SettingRow({
   onPress,
   right,
   danger,
+  color,
 }: {
   icon: string;
   label: string;
@@ -46,85 +45,47 @@ function SettingRow({
   onPress?: () => void;
   right?: React.ReactNode;
   danger?: boolean;
+  color?: string;
 }) {
+  const accent = danger ? Colors.red : (color ?? Colors.muted);
+
   return (
     <TouchableOpacity
-      style={sr.row}
+      style={[sr.row, danger && sr.dangerRow]}
       onPress={onPress}
       disabled={!onPress}
-      activeOpacity={onPress ? 0.7 : 1}
+      activeOpacity={onPress ? 0.78 : 1}
     >
-      <View style={sr.iconWrap}>
-        <Ionicons
-          name={icon as any}
-          size={16}
-          color={danger ? Colors.red : Colors.muted}
-        />
+      <View style={[sr.iconWrap, { backgroundColor: accent + "14" }]}>
+        <Ionicons name={icon as any} size={16} color={accent} />
       </View>
+
       <View style={sr.body}>
         <Text style={[sr.label, danger && { color: Colors.red }]}>{label}</Text>
-        {sublabel && <Text style={sr.sub}>{sublabel}</Text>}
+        {!!sublabel && <Text style={sr.sub}>{sublabel}</Text>}
       </View>
+
       {right ??
-        (onPress && !danger && (
-          <Ionicons name="chevron-forward" size={14} color={Colors.dim} />
-        ))}
+        (onPress && !danger ? (
+          <Ionicons name="chevron-forward" size={15} color={Colors.dim} />
+        ) : null)}
     </TouchableOpacity>
   );
 }
 
-const sr = StyleSheet.create({
-  row: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.md,
-    paddingVertical: Spacing.sm + 2,
-    paddingHorizontal: Spacing.lg,
-  },
-  iconWrap: {
-    width: 28,
-    height: 28,
-    borderRadius: 7,
-    backgroundColor: "rgba(255,255,255,.05)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  body: { flex: 1, gap: 1 },
-  label: { fontSize: 13, color: Colors.text, fontWeight: "500" },
-  sub: { fontSize: 10, color: Colors.dim },
-});
-
 function SectionHeader({ label }: { label: string }) {
-  return <Text style={sh.txt}>{label}</Text>;
+  return <Text style={s.sectionTitle}>{label}</Text>;
 }
-const sh = StyleSheet.create({
-  txt: {
-    fontSize: 9,
-    color: Colors.dim,
-    letterSpacing: 2.5,
-    paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.lg,
-    paddingBottom: Spacing.xs,
-  },
-});
 
 function Divider() {
-  return (
-    <View
-      style={{
-        height: StyleSheet.hairlineWidth,
-        backgroundColor: Colors.border,
-        marginHorizontal: Spacing.lg,
-      }}
-    />
-  );
+  return <View style={s.divider} />;
 }
 
 export default function SettingsSheet() {
   const airline = useAirline();
   const day = useDay();
-  const closeSheet = useGameStore((s) => s.closeSheet);
-  const openSheet = useGameStore((s) => s.openSheet);
+  const closeSheet = useGameStore((state) => state.closeSheet);
+  const openSheet = useGameStore((state) => state.openSheet);
   const tabBarH = useTabBarHeight();
 
   const [deleting, setDeleting] = useState(false);
@@ -140,15 +101,16 @@ export default function SettingsSheet() {
   const [sfxOn, setSfxOn] = useState(sounds.isSfxEnabled());
   const gameAlert = useGameAlert();
 
-  // Load user email on mount
   useEffect(() => {
-    getCurrentUser().then((u) => setUserEmail(u?.email ?? null));
+    getCurrentUser().then((user) => setUserEmail(user?.email ?? null));
   }, []);
 
   const handleLinkGoogle = async () => {
     setLinking(true);
     setLinkError(null);
+
     const result = await linkGoogleAccount();
+
     setLinking(false);
 
     if (result.error) {
@@ -157,27 +119,28 @@ export default function SettingsSheet() {
     }
 
     if (result.conflict && result.onOverwrite && result.onKeepGuest) {
-      // Google account already has progress — ask player what to do
       gameAlert.show({
         icon: "warning-outline",
         title: "Account Conflict",
         message:
-          "Your Google account already has an airline with saved progress.\n\nKeep your current guest progress, or cancel to keep the Google account progress.",
+          "Your Google account already has saved progress.\n\nKeep this current airline, or cancel to keep the Google account progress.",
         buttons: [
           {
-            label: "Keep my current progress",
+            label: "Keep Current",
             style: "destructive",
             onPress: async () => {
               setLinking(true);
               const { error } = await result.onOverwrite!();
               setLinking(false);
+
               if (error) {
                 setLinkError(error);
-              } else {
-                useGameStore.getState().setIsAnonymous(false);
-                const u = await getCurrentUser();
-                setUserEmail(u?.email ?? null);
+                return;
               }
+
+              useGameStore.getState().setIsAnonymous(false);
+              const user = await getCurrentUser();
+              setUserEmail(user?.email ?? null);
             },
           },
           {
@@ -190,10 +153,9 @@ export default function SettingsSheet() {
       return;
     }
 
-    // No conflict — link succeeded
     useGameStore.getState().setIsAnonymous(false);
-    const u = await getCurrentUser();
-    setUserEmail(u?.email ?? null);
+    const user = await getCurrentUser();
+    setUserEmail(user?.email ?? null);
   };
 
   const handleDeleteAccount = () => {
@@ -201,20 +163,20 @@ export default function SettingsSheet() {
       icon: "trash-outline",
       title: "Delete Account",
       message:
-        "This will permanently delete your airline and all progress. This cannot be undone.",
+        "This permanently deletes your airline, progress, routes, hubs, planes, missions, and achievements. This cannot be undone.",
       buttons: [
         { label: "Cancel", style: "cancel" },
         {
-          label: "Delete Account",
+          label: "Delete",
           style: "destructive",
           onPress: async () => {
             setDeleting(true);
+
             try {
-              // 1. Delete all game data via RPC
               const { error: rpcError } = await supabase.rpc(
                 "delete_user_account",
               );
-              // If RPC fails (e.g. not yet created), still sign out and reset
+
               if (rpcError) {
                 console.warn(
                   "delete_user_account RPC error:",
@@ -222,10 +184,8 @@ export default function SettingsSheet() {
                 );
               }
 
-              // 2. Sign out of Supabase auth
               await supabase.auth.signOut();
 
-              // 3. Reset the entire game store back to initial state
               useGameStore.setState({
                 phase: "auth",
                 airline: null,
@@ -244,8 +204,8 @@ export default function SettingsSheet() {
                 creationWaypoints: [],
                 loadComplete: false,
               });
-            } catch (e) {
-              console.error("Delete account error:", e);
+            } catch (error) {
+              console.error("Delete account error:", error);
               gameAlert.show({
                 title: "Error",
                 message: "Failed to delete account. Please try again.",
@@ -269,12 +229,15 @@ export default function SettingsSheet() {
       ]}
       showsVerticalScrollIndicator={false}
     >
-      {/* Header */}
       <View style={s.header}>
         <View style={s.hdrL}>
-          <Ionicons name="settings-outline" size={20} color={color} />
-          <Text style={s.title}>Settings</Text>
+          <Ionicons name="flash-outline" size={21} color={color} />
+          <View>
+            <Text style={s.title}>Control Panel</Text>
+            <Text style={s.subtitle}>Settings and game links</Text>
+          </View>
         </View>
+
         <TouchableOpacity
           onPress={closeSheet}
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
@@ -283,161 +246,220 @@ export default function SettingsSheet() {
         </TouchableOpacity>
       </View>
 
-      {/* Airline summary */}
-      <View style={[s.airlineCard, { borderColor: color + "33" }]}>
+      <View style={[s.airlineCard, { borderColor: color + "44" }]}>
         <View
           style={[
-            s.airlineIconWrap,
-            { backgroundColor: color + "18", borderColor: color + "33" },
+            s.airlineIcon,
+            {
+              backgroundColor: color + "18",
+              borderColor: color + "33",
+            },
           ]}
         >
-          <Ionicons name="airplane" size={20} color={color} />
+          <Ionicons name="airplane" size={21} color={color} />
         </View>
+
         <View style={s.airlineInfo}>
           <Text style={s.airlineName}>{airline?.name ?? "Your Airline"}</Text>
           <Text style={s.airlineMeta}>
             Day {day} · {fmtCash(airline?.cash ?? 0)} cash
           </Text>
         </View>
+
+        <View style={[s.statusPill, { backgroundColor: color + "14" }]}>
+          <Text style={[s.statusText, { color }]}>LIVE</Text>
+        </View>
       </View>
 
-      {/* GAME */}
-      <SectionHeader label="GAME" />
-      <SettingRow
-        icon="flag-outline"
-        label="Daily Missions"
-        sublabel="Today's challenges and rewards"
-        onPress={() => openSheet("missions")}
-        right={<Ionicons name="chevron-forward" size={14} color={Colors.dim} />}
-      />
-      <Divider />
-      <SettingRow
-        icon="trophy-outline"
-        label="Achievements"
-        sublabel="Your trophy cabinet"
-        onPress={() => openSheet("achievements")}
-        right={<Ionicons name="chevron-forward" size={14} color={Colors.dim} />}
-      />
-      <Divider />
-      <SettingRow
-        icon="podium-outline"
-        label="Leaderboard"
-        sublabel="Global rankings"
-        onPress={() => openSheet("leaderboard")}
-        right={<Ionicons name="chevron-forward" size={14} color={Colors.dim} />}
-      />
+      <SectionHeader label="QUICK ACCESS" />
 
-      {/* ACCOUNT */}
+      <View style={s.card}>
+        <SettingRow
+          icon="flag-outline"
+          label="Mission Rush"
+          sublabel="Daily contracts and rewards"
+          onPress={() => openSheet("missions")}
+          color={color}
+        />
+        <Divider />
+        <SettingRow
+          icon="trophy-outline"
+          label="Trophy Rush"
+          sublabel="Achievements and progress"
+          onPress={() => openSheet("achievements")}
+          color="#a78bfa"
+        />
+        <Divider />
+        <SettingRow
+          icon="podium-outline"
+          label="Leaderboard"
+          sublabel="Compare against other airlines"
+          onPress={() => openSheet("leaderboard")}
+          color={Colors.amber}
+        />
+      </View>
+
       <SectionHeader label="ACCOUNT" />
 
-      {/* Loading — session not yet confirmed */}
-      {!loadComplete && (
-        <SettingRow
-          icon="person-circle-outline"
-          label="Loading account..."
-          sublabel=""
-        />
-      )}
-
-      {/* Guest — show sync option */}
-      {loadComplete && isAnonymous && (
-        <>
+      <View style={s.card}>
+        {!loadComplete && (
           <SettingRow
-            icon="person-outline"
-            label="Playing as Guest"
-            sublabel="Progress saved on this device only"
+            icon="person-circle-outline"
+            label="Loading account..."
+            sublabel="Checking saved progress"
+            color={Colors.dim}
           />
-          <Divider />
+        )}
+
+        {loadComplete && isAnonymous && (
+          <>
+            <SettingRow
+              icon="person-outline"
+              label="Guest Airline"
+              sublabel="Progress is saved on this device"
+              color={Colors.amber}
+            />
+            <Divider />
+            <SettingRow
+              icon="logo-google"
+              label={linking ? "Connecting..." : "Sync with Google"}
+              sublabel="Save progress across devices"
+              onPress={linking ? undefined : handleLinkGoogle}
+              color={Colors.sky}
+              right={
+                linking ? (
+                  <ActivityIndicator size="small" color={Colors.sky} />
+                ) : (
+                  <Ionicons
+                    name="chevron-forward"
+                    size={15}
+                    color={Colors.dim}
+                  />
+                )
+              }
+            />
+          </>
+        )}
+
+        {loadComplete && !isAnonymous && (
           <SettingRow
             icon="logo-google"
-            label={linking ? "Connecting..." : "Sync with Google"}
-            sublabel="Save progress across devices · required for purchases"
-            onPress={linking ? undefined : handleLinkGoogle}
-            right={
-              linking ? (
-                <ActivityIndicator size="small" color={Colors.sky} />
-              ) : (
-                <Ionicons name="chevron-forward" size={14} color={Colors.dim} />
-              )
-            }
+            label="Google Sync Active"
+            sublabel={userEmail ?? "Progress synced across devices"}
+            color={GREEN}
+            right={<Ionicons name="checkmark-circle" size={17} color={GREEN} />}
           />
-          {linkError && (
-            <View
-              style={{
-                paddingHorizontal: Spacing.lg,
-                marginTop: -Spacing.sm,
-                marginBottom: Spacing.sm,
-              }}
-            >
-              <Text style={{ fontSize: 10, color: Colors.red }}>
-                {linkError}
-              </Text>
-            </View>
-          )}
-        </>
-      )}
+        )}
 
-      {/* Google account — show account info only */}
-      {loadComplete && !isAnonymous && (
+        {!!linkError && (
+          <View style={s.inlineError}>
+            <Text style={s.inlineErrorText}>{linkError}</Text>
+          </View>
+        )}
+
+        <Divider />
+
         <SettingRow
-          icon="logo-google"
-          label="Google Account"
-          sublabel={userEmail ?? "Signed in · progress synced across devices"}
-          right={<Ionicons name="checkmark-circle" size={16} color="#22c55e" />}
+          icon="trash-outline"
+          label={deleting ? "Deleting..." : "Delete Account"}
+          sublabel="Permanently remove all progress"
+          onPress={deleting ? undefined : handleDeleteAccount}
+          danger
+          right={
+            deleting ? (
+              <ActivityIndicator size="small" color={Colors.red} />
+            ) : undefined
+          }
         />
-      )}
+      </View>
 
-      <Divider />
-      <SettingRow
-        icon="trash-outline"
-        label="Delete Account"
-        sublabel="Permanently remove all data"
-        onPress={handleDeleteAccount}
-        danger
-      />
+      <SectionHeader label="GAME FEEL" />
 
-      {/* ABOUT */}
-      <SectionHeader label="SOUND" />
-      <SettingRow
-        icon="volume-high-outline"
-        label="Sound Effects"
-        sublabel="Planes, purchases, achievements"
-        right={
-          <Switch
-            value={sfxOn}
-            onValueChange={(v) => {
-              setSfxOn(v);
-              sounds.setSfxEnabled(v);
-            }}
-            trackColor={{ false: Colors.border, true: Colors.sky + "88" }}
-            thumbColor={sfxOn ? Colors.sky : Colors.dim}
-          />
-        }
-      />
-      <Divider />
+      <View style={s.card}>
+        <SettingRow
+          icon="volume-high-outline"
+          label="Sound Effects"
+          sublabel="Planes, rewards, purchases"
+          color={Colors.sky}
+          right={
+            <Switch
+              value={sfxOn}
+              onValueChange={(value) => {
+                setSfxOn(value);
+                sounds.setSfxEnabled(value);
+              }}
+              trackColor={{ false: Colors.border, true: Colors.sky + "88" }}
+              thumbColor={sfxOn ? Colors.sky : Colors.dim}
+            />
+          }
+        />
+      </View>
 
       <SectionHeader label="ABOUT" />
-      <SettingRow
-        icon="information-circle-outline"
-        label="Version"
-        sublabel="1.0.0"
-      />
-      <Divider />
-      <SettingRow
-        icon="shield-checkmark-outline"
-        label="Privacy Policy"
-        sublabel="How we handle your data"
-        onPress={() => openSheet("privacy-policy")}
-      />
+
+      <View style={s.card}>
+        <SettingRow
+          icon="information-circle-outline"
+          label="Version"
+          sublabel="1.0.0"
+          color={Colors.dim}
+        />
+        <Divider />
+        <SettingRow
+          icon="shield-checkmark-outline"
+          label="Privacy Policy"
+          sublabel="How Flightcraft handles data"
+          onPress={() => openSheet("privacy-policy")}
+          color={Colors.green}
+        />
+      </View>
+
       <GameAlert ref={gameAlert.ref} />
     </BottomSheetScrollView>
   );
 }
 
+const GREEN = "#22c55e";
+
+const sr = StyleSheet.create({
+  row: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.md,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.md,
+  },
+  dangerRow: {
+    backgroundColor: Colors.red + "04",
+  },
+  iconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  body: {
+    flex: 1,
+    gap: 2,
+  },
+  label: {
+    fontSize: 13,
+    color: Colors.text,
+    fontWeight: "800",
+  },
+  sub: {
+    fontSize: 10,
+    color: Colors.dim,
+    lineHeight: 14,
+  },
+});
+
 const s = StyleSheet.create({
   root: { flex: 1 },
-  content: { paddingBottom: Spacing.xxl },
-
+  content: {
+    paddingBottom: Spacing.xxl,
+  },
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -446,8 +468,21 @@ const s = StyleSheet.create({
     paddingTop: Spacing.sm,
     paddingBottom: Spacing.md,
   },
-  hdrL: { flexDirection: "row", alignItems: "center", gap: Spacing.sm },
-  title: { fontSize: 20, color: Colors.text, fontWeight: "700" },
+  hdrL: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
+  title: {
+    fontSize: 20,
+    color: Colors.text,
+    fontWeight: "900",
+  },
+  subtitle: {
+    fontSize: 10,
+    color: Colors.dim,
+    marginTop: 1,
+  },
 
   airlineCard: {
     flexDirection: "row",
@@ -455,21 +490,74 @@ const s = StyleSheet.create({
     gap: Spacing.md,
     marginHorizontal: Spacing.lg,
     marginBottom: Spacing.sm,
-    backgroundColor: "rgba(255,255,255,.03)",
     borderRadius: Radius.xl,
     borderWidth: 1,
+    backgroundColor: "rgba(255,255,255,.035)",
     padding: Spacing.md,
   },
-  airlineIconWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: 10,
+  airlineIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
     borderWidth: 1,
     alignItems: "center",
     justifyContent: "center",
     flexShrink: 0,
   },
-  airlineInfo: { flex: 1 },
-  airlineName: { fontSize: 15, color: Colors.text, fontWeight: "700" },
-  airlineMeta: { fontSize: 11, color: Colors.dim, marginTop: 2 },
+  airlineInfo: {
+    flex: 1,
+    minWidth: 0,
+  },
+  airlineName: {
+    fontSize: 15,
+    color: Colors.text,
+    fontWeight: "900",
+  },
+  airlineMeta: {
+    fontSize: 11,
+    color: Colors.dim,
+    marginTop: 2,
+  },
+  statusPill: {
+    borderRadius: Radius.full,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  statusText: {
+    fontSize: 8,
+    fontWeight: "900",
+    letterSpacing: 1.2,
+  },
+
+  sectionTitle: {
+    fontSize: 9,
+    color: Colors.dim,
+    letterSpacing: 2.5,
+    fontWeight: "900",
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.lg,
+    paddingBottom: Spacing.xs,
+  },
+  card: {
+    marginHorizontal: Spacing.lg,
+    borderRadius: Radius.xl,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: "rgba(255,255,255,.025)",
+    overflow: "hidden",
+  },
+  divider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: Colors.border,
+    marginLeft: Spacing.md + 32 + Spacing.md,
+  },
+  inlineError: {
+    paddingHorizontal: Spacing.md,
+    paddingBottom: Spacing.sm,
+  },
+  inlineErrorText: {
+    fontSize: 10,
+    color: Colors.red,
+    lineHeight: 14,
+  },
 });

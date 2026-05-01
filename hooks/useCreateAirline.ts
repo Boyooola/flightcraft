@@ -1,10 +1,11 @@
 /**
  * hooks/useCreateAirline.ts
  *
- * Creates a new airline row in Supabase and populates the store.
- * Routes to "welcome" phase so new players see the welcome screen.
+ * Creates a new airline in Supabase on game setup.
+ * Stores seed, AI config, and difficulty alongside core airline data.
  */
 
+import { setDemandSeed } from "@/lib/demands";
 import { supabase } from "@/lib/supabase";
 import { useGameStore } from "@/store";
 import { useCallback } from "react";
@@ -15,6 +16,9 @@ interface CreateAirlineParams {
   difficulty: string;
   cash: number;
   loan: number;
+  seed: string;
+  ai_count: number;
+  ai_difficulty: string;
 }
 
 export function useCreateAirline() {
@@ -23,56 +27,78 @@ export function useCreateAirline() {
   return useCallback(
     async (params: CreateAirlineParams): Promise<{ error: string | null }> => {
       const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      if (!session)
-        return { error: "No session found. Please restart the app." };
+        name,
+        color,
+        difficulty,
+        cash,
+        loan,
+        seed,
+        ai_count,
+        ai_difficulty,
+      } = params;
 
-      const { data, error } = await supabase
-        .from("airlines")
-        .insert({
-          user_id: session.user.id,
-          name: params.name,
-          color: params.color,
-          icon: "plane",
-          difficulty: params.difficulty,
-          cash: params.cash,
-          loan: params.loan,
+      if (!name.trim()) return { error: "Airline name is required" };
+
+      try {
+        const {
+          data: { user },
+          error: authErr,
+        } = await supabase.auth.getUser();
+        if (authErr || !user) return { error: "Not authenticated" };
+
+        const loanRate =
+          difficulty === "easy" ? 3 : difficulty === "hard" ? 9 : 5;
+
+        const { data, error } = await supabase
+          .from("airlines")
+          .insert({
+            user_id: user.id,
+            name: name.trim(),
+            color,
+            difficulty,
+            cash,
+            loan,
+            loan_rate: loanRate,
+            seed: seed.toUpperCase(),
+            ai_count,
+            ai_difficulty,
+            day: 1,
+            speed: 1,
+            reputation: 50,
+            demand_score: 0,
+          })
+          .select()
+          .single();
+
+        if (error) return { error: error.message };
+
+        // Wire the seed into the demand generation system
+        setDemandSeed(seed.toUpperCase());
+
+        setAirline({
+          id: data.id,
+          user_id: user.id,
+          name: name.trim(),
+          color,
+          icon: "airplane",
+          difficulty,
+          cash,
+          loan,
+          loan_rate: loanRate,
           day: 1,
           speed: 1,
-          reputation: 0,
+          reputation: 50,
           demand_score: 0,
-        })
-        .select()
-        .single();
+          seed: seed.toUpperCase(),
+          ai_count,
+          ai_difficulty,
+        });
 
-      if (error) {
-        if (error.code === "23505") {
-          return { error: "Airline already exists. Please restart the app." };
-        }
-        return { error: error.message };
+        setPhase("tutorial");
+        return { error: null };
+      } catch (err: any) {
+        return { error: err.message ?? "Failed to create airline" };
       }
-
-      setAirline({
-        id: data.id,
-        user_id: data.user_id,
-        name: data.name,
-        color: data.color,
-        icon: data.icon,
-        difficulty: data.difficulty,
-        cash: Number(data.cash),
-        loan: Number(data.loan),
-        day: data.day,
-        speed: data.speed,
-        reputation: data.reputation,
-        demand_score: data.demand_score,
-        loan_rate: data.loan_rate ?? 5,
-      });
-
-      // ← Route to welcome screen instead of playing
-      setPhase("welcome");
-
-      return { error: null };
     },
     [],
   );

@@ -13,6 +13,7 @@
  */
 
 import { gameSounds } from "@/hooks/useGameSounds";
+import { boardPassengers } from "@/lib/passengerFlow";
 import { calcRouteRevenue } from "@/lib/revenue";
 import type { Airport, Route } from "@/store";
 import { useGameStore, useRoutes } from "@/store";
@@ -199,20 +200,16 @@ export default function RouteLayer({
           const distNm = r.total_dist_nm ?? r.demand.dist_nm;
           const plane = r.plane.plane_model;
 
-          // Pax — never exceed daily quota
-          const delivered = demand.delivered_pax_today ?? 0;
-          const remaining = Math.max(0, demand.pax_day - delivered);
+          // Pax — WorldWide Rush-style:
+          // passengers appear gradually during the day, then planes board
+          // only from the current waiting queue at the origin.
+          const actualPax = boardPassengers({
+            demand,
+            planeCapacity: plane.pax_capacity,
+            dayProgress: store.dayProgress,
+          });
 
-          if (remaining > 0) {
-            const flights = Math.max(
-              1,
-              Math.floor(24 / ((distNm / plane.speed_kts) * 2)),
-            );
-            const perFlight = Math.round(
-              (demand.pax_day / flights) * (0.65 + Math.random() * 0.35),
-            );
-            const actualPax = Math.min(remaining, Math.max(1, perFlight));
-
+          if (actualPax > 0) {
             store.addPaxDelivered(r.demand.id, actualPax);
 
             // ── Leg demand credit — real O&D split ────────────────
@@ -231,11 +228,15 @@ export default function RouteLayer({
                   d.dest.iata === r.via_iata,
               );
               if (legDemand) {
-                const legRemaining = Math.max(
-                  0,
-                  legDemand.pax_day - (legDemand.delivered_pax_today ?? 0),
-                );
-                if (legRemaining > 0) {
+                const legBoardable = boardPassengers({
+                  demand: legDemand,
+                  planeCapacity: plane.pax_capacity,
+                  dayProgress: store.dayProgress,
+                  loadFactorMin: 1,
+                  loadFactorMax: 1,
+                });
+
+                if (legBoardable > 0) {
                   // Use stored O&D ratio (computed at route creation from gravity model)
                   // Falls back to leg_pax / (leg_pax + through_pax) if not stored
                   const viaRatio =
@@ -243,7 +244,7 @@ export default function RouteLayer({
                     legDemand.pax_day /
                       Math.max(1, legDemand.pax_day + demand.pax_day);
                   const legPax = Math.min(
-                    legRemaining,
+                    legBoardable,
                     Math.round(actualPax * viaRatio),
                   );
                   if (legPax > 0) store.addPaxDelivered(legDemand.id, legPax);

@@ -32,7 +32,7 @@ export function useNotifications() {
     // Configure how notifications appear while app is foregrounded
     Notifications.setNotificationHandler({
       handleNotification: async () => ({
-        shouldShowAlert: true,
+        shouldShowBanner: true,
         shouldPlaySound: false,
         shouldSetBadge: false,
       }),
