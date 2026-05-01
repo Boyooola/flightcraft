@@ -1,7 +1,7 @@
 /**
  * components/ui/DaySummaryCard.tsx
  *
- * WorldWide Rush-style end-of-day flow result card.
+ * WorldWide Rush-style end-of-day flow / pressure result card.
  */
 
 import { Colors, Radius, Spacing } from "@/constants/theme";
@@ -21,11 +21,17 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const TAB_H = 72;
-const HOLD_MS = 4600;
+const HOLD_MS = 4800;
 const SLIDE_MS = 220;
 const GREEN = "#22c55e";
 const RED = "#ef4444";
 const AMBER = "#F59E0B";
+
+function fmtPax(value: number) {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 10_000) return `${Math.round(value / 1000)}K`;
+  return value.toLocaleString();
+}
 
 function Stat({
   icon,
@@ -47,12 +53,6 @@ function Stat({
       <Text style={st.label}>{label}</Text>
     </View>
   );
-}
-
-function fmtPax(value: number) {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-  if (value >= 10_000) return `${Math.round(value / 1000)}K`;
-  return value.toLocaleString();
 }
 
 export default function DaySummaryCard() {
@@ -161,11 +161,33 @@ export default function DaySummaryCard() {
 
   const waitingPax = current.waitingPax ?? 0;
   const stalledRoutes = current.stalledRoutes ?? 0;
+  const aiLostPax = current.aiStolenPax ?? 0;
+  const busyHubs = current.busyHubs ?? 0;
+  const overcrowdedHubs = current.overcrowdedHubs ?? 0;
+  const crisisHubs = current.crisisHubs ?? 0;
+  const pressuredHubs = busyHubs + overcrowdedHubs + crisisHubs;
+
   const netPositive = net >= 0;
   const allMissions = missionsToday === missionsTotal && missionsTotal > 0;
   const nwDelta = netWorth - prevNetWorth;
+
   const flowColor =
-    stalledRoutes > 0 ? RED : waitingPax > paxToday ? AMBER : GREEN;
+    crisisHubs > 0
+      ? RED
+      : overcrowdedHubs > 0 || stalledRoutes > 0 || waitingPax > paxToday
+        ? AMBER
+        : GREEN;
+
+  const statusText =
+    crisisHubs > 0
+      ? `${crisisHubs} crisis hub${crisisHubs === 1 ? "" : "s"}`
+      : overcrowdedHubs > 0
+        ? `${overcrowdedHubs} overcrowded`
+        : aiLostPax > 0
+          ? `${fmtPax(aiLostPax)} lost to rivals`
+          : stalledRoutes > 0
+            ? `${stalledRoutes} stalled`
+            : null;
 
   return (
     <Animated.View
@@ -186,7 +208,7 @@ export default function DaySummaryCard() {
         <View style={s.header}>
           <View>
             <Text style={[s.label, { color: flowColor }]}>
-              DAY {day} FLOW RESULT
+              DAY {day} {pressuredHubs > 0 ? "PRESSURE RESULT" : "FLOW RESULT"}
             </Text>
             <Text style={[s.net, { color: netPositive ? GREEN : RED }]}>
               {netPositive ? "+" : ""}
@@ -230,18 +252,16 @@ export default function DaySummaryCard() {
         <View style={s.rewardRow}>
           <View style={s.rewardLeft}>
             <Ionicons
-              name={stalledRoutes > 0 ? "warning-outline" : "cash-outline"}
+              name={statusText ? "warning-outline" : "cash-outline"}
               size={13}
-              color={stalledRoutes > 0 ? RED : GREEN}
+              color={statusText ? flowColor : GREEN}
             />
             <Text style={s.rewardText}>
               {revenue > 0 ? fmtCash(revenue) : "$0"} route rewards
             </Text>
           </View>
 
-          {stalledRoutes > 0 && (
-            <Text style={s.stalledText}>{stalledRoutes} stalled</Text>
-          )}
+          {statusText && <Text style={s.stalledText}>{statusText}</Text>}
         </View>
 
         <View style={s.footer}>
@@ -321,7 +341,8 @@ const s = StyleSheet.create({
     marginBottom: Spacing.sm,
   },
   label: {
-    fontSize: 8,
+    fontSize: 9,
+    color: Colors.dim,
     letterSpacing: 1.8,
     fontWeight: "900",
   },
@@ -340,11 +361,7 @@ const s = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     gap: Spacing.sm,
-    borderRadius: Radius.lg,
-    backgroundColor: "rgba(255,255,255,.03)",
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: Spacing.xs + 2,
-    marginBottom: Spacing.sm,
+    marginBottom: Spacing.xs,
   },
   rewardLeft: {
     flexDirection: "row",
@@ -354,7 +371,7 @@ const s = StyleSheet.create({
   },
   rewardText: {
     fontSize: 10,
-    color: Colors.muted,
+    color: Colors.dim,
     fontWeight: "800",
   },
   stalledText: {

@@ -16,9 +16,6 @@ export interface RevenueToastData {
   day: number;
   routes: number;
   paxToday: number;
-  moved?: number;
-  waiting?: number;
-  cleared?: boolean;
 }
 
 export interface UnlockToastData {
@@ -60,7 +57,10 @@ export interface DaySummaryToastData {
   prevNetWorth: number;
   waitingPax?: number;
   stalledRoutes?: number;
-  aiLostPax?: number;
+  aiStolenPax?: number; // ✅ FIXED
+  busyHubs?: number;
+  overcrowdedHubs?: number;
+  crisisHubs?: number;
 }
 
 export interface AchievementToastData {
@@ -120,6 +120,7 @@ export function useToastListener() {
     const handler: Listener = (toast) => {
       setQueue((prev) => [...prev, toast]);
     };
+
     listeners.add(handler);
     return () => {
       listeners.delete(handler);

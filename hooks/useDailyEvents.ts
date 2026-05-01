@@ -1,16 +1,23 @@
 /**
  * hooks/useDailyEvents.ts
  *
- * WorldWide Rush-style daily events.
+ * WorldWide Rush-style daily events + demand waves.
  *
- * Events should feel like quick gameplay modifiers:
- *   - passenger rush
- *   - airport jam
- *   - bonus payout
- *   - rival pressure
- *   - smooth flow day
+ * Normal days:
+ *   - random modifier events
+ *   - AI flavor events
+ *
+ * Wave days:
+ *   - demand wave boosts pax_day on selected pending demand slots
+ *   - shows a stronger daily event card
  */
 
+import {
+  applyDemandWave,
+  generateDemandWave,
+  isDemandWaveDay,
+  type DemandWaveKind,
+} from "@/lib/demandWaves";
 import { seedHash } from "@/lib/seed";
 import { useGameStore } from "@/store";
 import { useEffect, useRef } from "react";
@@ -24,6 +31,12 @@ export interface DailyEvent {
   effect: string;
   revenueMultiplier?: number;
   cashBonus?: number;
+
+  // Demand-wave metadata.
+  waveKind?: DemandWaveKind;
+  waveAddedPax?: number;
+  waveAffectedSlots?: number;
+  waveAffectedHubs?: string[];
 }
 
 const POSITIVE_EVENTS: Omit<DailyEvent, "id">[] = [
@@ -219,6 +232,62 @@ function injectAIName(
   };
 }
 
+function buildDemandWaveEvent(day: number): DailyEvent | null {
+  const store = useGameStore.getState();
+  const gameSeed = store.airline?.seed ?? "DEFAULT";
+
+  if (!isDemandWaveDay(day)) return null;
+
+  const applied = applyDemandWave({
+    day,
+    gameSeed,
+    demands: store.demands,
+    hubs: store.hubs,
+  });
+
+  if (!applied) {
+    const wave = generateDemandWave(day, gameSeed);
+    return {
+      id: `wave-empty-${day}`,
+      type: "neutral",
+      icon: wave.icon,
+      title: wave.title,
+      desc: "A demand wave passed through, but there were no open demand slots to boost.",
+      effect: "No open slots affected",
+      revenueMultiplier: wave.revenueMultiplier,
+      waveKind: wave.kind,
+      waveAddedPax: 0,
+      waveAffectedSlots: 0,
+      waveAffectedHubs: [],
+    };
+  }
+
+  applied.updates.forEach((update) => {
+    store.updateDemand(update.demandId, {
+      pax_day: update.newPaxDay,
+    });
+  });
+
+  const hubLabel =
+    applied.affectedHubs.length > 0
+      ? ` · ${applied.affectedHubs.join(", ")}`
+      : "";
+
+  return {
+    id: applied.wave.id,
+    type: "positive",
+    icon: applied.wave.icon,
+    title: applied.wave.title,
+    desc: `${applied.wave.desc}${hubLabel}`,
+    effect: `+${applied.totalAddedPax.toLocaleString()} pax across ${applied.updates.length} slot${applied.updates.length === 1 ? "" : "s"}`,
+    revenueMultiplier: applied.wave.revenueMultiplier,
+    waveKind: applied.wave.kind,
+    waveAddedPax: applied.totalAddedPax,
+    waveAffectedSlots: applied.updates.length,
+    waveAffectedHubs: applied.affectedHubs,
+  };
+}
+
 export function useDailyEvents() {
   const lastDay = useRef<number>(-1);
 
@@ -233,42 +302,46 @@ export function useDailyEvents() {
         const gameSeed = store.airline?.seed ?? "DEFAULT";
         const aiAirlines = store.aiAirlines;
 
-        let event: DailyEvent;
+        let event: DailyEvent | null = buildDemandWaveEvent(day);
 
-        const hasAI = aiAirlines.length > 0;
-        const aiRoll = seedHash(gameSeed, "rush-ai-event-roll", day) % 100;
+        if (!event) {
+          const hasAI = aiAirlines.length > 0;
+          const aiRoll = seedHash(gameSeed, "rush-ai-event-roll", day) % 100;
 
-        if (hasAI && aiRoll < 30) {
-          const ai =
-            aiAirlines[
-              seedHash(gameSeed, "rush-ai-pick", day) % aiAirlines.length
-            ];
+          if (hasAI && aiRoll < 30) {
+            const ai =
+              aiAirlines[
+                seedHash(gameSeed, "rush-ai-pick", day) % aiAirlines.length
+              ];
 
-          const isPositive =
-            seedHash(gameSeed, "rush-ai-event-type", day) % 100 < 50;
+            const isPositive =
+              seedHash(gameSeed, "rush-ai-event-type", day) % 100 < 50;
 
-          const pool = isPositive ? AI_POSITIVE_EVENTS : AI_NEGATIVE_EVENTS;
-          const base =
-            pool[seedHash(gameSeed, "rush-ai-event-idx", day) % pool.length];
+            const pool = isPositive ? AI_POSITIVE_EVENTS : AI_NEGATIVE_EVENTS;
+            const base =
+              pool[seedHash(gameSeed, "rush-ai-event-idx", day) % pool.length];
 
-          event = {
-            ...injectAIName(base, ai.name),
-            id: `event-day-${day}`,
-          };
-        } else {
-          event = generateDailyEvent(day, gameSeed);
+            event = {
+              ...injectAIName(base, ai.name),
+              id: `event-day-${day}`,
+            };
+          } else {
+            event = generateDailyEvent(day, gameSeed);
+          }
         }
 
         const ledgerEntry: any = {
-          id: `event-day-${day}`,
+          id: event.id,
           day,
           type: "event",
           label: `${
-            event.type === "positive"
-              ? "⚡"
-              : event.type === "negative"
-                ? "🚧"
-                : "📍"
+            event.waveKind
+              ? "🌊"
+              : event.type === "positive"
+                ? "⚡"
+                : event.type === "negative"
+                  ? "🚧"
+                  : "📍"
           } ${event.title}`,
           amount: event.cashBonus ?? 0,
           route_id: null,

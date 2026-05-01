@@ -18,13 +18,10 @@ import {
   emitUnlockToast,
   emitWarningToast,
 } from "@/hooks/useToast";
-import {
-  applyAIPressure,
-  computePlayerMarketShare,
-  summarizeAIPressure,
-} from "@/lib/AIAirline";
+import { computePlayerMarketShare } from "@/lib/AIAirline";
+import { applyAIPressure } from "@/lib/aiPressure";
 import { allDemandsServed, hubCrowdingLevel } from "@/lib/demands";
-import { hubOutboundWaitingPax, waitingPaxForDemand } from "@/lib/passengerFlow";
+import { hubOutboundWaitingPax } from "@/lib/passengerFlow";
 import { calcRouteRevenue, dailyInterest } from "@/lib/revenue";
 import type { Demand, LedgerEntry } from "@/store";
 import { useGameStore } from "@/store";
@@ -84,6 +81,9 @@ export function useRevenueTick() {
       setPhase,
       updateAirline,
       updateDemand,
+      setGlobalContract,
+      completeGlobalContract,
+      earnCash,
       resetDailyPax,
     } = store;
 
@@ -95,13 +95,32 @@ export function useRevenueTick() {
 
     // Snapshot yesterday's moved travelers BEFORE resetDailyPax().
     const paxSnapshot = snapshotDeliveredPax(demands);
-    const demandSnapshot = demands.map((demand) =>
+    let demandSnapshot = demands.map((demand) =>
       withSnapshotDelivered(demand, paxSnapshot.get(demand.id) ?? 0),
     );
 
     const endOfDayProgress = 1;
 
-    // Crowding reads the day-end passenger queue, not the reset state.
+    const aiPressure = applyAIPressure({
+      demands: demandSnapshot,
+      aiAirlines: store.aiAirlines,
+      dayProgress: endOfDayProgress,
+      day: airline.day,
+      difficulty: airline.ai_difficulty,
+    });
+
+    if (aiPressure.demandUpdates.length > 0) {
+      const updateMap = new Map(
+        aiPressure.demandUpdates.map((u) => [u.demandId, u.pax_day]),
+      );
+      demandSnapshot = demandSnapshot.map((demand) =>
+        updateMap.has(demand.id)
+          ? { ...demand, pax_day: updateMap.get(demand.id)! }
+          : demand,
+      );
+    }
+
+    // Crowding reads the day-end passenger queue after AI pressure.
     const crowdingByHub = new Map<
       string,
       ReturnType<typeof hubCrowdingLevel>
@@ -142,7 +161,8 @@ export function useRevenueTick() {
         }
       });
 
-      const playerPax = playerMovedPax > 0 ? playerMovedPax : playerPotentialPax;
+      const playerPax =
+        playerMovedPax > 0 ? playerMovedPax : playerPotentialPax;
       const total = playerPax + aiPax;
       const newTrust =
         total > 0
@@ -161,7 +181,7 @@ export function useRevenueTick() {
       if (!route.active) return;
 
       const demand =
-        demands.find((d) => d.id === route.demand.id) ?? route.demand;
+        demandSnapshot.find((d) => d.id === route.demand.id) ?? route.demand;
       const deliveredPax = paxSnapshot.get(demand.id) ?? 0;
       const remaining = Math.max(0, demand.pax_day - deliveredPax);
 
@@ -232,6 +252,30 @@ export function useRevenueTick() {
       });
     }
 
+    if (aiPressure.totalStolenPax > 0) {
+      const topSteal = [...aiPressure.steals].sort(
+        (a, b) => b.stolenPax - a.stolenPax,
+      )[0];
+
+      entries.push({
+        id: `ai-steal-${airline.day}`,
+        day: airline.day,
+        type: "event",
+        label: `Rivals captured ${aiPressure.totalStolenPax.toLocaleString()} waiting travelers`,
+        amount: 0,
+        route_id: null,
+      });
+
+      if (topSteal) {
+        emitWarningToast({
+          id: `ai-steal-${airline.day}-${topSteal.demandId}`,
+          level: aiPressure.totalStolenPax >= 250 ? "critical" : "low",
+          cash: airline.cash,
+          message: `${topSteal.aiName} captured ${topSteal.stolenPax.toLocaleString()} waiting travelers on ${topSteal.originIata} → ${topSteal.destIata}. Clear queues faster to protect demand.`,
+        });
+      }
+    }
+
     const net = totalRev - interest;
 
     // Route rewards already happened live. Only interest changes cash here.
@@ -249,7 +293,9 @@ export function useRevenueTick() {
       } = useGameStore.getState();
 
       const now = new Date();
-      const d = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+      const d = new Date(
+        Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()),
+      );
       const dow = d.getUTCDay() || 7;
       d.setUTCDate(d.getUTCDate() + 4 - dow);
       const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
@@ -265,7 +311,9 @@ export function useRevenueTick() {
       const activeRoutes = routes.filter((route) => route.active);
       const allRoutesMoving =
         activeRoutes.length === 0 ||
-        activeRoutes.every((route) => (paxSnapshot.get(route.demand.id) ?? 0) > 0);
+        activeRoutes.every(
+          (route) => (paxSnapshot.get(route.demand.id) ?? 0) > 0,
+        );
 
       const allRoutesProfitable =
         activeRoutes.length === 0 ||
@@ -299,43 +347,19 @@ export function useRevenueTick() {
         profitDays:
           weeklyProgress.profitDays +
           (allRoutesMoving && allRoutesProfitable ? 1 : 0),
-        speedDays: weeklyProgress.speedDays + (latestAirline?.speed === 3 ? 1 : 0),
+        speedDays:
+          weeklyProgress.speedDays + (latestAirline?.speed === 3 ? 1 : 0),
       });
     }
 
-    const aiPressure = applyAIPressure({
-      demands: demandSnapshot,
-      aiAirlines,
-      day: airline.day,
-      waitingForDemand: (demand) =>
-        waitingPaxForDemand(demand, endOfDayProgress),
-    });
-
-    aiPressure.demandUpdates.forEach((update) => {
-      updateDemand(update.demandId, { pax_day: update.pax_day });
-    });
-
-    const aiPressureMessage = summarizeAIPressure(aiPressure.steals);
-    if (aiPressureMessage) {
-      emitWarningToast({
-        id: `ai-pressure-${airline.day}`,
-        level: aiPressure.totalStolenPax >= 250 ? "critical" : "low",
-        cash: airline.cash,
-        message: aiPressureMessage,
-      });
-
-      addLedgerEntries([
-        {
-          id: `ai-pressure-${airline.day}`,
-          day: airline.day,
-          type: "event",
-          label: `Rivals captured ${aiPressure.totalStolenPax.toLocaleString()} waiting travelers`,
-          amount: 0,
-          route_id: null,
-        },
-      ]);
-    }
-
+    const { dailyMissions, airline: latestAirline } = useGameStore.getState();
+    const doneToday = dailyMissions.filter(
+      (mission) => mission.completed,
+    ).length;
+    const currentCash = latestAirline?.cash ?? airline.cash;
+    const currentLoan = latestAirline?.loan ?? airline.loan;
+    const netWorth = Math.max(0, currentCash - currentLoan);
+    const prevNetWorth = Math.max(0, airline.cash - airline.loan);
     const totalWaitingPax = hubs.reduce((sum, hub) => {
       return (
         sum +
@@ -346,13 +370,6 @@ export function useRevenueTick() {
         )
       );
     }, 0);
-
-    const { dailyMissions, airline: latestAirline } = useGameStore.getState();
-    const doneToday = dailyMissions.filter((mission) => mission.completed).length;
-    const currentCash = latestAirline?.cash ?? airline.cash;
-    const currentLoan = latestAirline?.loan ?? airline.loan;
-    const netWorth = Math.max(0, currentCash - currentLoan);
-    const prevNetWorth = Math.max(0, airline.cash - airline.loan);
 
     emitDaySummaryToast({
       id: `day-summary-${airline.day}`,
@@ -367,7 +384,7 @@ export function useRevenueTick() {
       prevNetWorth,
       waitingPax: totalWaitingPax,
       stalledRoutes: stalledRouteCount,
-      aiLostPax: aiPressure.totalStolenPax,
+      aiStolenPax: aiPressure.totalStolenPax,
     });
 
     hubs.forEach((hub) => {
@@ -445,7 +462,8 @@ export function useRevenueTick() {
           id: `warn-low-${airline.day}`,
           level: "low",
           cash: cashAfter,
-          message: "Cash running low. Clear more waiting travelers to boost rewards.",
+          message:
+            "Cash running low. Clear more waiting travelers to boost rewards.",
         });
       }
     }
@@ -474,6 +492,10 @@ export function useRevenueTick() {
       if (allDemandsServed(hub.airport.iata, demands)) {
         spawnDemand(hub.airport.iata);
       }
+    });
+
+    aiPressure.demandUpdates.forEach((update) => {
+      updateDemand(update.demandId, { pax_day: update.pax_day });
     });
 
     resetDailyPax();

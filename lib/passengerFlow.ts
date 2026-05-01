@@ -34,8 +34,18 @@ export function spawnedPaxForDay(
   demand: PassengerFlowDemand,
   dayProgress: number,
 ): number {
-  const paxDay = Math.max(0, demand.pax_day ?? 0);
-  return Math.min(paxDay, Math.floor(paxDay * clampDayProgress(dayProgress)));
+  if (demand.status === "served") return demand.pax_day;
+
+  const progress = Math.max(0, Math.min(1, dayProgress));
+
+  // Front-load passengers so queues exists earlier in the day
+  // 0.35 means 35% of demand can appear
+  const frontLoad = demand.pax_day * 0.35;
+
+  // Remaining pax spawn throughout the day
+  const rolling = demand.pax_day * 0.65 * progress;
+
+  return Math.min(demand.pax_day, Math.floor(frontLoad + rolling));
 }
 
 export function remainingPax(demand: PassengerFlowDemand): number {

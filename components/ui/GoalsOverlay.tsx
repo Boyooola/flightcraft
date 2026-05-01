@@ -9,12 +9,18 @@
 import { Colors, Radius, Spacing } from "@/constants/theme";
 import { useHudHeight } from "@/hooks/useSheetLayout";
 import { ACHIEVEMENTS } from "@/lib/achievements";
+import {
+  contractDaysLeft,
+  contractProgressLabel,
+  contractProgressPct,
+} from "@/lib/globalContracts";
 import { fmtCash } from "@/lib/revenue";
 import {
   useAirline,
   useCash,
   useDemands,
   useEarnedAchievements,
+  useGlobalContract,
   useHubs,
   useLoan,
   useOwnedPlanes,
@@ -225,6 +231,7 @@ export default function GoalsOverlay() {
   const demands = useDemands();
   const earned = useEarnedAchievements();
   const isCreating = useRouteCreationActive();
+  const globalContract = useGlobalContract();
   const [open, setOpen] = useState(false);
 
   if (isCreating || !airline) return null;
@@ -265,6 +272,11 @@ export default function GoalsOverlay() {
   if (!nextGoal) return null;
 
   const nextPct = pct(nextGoal);
+  const activeContract =
+    globalContract?.status === "active" ? globalContract : null;
+  const contractPct = activeContract ? contractProgressPct(activeContract) : 0;
+  const pillPctText = activeContract ? `${contractPct}%` : `${nextPct}%`;
+  const pillLabel = activeContract ? activeContract.title : nextGoal.label;
 
   return (
     <>
@@ -272,7 +284,7 @@ export default function GoalsOverlay() {
         style={[
           s.pill,
           {
-            top: hudH + GOAL_TOP_OFFSET + 10,
+            top: hudH + GOAL_TOP_OFFSET,
             borderColor: color + "55",
           },
         ]}
@@ -280,9 +292,9 @@ export default function GoalsOverlay() {
         activeOpacity={0.88}
       >
         <View style={[s.pulseDot, { backgroundColor: color }]} />
-        <Text style={[s.pillPct, { color }]}>{nextPct}%</Text>
+        <Text style={[s.pillPct, { color }]}>{pillPctText}</Text>
         <Text style={s.pillLabel} numberOfLines={1}>
-          {nextGoal.label}
+          {pillLabel}
         </Text>
       </TouchableOpacity>
 
@@ -330,6 +342,111 @@ export default function GoalsOverlay() {
                 </View>
               ))}
             </View>
+
+            {globalContract && (
+              <View
+                style={[
+                  s.contractCard,
+                  {
+                    borderColor:
+                      globalContract.status === "completed"
+                        ? Colors.green + "44"
+                        : globalContract.status === "failed"
+                          ? Colors.red + "44"
+                          : color + "44",
+                  },
+                ]}
+              >
+                <View style={s.contractTop}>
+                  <View
+                    style={[
+                      s.contractIcon,
+                      {
+                        backgroundColor:
+                          globalContract.status === "failed"
+                            ? Colors.red + "18"
+                            : color + "18",
+                      },
+                    ]}
+                  >
+                    <Ionicons
+                      name={globalContract.icon as any}
+                      size={17}
+                      color={
+                        globalContract.status === "failed" ? Colors.red : color
+                      }
+                    />
+                  </View>
+
+                  <View style={{ flex: 1 }}>
+                    <Text
+                      style={[
+                        s.contractTag,
+                        {
+                          color:
+                            globalContract.status === "completed"
+                              ? Colors.green
+                              : globalContract.status === "failed"
+                                ? Colors.red
+                                : color,
+                        },
+                      ]}
+                    >
+                      GLOBAL CONTRACT
+                    </Text>
+                    <Text style={s.contractTitle} numberOfLines={1}>
+                      {globalContract.title}
+                    </Text>
+                  </View>
+
+                  <Text
+                    style={[
+                      s.contractPct,
+                      {
+                        color:
+                          globalContract.status === "completed"
+                            ? Colors.green
+                            : globalContract.status === "failed"
+                              ? Colors.red
+                              : color,
+                      },
+                    ]}
+                  >
+                    {contractProgressPct(globalContract)}%
+                  </Text>
+                </View>
+
+                <Text style={s.contractDesc}>{globalContract.desc}</Text>
+
+                <View style={s.contractBar}>
+                  <View
+                    style={[
+                      s.contractFill,
+                      {
+                        width: `${contractProgressPct(globalContract)}%` as any,
+                        backgroundColor:
+                          globalContract.status === "completed"
+                            ? Colors.green
+                            : globalContract.status === "failed"
+                              ? Colors.red
+                              : color,
+                      },
+                    ]}
+                  />
+                </View>
+
+                <View style={s.contractFooter}>
+                  <Text style={s.contractMeta}>
+                    {contractProgressLabel(globalContract)}
+                  </Text>
+                  <Text style={s.contractMeta}>
+                    {globalContract.status === "active"
+                      ? `${contractDaysLeft(globalContract, airline.day)}d left`
+                      : globalContract.status.toUpperCase()}
+                  </Text>
+                </View>
+              </View>
+            )}
 
             <Text style={s.sectionHdr}>NEXT OBJECTIVES</Text>
 
@@ -442,6 +559,67 @@ const s = StyleSheet.create({
     flex: 1,
     fontWeight: "700",
     minWidth: 0,
+  },
+
+  contractCard: {
+    borderRadius: Radius.xl,
+    borderWidth: 1,
+    backgroundColor: "rgba(255,255,255,0.035)",
+    padding: Spacing.md,
+    marginBottom: Spacing.md,
+    gap: Spacing.sm,
+  },
+  contractTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
+  contractIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  contractTag: {
+    fontSize: 8,
+    letterSpacing: 1.8,
+    fontWeight: "900",
+  },
+  contractTitle: {
+    fontSize: 14,
+    color: Colors.text,
+    fontWeight: "900",
+    marginTop: 1,
+  },
+  contractPct: {
+    fontSize: 17,
+    fontWeight: "900",
+  },
+  contractDesc: {
+    fontSize: 11,
+    color: Colors.muted,
+    lineHeight: 16,
+  },
+  contractBar: {
+    height: 5,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,.08)",
+    overflow: "hidden",
+  },
+  contractFill: {
+    height: "100%",
+    borderRadius: 999,
+  },
+  contractFooter: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: Spacing.sm,
+  },
+  contractMeta: {
+    fontSize: 10,
+    color: Colors.dim,
+    fontWeight: "800",
   },
 
   modalBackdrop: {

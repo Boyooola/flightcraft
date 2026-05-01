@@ -7,6 +7,7 @@
 
 import type { DailyEvent } from "@/hooks/useDailyEvents";
 import type { AIAirline } from "@/lib/AIAirline";
+import type { GlobalContractState } from "@/lib/globalContracts";
 import type { Mission } from "@/lib/missions";
 import { create } from "zustand";
 import { devtools, subscribeWithSelector } from "zustand/middleware";
@@ -157,6 +158,8 @@ export interface GameStore {
   boughtPlaneToday: boolean;
   setIsAnonymous: (v: boolean) => void;
   dailyEvent: DailyEvent | null;
+  globalContract: GlobalContractState | null;
+  completedGlobalContracts: number;
   awayEarnings: { days: number; amount: number } | null;
   isApplyingAwayEarnings: boolean;
   dayProgress: number; // 0 → 1 within the current game day
@@ -222,6 +225,9 @@ export interface GameStore {
   setPhase: (phase: GamePhase) => void;
   setBoughtPlaneToday: (val: boolean) => void;
   setDailyEvent: (event: DailyEvent | null) => void;
+  setGlobalContract: (contract: GlobalContractState | null) => void;
+  updateGlobalContract: (patch: Partial<GlobalContractState>) => void;
+  completeGlobalContract: () => void;
   setAwayEarnings: (data: { days: number; amount: number } | null) => void;
   setIsApplyingAway: (v: boolean) => void;
   setDayProgress: (value: number) => void;
@@ -310,6 +316,8 @@ export const useGameStore = create<GameStore>()(
       aiAirlines: [],
       boughtPlaneToday: false,
       dailyEvent: null,
+      globalContract: null,
+      completedGlobalContracts: 0,
       awayEarnings: null,
       isApplyingAwayEarnings: false,
       dayProgress: 0,
@@ -374,6 +382,26 @@ export const useGameStore = create<GameStore>()(
       setAIAirlines: (a) => set({ aiAirlines: a }, false, "setAIAirlines"),
       setDailyEvent: (event) =>
         set({ dailyEvent: event }, false, "setDailyEvent"),
+      setGlobalContract: (contract) =>
+        set({ globalContract: contract }, false, "setGlobalContract"),
+      updateGlobalContract: (patch) =>
+        set(
+          (s) => ({
+            globalContract: s.globalContract
+              ? { ...s.globalContract, ...patch }
+              : null,
+          }),
+          false,
+          "updateGlobalContract",
+        ),
+      completeGlobalContract: () =>
+        set(
+          (s) => ({
+            completedGlobalContracts: s.completedGlobalContracts + 1,
+          }),
+          false,
+          "completeGlobalContract",
+        ),
       setAwayEarnings: (data) =>
         set({ awayEarnings: data }, false, "setAwayEarnings"),
       setIsApplyingAway: (v) =>
@@ -729,6 +757,9 @@ export const useIsAnonymous = () => useGameStore((s) => s.isAnonymous);
 export const useBoughtPlaneToday = () =>
   useGameStore((s) => s.boughtPlaneToday);
 export const useDailyEvent = () => useGameStore((s) => s.dailyEvent);
+export const useGlobalContract = () => useGameStore((s) => s.globalContract);
+export const useCompletedGlobalContracts = () =>
+  useGameStore((s) => s.completedGlobalContracts);
 export const useAwayEarnings = () => useGameStore((s) => s.awayEarnings);
 export const useDayProgress = () => useGameStore((s) => s.dayProgress);
 export const useLoadSteps = () => useGameStore((s) => s.loadSteps);
