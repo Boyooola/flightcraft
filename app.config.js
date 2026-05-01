@@ -37,6 +37,7 @@ export default {
         backgroundColor: "#04090f",
       },
       permissions: [],
+      blockedPermissions: ["android.permission.RECORD_AUDIO"],
     },
 
     web: {
