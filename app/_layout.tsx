@@ -10,6 +10,7 @@
  *   5. Route to (auth) or (game) based on store phase
  */
 
+import * as Sentry from "@sentry/react-native";
 import * as Font from "expo-font";
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
@@ -17,10 +18,9 @@ import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
 import { StyleSheet } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
-import * as Sentry from '@sentry/react-native';
 
 Sentry.init({
-  dsn: 'https://c3478a7b8bf9f4fead9689cb3a3214a6@o406186.ingest.us.sentry.io/4511289003474944',
+  dsn: "https://c3478a7b8bf9f4fead9689cb3a3214a6@o406186.ingest.us.sentry.io/4511289003474944",
 
   // Adds more context data to events (IP address, cookies, user, etc.)
   // For more information, visit: https://docs.sentry.io/platforms/react-native/data-management/data-collected/
