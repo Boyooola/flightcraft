@@ -401,17 +401,17 @@ export default function SettingsSheet() {
         <SettingRow
           icon="information-circle-outline"
           label="Version"
-          sublabel="1.0.0"
+          sublabel="0.1.0"
           color={Colors.dim}
         />
-        <Divider />
+        {/* <Divider />
         <SettingRow
           icon="shield-checkmark-outline"
           label="Privacy Policy"
           sublabel="How Flightcraft handles data"
           onPress={() => openSheet("privacy-policy")}
           color={Colors.green}
-        />
+        /> */}
       </View>
 
       <GameAlert ref={gameAlert.ref} />
