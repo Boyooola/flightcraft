@@ -99,6 +99,7 @@ export default function SettingsSheet() {
   const sounds = useGameSounds();
   const color = airline?.color ?? Colors.sky;
   const [sfxOn, setSfxOn] = useState(sounds.isSfxEnabled());
+  const [musicOn, setMusicOn] = useState(sounds.isMusicEnabled());
   const gameAlert = useGameAlert();
 
   useEffect(() => {
@@ -393,6 +394,25 @@ export default function SettingsSheet() {
             />
           }
         />
+        <SettingRow
+          icon="musical-notes-outline"
+          label="Background Music"
+          sublabel="Ambient game soundtrack"
+          color={Colors.purple}
+          right={
+            <Switch
+              value={musicOn}
+              onValueChange={(value) => {
+                setMusicOn(value);
+                sounds.setMusicEnabled(value);
+
+                if (value) sounds.tap(); // quick feedback
+              }}
+              trackColor={{ false: Colors.border, true: Colors.purple + "88" }}
+              thumbColor={musicOn ? Colors.purple : Colors.dim}
+            />
+          }
+        />
       </View>
 
       <SectionHeader label="ABOUT" />
@@ -401,7 +421,7 @@ export default function SettingsSheet() {
         <SettingRow
           icon="information-circle-outline"
           label="Version"
-          sublabel="0.1.0"
+          sublabel="0.1.1"
           color={Colors.dim}
         />
         {/* <Divider />

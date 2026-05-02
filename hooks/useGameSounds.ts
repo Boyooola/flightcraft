@@ -1,36 +1,21 @@
 /**
  * hooks/useGameSounds.ts
  *
- * Programmatic sound system for FlightCraft.
- * All sounds synthesized via expo-audio — no audio files needed.
- *
- * Setup:
- *   expo install expo-audio
- *
- * Each sound is generated as a WAV data URI and played via expo-audio AudioPlayer.
- * Sounds respect the user's mute preference stored in AsyncStorage.
- *
- * Usage:
- *   const sounds = useGameSounds();
- *   sounds.hubBuy();
- *   sounds.planeBuy();
- *   sounds.routeCreate();
+ * SFX + background music using expo-audio.
  */
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { createAudioPlayer } from "expo-audio";
+import {
+  createAudioPlayer,
+  setAudioModeAsync,
+  setIsAudioActiveAsync,
+} from "expo-audio";
 import { useCallback, useEffect, useRef } from "react";
-
-// ─────────────────────────────────────────────────────────────────
-// STORAGE KEY
-// ─────────────────────────────────────────────────────────────────
 
 const SFX_KEY = "@flightcraft:sfx_enabled";
 const MUSIC_KEY = "@flightcraft:music_enabled";
 
-// ─────────────────────────────────────────────────────────────────
-// WAV SYNTHESIS — generates PCM audio data as base64
-// ─────────────────────────────────────────────────────────────────
+const MUSIC_FILE = require("../assets/sounds/main.mp3");
 
 const SAMPLE_RATE = 22050;
 
@@ -42,7 +27,6 @@ function generateWav(
     type?: "sine" | "square" | "sawtooth";
   }[],
 ): string {
-  // Calculate total samples
   const totalSamples = notes.reduce(
     (sum, n) => sum + Math.floor(SAMPLE_RATE * n.duration),
     0,
@@ -59,44 +43,41 @@ function generateWav(
     for (let i = 0; i < numSamples; i++) {
       const t = i / SAMPLE_RATE;
 
-      // Waveform
       let sample = 0;
       if (type === "sine") {
         sample = Math.sin(2 * Math.PI * freq * t);
       } else if (type === "square") {
         sample = Math.sin(2 * Math.PI * freq * t) > 0 ? 1 : -1;
-      } else if (type === "sawtooth") {
+      } else {
         sample = 2 * ((freq * t) % 1) - 1;
       }
 
-      // Envelope: attack + sustain + release
       let env = volume;
-      if (i < attackSamples) {
+      if (i < attackSamples && attackSamples > 0) {
         env *= i / attackSamples;
-      } else if (i > numSamples - releaseSamples) {
+      } else if (i > numSamples - releaseSamples && releaseSamples > 0) {
         env *= (numSamples - i) / releaseSamples;
       }
 
       buffer[offset + i] = sample * env;
     }
+
     offset += numSamples;
   });
 
-  // Convert float samples to 16-bit PCM
   const pcm = new Int16Array(totalSamples);
+
   for (let i = 0; i < totalSamples; i++) {
     pcm[i] = Math.max(-32768, Math.min(32767, Math.round(buffer[i] * 32767)));
   }
 
-  // WAV header
   const dataLength = pcm.byteLength;
-  const headerLength = 44;
-  const wavBuffer = new ArrayBuffer(headerLength + dataLength);
+  const wavBuffer = new ArrayBuffer(44 + dataLength);
   const view = new DataView(wavBuffer);
 
-  function writeString(offset: number, str: string) {
+  function writeString(pos: number, str: string) {
     for (let i = 0; i < str.length; i++) {
-      view.setUint8(offset + i, str.charCodeAt(i));
+      view.setUint8(pos + i, str.charCodeAt(i));
     }
   }
 
@@ -104,23 +85,21 @@ function generateWav(
   view.setUint32(4, 36 + dataLength, true);
   writeString(8, "WAVE");
   writeString(12, "fmt ");
-  view.setUint32(16, 16, true); // chunk size
-  view.setUint16(20, 1, true); // PCM format
-  view.setUint16(22, 1, true); // mono
-  view.setUint32(24, SAMPLE_RATE, true); // sample rate
-  view.setUint32(28, SAMPLE_RATE * 2, true); // byte rate
-  view.setUint16(32, 2, true); // block align
-  view.setUint16(34, 16, true); // bits per sample
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, SAMPLE_RATE, true);
+  view.setUint32(28, SAMPLE_RATE * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
   writeString(36, "data");
   view.setUint32(40, dataLength, true);
 
-  // Write PCM data
-  const pcmView = new Int16Array(wavBuffer, 44);
-  pcmView.set(pcm);
+  new Int16Array(wavBuffer, 44).set(pcm);
 
-  // Convert to base64
   const bytes = new Uint8Array(wavBuffer);
   let binary = "";
+
   for (let i = 0; i < bytes.byteLength; i++) {
     binary += String.fromCharCode(bytes[i]);
   }
@@ -128,23 +107,16 @@ function generateWav(
   return `data:audio/wav;base64,${btoa(binary)}`;
 }
 
-// ─────────────────────────────────────────────────────────────────
-// SOUND LIBRARY — all programmatically generated
-// ─────────────────────────────────────────────────────────────────
-
 const SOUNDS = {
-  // Subtle tap — very short, quiet
   tap: () =>
     generateWav([{ freq: 800, duration: 0.04, volume: 0.15, type: "sine" }]),
 
-  // Hub purchase — ascending ding
   hubBuy: () =>
     generateWav([
       { freq: 440, duration: 0.08, volume: 0.25, type: "sine" },
       { freq: 660, duration: 0.18, volume: 0.3, type: "sine" },
     ]),
 
-  // Plane purchase — deeper, mechanical
   planeBuy: () =>
     generateWav([
       { freq: 220, duration: 0.1, volume: 0.2, type: "sine" },
@@ -152,7 +124,6 @@ const SOUNDS = {
       { freq: 440, duration: 0.2, volume: 0.3, type: "sine" },
     ]),
 
-  // Route created — 3-note ascending chime (C E G)
   routeCreate: () =>
     generateWav([
       { freq: 523, duration: 0.12, volume: 0.28, type: "sine" },
@@ -160,7 +131,6 @@ const SOUNDS = {
       { freq: 784, duration: 0.22, volume: 0.3, type: "sine" },
     ]),
 
-  // Plane arrives — soft whoosh landing
   planeArrive: () =>
     generateWav([
       { freq: 600, duration: 0.05, volume: 0.15, type: "sine" },
@@ -168,14 +138,12 @@ const SOUNDS = {
       { freq: 880, duration: 0.12, volume: 0.2, type: "sine" },
     ]),
 
-  // Mission complete — 2-note success
   missionComplete: () =>
     generateWav([
       { freq: 523, duration: 0.18, volume: 0.3, type: "sine" },
       { freq: 784, duration: 0.32, volume: 0.35, type: "sine" },
     ]),
 
-  // Achievement — 4-note fanfare (C E G C')
   achievement: () =>
     generateWav([
       { freq: 523, duration: 0.12, volume: 0.3, type: "sine" },
@@ -184,35 +152,30 @@ const SOUNDS = {
       { freq: 1047, duration: 0.3, volume: 0.35, type: "sine" },
     ]),
 
-  // Day advance — soft clock tick
   dayAdvance: () =>
     generateWav([
       { freq: 440, duration: 0.06, volume: 0.2, type: "sine" },
       { freq: 550, duration: 0.1, volume: 0.2, type: "sine" },
     ]),
 
-  // Revenue positive — bright cash ting
   revenuePositive: () =>
     generateWav([
       { freq: 1200, duration: 0.05, volume: 0.18, type: "sine" },
       { freq: 880, duration: 0.1, volume: 0.15, type: "sine" },
     ]),
 
-  // Revenue negative — low thud
   revenueNegative: () =>
     generateWav([
       { freq: 180, duration: 0.12, volume: 0.2, type: "sine" },
       { freq: 140, duration: 0.12, volume: 0.18, type: "sine" },
     ]),
 
-  // Error — descending buzz
   error: () =>
     generateWav([
       { freq: 300, duration: 0.08, volume: 0.25, type: "square" },
       { freq: 200, duration: 0.15, volume: 0.2, type: "square" },
     ]),
 
-  // Hub sold
   hubSell: () =>
     generateWav([
       { freq: 660, duration: 0.1, volume: 0.25, type: "sine" },
@@ -220,22 +183,91 @@ const SOUNDS = {
     ]),
 };
 
-// ─────────────────────────────────────────────────────────────────
-// SOUND MANAGER SINGLETON
-// ─────────────────────────────────────────────────────────────────
-
 class SoundManager {
   private sfxEnabled = true;
+  private musicEnabled = true;
   private loaded = false;
+  private musicPlayer: any = null;
+  private musicLoopTimer: ReturnType<typeof setInterval> | null = null;
 
   async init() {
     if (this.loaded) return;
+
     try {
-      // expo-audio handles audio mode automatically
-      const stored = await AsyncStorage.getItem(SFX_KEY);
-      this.sfxEnabled = stored !== "false";
+      await setIsAudioActiveAsync(true);
+      await setAudioModeAsync({
+        playsInSilentMode: true,
+        interruptionMode: "mixWithOthers",
+      });
+
+      const storedSfx = await AsyncStorage.getItem(SFX_KEY);
+      const storedMusic = await AsyncStorage.getItem(MUSIC_KEY);
+
+      this.sfxEnabled = storedSfx !== "false";
+      this.musicEnabled = storedMusic !== "false";
       this.loaded = true;
+
+      if (this.musicEnabled) {
+        this.playMusic();
+      }
+    } catch (err) {
+      console.warn("[GameSounds] init failed", err);
+    }
+  }
+
+  playMusic() {
+    if (!this.musicEnabled) return;
+
+    try {
+      if (!this.musicPlayer) {
+        this.musicPlayer = createAudioPlayer(MUSIC_FILE);
+      }
+
+      this.musicPlayer.volume = 0.2;
+      this.musicPlayer.seekTo?.(0);
+      this.musicPlayer.play();
+
+      // Fallback loop. Adjust 60000 to your MP3 length in milliseconds.
+      if (!this.musicLoopTimer) {
+        this.musicLoopTimer = setInterval(() => {
+          if (!this.musicEnabled || !this.musicPlayer) return;
+
+          try {
+            this.musicPlayer.volume = 0.2;
+            this.musicPlayer.seekTo?.(0);
+            this.musicPlayer.play();
+          } catch {}
+        }, 60000);
+      }
+    } catch (err) {
+      console.warn("[GameSounds] music failed", err);
+    }
+  }
+
+  stopMusic() {
+    try {
+      if (this.musicLoopTimer) {
+        clearInterval(this.musicLoopTimer);
+        this.musicLoopTimer = null;
+      }
+
+      this.musicPlayer?.pause?.();
     } catch {}
+  }
+
+  async setMusicEnabled(enabled: boolean) {
+    this.musicEnabled = enabled;
+    await AsyncStorage.setItem(MUSIC_KEY, enabled ? "true" : "false");
+
+    if (enabled) {
+      this.playMusic();
+    } else {
+      this.stopMusic();
+    }
+  }
+
+  isMusicEnabled() {
+    return this.musicEnabled;
   }
 
   setSfxEnabled(enabled: boolean) {
@@ -247,34 +279,35 @@ class SoundManager {
     return this.sfxEnabled;
   }
 
-  async play(soundKey: keyof typeof SOUNDS) {
+  play(soundKey: keyof typeof SOUNDS) {
     if (!this.sfxEnabled) return;
+
     try {
       const uri = SOUNDS[soundKey]();
       const player = createAudioPlayer({ uri });
+
+      player.seekTo?.(0);
       player.play();
-      // Release after sound duration + buffer
+
       setTimeout(() => {
         try {
-          player.remove();
+          player.remove?.();
         } catch {}
       }, 2000);
-    } catch {} // never crash on audio failure
+    } catch (err) {
+      console.warn("[GameSounds] sfx failed", soundKey, err);
+    }
   }
 }
 
 const manager = new SoundManager();
 
-// ─────────────────────────────────────────────────────────────────
-// HOOK
-// ─────────────────────────────────────────────────────────────────
-
 export function useGameSounds() {
-  const initialised = useRef(false);
+  const initialized = useRef(false);
 
   useEffect(() => {
-    if (initialised.current) return;
-    initialised.current = true;
+    if (initialized.current) return;
+    initialized.current = true;
     manager.init();
   }, []);
 
@@ -283,33 +316,35 @@ export function useGameSounds() {
   }, []);
 
   return {
-    // UI
     tap: () => play("tap"),
     error: () => play("error"),
 
-    // Game actions
     hubBuy: () => play("hubBuy"),
     hubSell: () => play("hubSell"),
     planeBuy: () => play("planeBuy"),
     routeCreate: () => play("routeCreate"),
     planeArrive: () => play("planeArrive"),
 
-    // Rewards
     missionComplete: () => play("missionComplete"),
     achievement: () => play("achievement"),
     dayAdvance: () => play("dayAdvance"),
 
-    // Revenue pops
     revenuePositive: () => play("revenuePositive"),
     revenueNegative: () => play("revenueNegative"),
 
-    // Settings
+    playMusic: () => manager.playMusic(),
+    stopMusic: () => manager.stopMusic(),
+
     setSfxEnabled: (v: boolean) => manager.setSfxEnabled(v),
     isSfxEnabled: () => manager.isSfxEnabled(),
+
+    setMusicEnabled: (v: boolean) => manager.setMusicEnabled(v),
+    isMusicEnabled: () => manager.isMusicEnabled(),
   };
 }
 
-// Convenience export for use outside React components
 export const gameSounds = {
   play: (key: keyof typeof SOUNDS) => manager.play(key),
+  playMusic: () => manager.playMusic(),
+  stopMusic: () => manager.stopMusic(),
 };

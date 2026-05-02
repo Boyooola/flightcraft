@@ -1,7 +1,7 @@
 /**
  * components/ui/DaySummaryCard.tsx
  *
- * WorldWide Rush-style end-of-day flow / pressure result card.
+ * Compact end-of-day summary toast.
  */
 
 import { Colors, Radius, Spacing } from "@/constants/theme";
@@ -21,8 +21,9 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const TAB_H = 72;
-const HOLD_MS = 4800;
-const SLIDE_MS = 220;
+const HOLD_MS = 4200;
+const SLIDE_MS = 200;
+
 const GREEN = "#22c55e";
 const RED = "#ef4444";
 const AMBER = "#F59E0B";
@@ -33,39 +34,18 @@ function fmtPax(value: number) {
   return value.toLocaleString();
 }
 
-function Stat({
-  icon,
-  label,
-  value,
-  color,
-}: {
-  icon: string;
-  label: string;
-  value: string;
-  color: string;
-}) {
-  return (
-    <View style={st.box}>
-      <Ionicons name={icon as any} size={14} color={color} />
-      <Text style={[st.value, { color }]} numberOfLines={1}>
-        {value}
-      </Text>
-      <Text style={st.label}>{label}</Text>
-    </View>
-  );
-}
-
 export default function DaySummaryCard() {
   const insets = useSafeAreaInsets();
   const { queue, dismiss } = useToastListener();
 
-  const slideY = useRef(new Animated.Value(260)).current;
+  const slideY = useRef(new Animated.Value(180)).current;
   const opacity = useRef(new Animated.Value(0)).current;
-  const scale = useRef(new Animated.Value(0.96)).current;
+  const scale = useRef(new Animated.Value(0.98)).current;
   const progress = useRef(new Animated.Value(1)).current;
 
   const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const progAnim = useRef<Animated.CompositeAnimation | null>(null);
+
   const [current, setCurrent] = useState<DaySummaryToastData | null>(null);
   const currentRef = useRef<DaySummaryToastData | null>(null);
 
@@ -82,7 +62,7 @@ export default function DaySummaryCard() {
 
     Animated.parallel([
       Animated.timing(slideY, {
-        toValue: 260,
+        toValue: 180,
         duration: SLIDE_MS,
         useNativeDriver: true,
       }),
@@ -92,17 +72,19 @@ export default function DaySummaryCard() {
         useNativeDriver: true,
       }),
       Animated.timing(scale, {
-        toValue: 0.96,
+        toValue: 0.98,
         duration: SLIDE_MS,
         useNativeDriver: true,
       }),
     ]).start(() => {
       if (currentRef.current) dismiss(currentRef.current.id);
+
       currentRef.current = null;
       setCurrent(null);
-      slideY.setValue(260);
+
+      slideY.setValue(180);
       opacity.setValue(0);
-      scale.setValue(0.96);
+      scale.setValue(0.98);
       progress.setValue(1);
     });
   };
@@ -112,20 +94,22 @@ export default function DaySummaryCard() {
 
     currentRef.current = next;
     setCurrent(next);
+
     gameSounds.play("dayAdvance");
+
     progress.setValue(1);
 
     Animated.parallel([
       Animated.spring(slideY, {
         toValue: 0,
         friction: 8,
-        tension: 90,
+        tension: 100,
         useNativeDriver: true,
       }),
       Animated.spring(scale, {
         toValue: 1,
         friction: 8,
-        tension: 100,
+        tension: 110,
         useNativeDriver: true,
       }),
       Animated.timing(opacity, {
@@ -165,7 +149,6 @@ export default function DaySummaryCard() {
   const busyHubs = current.busyHubs ?? 0;
   const overcrowdedHubs = current.overcrowdedHubs ?? 0;
   const crisisHubs = current.crisisHubs ?? 0;
-  const pressuredHubs = busyHubs + overcrowdedHubs + crisisHubs;
 
   const netPositive = net >= 0;
   const allMissions = missionsToday === missionsTotal && missionsTotal > 0;
@@ -180,14 +163,16 @@ export default function DaySummaryCard() {
 
   const statusText =
     crisisHubs > 0
-      ? `${crisisHubs} crisis hub${crisisHubs === 1 ? "" : "s"}`
+      ? `${crisisHubs} crisis`
       : overcrowdedHubs > 0
-        ? `${overcrowdedHubs} overcrowded`
+        ? `${overcrowdedHubs} crowded`
         : aiLostPax > 0
-          ? `${fmtPax(aiLostPax)} lost to rivals`
+          ? `${fmtPax(aiLostPax)} lost`
           : stalledRoutes > 0
             ? `${stalledRoutes} stalled`
-            : null;
+            : waitingPax > 0
+              ? `${fmtPax(waitingPax)} waiting`
+              : "Flow clear";
 
   return (
     <Animated.View
@@ -205,76 +190,97 @@ export default function DaySummaryCard() {
         onPress={dismissCurrent}
         activeOpacity={0.94}
       >
-        <View style={s.header}>
-          <View>
-            <Text style={[s.label, { color: flowColor }]}>
-              DAY {day} {pressuredHubs > 0 ? "PRESSURE RESULT" : "FLOW RESULT"}
-            </Text>
-            <Text style={[s.net, { color: netPositive ? GREEN : RED }]}>
-              {netPositive ? "+" : ""}
-              {fmtCash(net)}
-            </Text>
+        <View style={[s.stripe, { backgroundColor: flowColor }]} />
+
+        <View style={s.main}>
+          <View style={s.top}>
+            <View style={s.dayPill}>
+              <Text style={s.dayLabel}>DAY</Text>
+              <Text style={[s.day, { color: flowColor }]}>{day}</Text>
+            </View>
+
+            <View style={s.center}>
+              <Text style={s.label}>DAILY RESULT</Text>
+              <Text
+                style={[s.net, { color: netPositive ? GREEN : RED }]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+              >
+                {netPositive ? "+" : ""}
+                {fmtCash(net)}
+              </Text>
+            </View>
+
+            <TouchableOpacity
+              onPress={dismissCurrent}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              style={s.closeBtn}
+            >
+              <Ionicons name="close" size={15} color={Colors.dim} />
+            </TouchableOpacity>
           </View>
 
-          <TouchableOpacity
-            onPress={dismissCurrent}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <Ionicons name="close" size={14} color={Colors.dim} />
-          </TouchableOpacity>
-        </View>
+          <View style={s.metrics}>
+            <View style={s.metric}>
+              <Ionicons name="people-outline" size={12} color={Colors.sky} />
+              <Text style={s.metricText}>{fmtPax(paxToday)} moved</Text>
+            </View>
 
-        <View style={s.stats}>
-          <Stat
-            icon="people-outline"
-            label="Moved"
-            value={fmtPax(paxToday)}
-            color={paxToday > 0 ? Colors.sky : Colors.dim}
-          />
-          <Stat
-            icon="time-outline"
-            label="Waiting"
-            value={fmtPax(waitingPax)}
-            color={waitingPax > 0 ? AMBER : GREEN}
-          />
-          <Stat
-            icon="flag-outline"
-            label="Missions"
-            value={
-              missionsTotal > 0
-                ? `${missionsToday}/${missionsTotal}${allMissions ? "✓" : ""}`
-                : "—"
-            }
-            color={allMissions ? GREEN : Colors.amber}
-          />
-        </View>
+            <View style={s.dot} />
 
-        <View style={s.rewardRow}>
-          <View style={s.rewardLeft}>
-            <Ionicons
-              name={statusText ? "warning-outline" : "cash-outline"}
-              size={13}
-              color={statusText ? flowColor : GREEN}
-            />
-            <Text style={s.rewardText}>
-              {revenue > 0 ? fmtCash(revenue) : "$0"} route rewards
-            </Text>
+            <View style={s.metric}>
+              <Ionicons
+                name={
+                  statusText === "Flow clear"
+                    ? "checkmark-circle"
+                    : "warning-outline"
+                }
+                size={12}
+                color={flowColor}
+              />
+              <Text style={[s.metricText, { color: flowColor }]}>
+                {statusText}
+              </Text>
+            </View>
+
+            {missionsTotal > 0 && (
+              <>
+                <View style={s.dot} />
+                <View style={s.metric}>
+                  <Ionicons
+                    name="flag-outline"
+                    size={12}
+                    color={allMissions ? GREEN : AMBER}
+                  />
+                  <Text
+                    style={[
+                      s.metricText,
+                      { color: allMissions ? GREEN : Colors.dim },
+                    ]}
+                  >
+                    {missionsToday}/{missionsTotal}
+                    {allMissions ? " ✓" : ""}
+                  </Text>
+                </View>
+              </>
+            )}
           </View>
 
-          {statusText && <Text style={s.stalledText}>{statusText}</Text>}
-        </View>
+          <View style={s.footer}>
+            <Text style={s.footerText} numberOfLines={1}>
+              Rewards {fmtCash(revenue)}
+              {interest > 0 ? ` · Loan -${fmtCash(interest)}` : ""}
+            </Text>
 
-        <View style={s.footer}>
-          <Text style={s.footerText} numberOfLines={1}>
-            Net worth {fmtCash(netWorth)}
-            {nwDelta !== 0
-              ? ` · ${nwDelta > 0 ? "▲" : "▼"} ${fmtCash(Math.abs(nwDelta))}`
-              : ""}
-          </Text>
-
-          {interest > 0 && (
-            <Text style={s.dragText}>Loan drag -{fmtCash(interest)}</Text>
-          )}
+            <Text
+              style={[s.netWorth, { color: nwDelta >= 0 ? GREEN : RED }]}
+              numberOfLines={1}
+            >
+              {nwDelta !== 0
+                ? `${nwDelta > 0 ? "▲" : "▼"} ${fmtCash(Math.abs(nwDelta))}`
+                : fmtCash(netWorth)}
+            </Text>
+          </View>
         </View>
 
         <Animated.View
@@ -294,27 +300,6 @@ export default function DaySummaryCard() {
   );
 }
 
-const st = StyleSheet.create({
-  box: {
-    flex: 1,
-    alignItems: "center",
-    gap: 2,
-    borderRadius: Radius.lg,
-    backgroundColor: "rgba(255,255,255,.035)",
-    paddingVertical: Spacing.sm,
-    minWidth: 0,
-  },
-  value: {
-    fontSize: 13,
-    fontWeight: "900",
-  },
-  label: {
-    fontSize: 8,
-    color: Colors.dim,
-    fontWeight: "800",
-  },
-});
-
 const s = StyleSheet.create({
   wrap: {
     position: "absolute",
@@ -322,79 +307,128 @@ const s = StyleSheet.create({
     right: Spacing.md,
     zIndex: 65,
   },
+
   card: {
+    flexDirection: "row",
     backgroundColor: "rgba(8,15,30,0.98)",
-    borderRadius: Radius.xl,
+    borderRadius: Radius.lg,
     borderWidth: 1,
-    padding: Spacing.md,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.48,
-    shadowRadius: 16,
-    elevation: 13,
     overflow: "hidden",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.42,
+    shadowRadius: 12,
+    elevation: 12,
   },
-  header: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    marginBottom: Spacing.sm,
+
+  stripe: {
+    width: 4,
   },
-  label: {
-    fontSize: 9,
-    color: Colors.dim,
-    letterSpacing: 1.8,
-    fontWeight: "900",
-  },
-  net: {
-    fontSize: 28,
-    fontWeight: "900",
-    marginTop: 2,
-  },
-  stats: {
-    flexDirection: "row",
-    gap: Spacing.sm,
-    marginBottom: Spacing.sm,
-  },
-  rewardRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: Spacing.sm,
-    marginBottom: Spacing.xs,
-  },
-  rewardLeft: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
+
+  main: {
     flex: 1,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    gap: 6,
   },
-  rewardText: {
+
+  top: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
+
+  dayPill: {
+    width: 42,
+    height: 38,
+    borderRadius: Radius.md,
+    backgroundColor: "rgba(255,255,255,.045)",
+    borderWidth: 1,
+    borderColor: Colors.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  dayLabel: {
+    fontSize: 7,
+    color: Colors.dim,
+    letterSpacing: 1.3,
+    fontWeight: "900",
+  },
+
+  day: {
+    fontSize: 16,
+    fontWeight: "900",
+    lineHeight: 18,
+  },
+
+  center: {
+    flex: 1,
+    minWidth: 0,
+  },
+
+  label: {
+    fontSize: 8,
+    color: Colors.dim,
+    letterSpacing: 1.5,
+    fontWeight: "900",
+  },
+
+  net: {
+    fontSize: 22,
+    fontWeight: "900",
+    marginTop: 1,
+  },
+
+  closeBtn: {
+    padding: 4,
+  },
+
+  metrics: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: 6,
+  },
+
+  metric: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+
+  metricText: {
     fontSize: 10,
     color: Colors.dim,
     fontWeight: "800",
   },
-  stalledText: {
-    fontSize: 10,
-    color: RED,
-    fontWeight: "900",
+
+  dot: {
+    width: 3,
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: Colors.border,
   },
+
   footer: {
     flexDirection: "row",
+    alignItems: "center",
     justifyContent: "space-between",
     gap: Spacing.sm,
   },
+
   footerText: {
     flex: 1,
     fontSize: 10,
     color: Colors.dim,
     fontWeight: "700",
   },
-  dragText: {
+
+  netWorth: {
     fontSize: 10,
-    color: RED,
-    fontWeight: "800",
+    fontWeight: "900",
   },
+
   progress: {
     position: "absolute",
     bottom: 0,

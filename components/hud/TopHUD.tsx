@@ -1,21 +1,17 @@
 /**
  * components/hud/TopHUD.tsx
  *
- * WorldWide Rush-style top HUD.
- *
- * Redesigned to be less compact:
- *   Row 1: airline + cash · day · speed
- *   Row 2: waiting · moved · today's reward
+ * One-row readable HUD.
+ * Keeps only the most important info:
+ * Airline/Cash · Today's Income · Day · Speed
  */
 
 import { Colors, Radius, Spacing } from "@/constants/theme";
-import { waitingPaxForDemand } from "@/lib/passengerFlow";
 import { calcRouteRevenue, fmtCash } from "@/lib/revenue";
 import {
   useAirline,
   useCash,
   useDay,
-  useDayProgress,
   useDemands,
   useGameStore,
   useHubs,
@@ -36,65 +32,22 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 type GameSpeed = 0 | 1 | 2 | 3;
 
-const SPEEDS: { value: GameSpeed; label: string; icon: string }[] = [
+const SPEEDS: {
+  value: GameSpeed;
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+}[] = [
   { value: 0, label: "0", icon: "pause" },
   { value: 1, label: "1x", icon: "play" },
   { value: 2, label: "2x", icon: "play-forward" },
   { value: 3, label: "3x", icon: "play-skip-forward" },
 ];
 
-function shortPax(value: number): string {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-  if (value >= 10_000) return `${Math.round(value / 1000)}K`;
-  return value.toLocaleString();
-}
-
-function FlowCard({
-  icon,
-  label,
-  value,
-  color,
-  scale,
-}: {
-  icon: keyof typeof Ionicons.glyphMap;
-  label: string;
-  value: string;
-  color: string;
-  scale?: Animated.AnimatedInterpolation<string | number>;
-}) {
-  const ValueText: any = scale ? Animated.Text : Text;
-
-  return (
-    <View style={fc.card}>
-      <View style={[fc.iconWrap, { backgroundColor: color + "18" }]}>
-        <Ionicons name={icon} size={13} color={color} />
-      </View>
-
-      <View style={fc.body}>
-        <Text style={fc.label}>{label}</Text>
-        <ValueText
-          style={[
-            fc.value,
-            {
-              color,
-              ...(scale ? { transform: [{ scale }] } : {}),
-            },
-          ]}
-          numberOfLines={1}
-        >
-          {value}
-        </ValueText>
-      </View>
-    </View>
-  );
-}
-
 export default function TopHUD() {
   const insets = useSafeAreaInsets();
   const airline = useAirline();
   const cash = useCash();
   const day = useDay();
-  const dayProgress = useDayProgress();
   const demands = useDemands();
   const routes = useRoutes();
   const hubs = useHubs();
@@ -113,21 +66,6 @@ export default function TopHUD() {
     () => routes.filter((route) => route.active),
     [routes],
   );
-
-  const waiting = useMemo(() => {
-    return demands
-      .filter((demand) => demand.status !== "served")
-      .reduce((sum, demand) => {
-        return sum + waitingPaxForDemand(demand, dayProgress);
-      }, 0);
-  }, [demands, dayProgress]);
-
-  const movedToday = useMemo(() => {
-    return demands.reduce(
-      (sum, demand) => sum + (demand.delivered_pax_today ?? 0),
-      0,
-    );
-  }, [demands]);
 
   const todayReward = useMemo(() => {
     return activeRoutes.reduce((total, route) => {
@@ -153,54 +91,6 @@ export default function TopHUD() {
       return total + result.net;
     }, 0);
   }, [activeRoutes, demands, hubs]);
-
-  const dayScale = useRef(new Animated.Value(1)).current;
-  const prevDay = useRef(day);
-
-  useEffect(() => {
-    if (day === prevDay.current) return;
-    prevDay.current = day;
-
-    Animated.sequence([
-      Animated.spring(dayScale, {
-        toValue: 1.25,
-        friction: 5,
-        tension: 180,
-        useNativeDriver: true,
-      }),
-      Animated.spring(dayScale, {
-        toValue: 1,
-        friction: 7,
-        tension: 150,
-        useNativeDriver: true,
-      }),
-    ]).start();
-  }, [day, dayScale]);
-
-  const movedPulse = useRef(new Animated.Value(0)).current;
-  const prevMoved = useRef(movedToday);
-
-  useEffect(() => {
-    if (movedToday <= prevMoved.current) {
-      prevMoved.current = movedToday;
-      return;
-    }
-
-    prevMoved.current = movedToday;
-
-    Animated.sequence([
-      Animated.timing(movedPulse, {
-        toValue: 1,
-        duration: 120,
-        useNativeDriver: true,
-      }),
-      Animated.timing(movedPulse, {
-        toValue: 0,
-        duration: 360,
-        useNativeDriver: true,
-      }),
-    ]).start();
-  }, [movedToday, movedPulse]);
 
   const rewardTicker = useRef(new Animated.Value(0)).current;
   const [displayedReward, setDisplayedReward] = useState(0);
@@ -246,48 +136,54 @@ export default function TopHUD() {
     }
   }, [todayReward, rewardFlash, rewardTicker]);
 
-  const movedScale = movedPulse.interpolate({
-    inputRange: [0, 0.5, 1],
-    outputRange: [1, 1.1, 1],
-  });
-
   const rewardScale = rewardFlash.interpolate({
     inputRange: [0, 0.5, 1],
-    outputRange: [1, 1.1, 1],
+    outputRange: [1, 1.08, 1],
   });
 
-  const setSpeed = (value: GameSpeed) => updateAirline({ speed: value });
-
-  const waitingColor =
-    waiting <= 0 ? Colors.dim : waiting >= 500 ? Colors.red : Colors.amber;
-
-  const rewardColor = todayReward > 0 ? Colors.green : Colors.dim;
+  const setSpeed = (value: GameSpeed) => {
+    updateAirline({ speed: value });
+  };
 
   return (
-    <View style={[st.container, { paddingTop: topInset + 5 }]}>
-      <View style={st.topRow}>
-        <View style={st.identity}>
-          <Text style={[st.airline, { color }]} numberOfLines={1}>
+    <View style={[s.container, { paddingTop: topInset + 6 }]}>
+      <View style={s.row}>
+        <View style={s.identity}>
+          <Text style={[s.airline, { color }]} numberOfLines={1}>
             {airline?.name ?? "FlightCraft"}
           </Text>
           <Text
-            style={[st.cash, { color: lowCash ? Colors.red : Colors.text }]}
+            style={[s.cash, { color: lowCash ? Colors.red : Colors.text }]}
             numberOfLines={1}
           >
             {fmtCash(cash)}
           </Text>
         </View>
 
-        <View style={[st.dayBox, { borderColor: color + "44" }]}>
-          <Text style={st.dayLabel}>DAY</Text>
+        <View style={s.incomeBox}>
+          <Text style={s.incomeLabel}>TODAY</Text>
           <Animated.Text
-            style={[st.day, { color, transform: [{ scale: dayScale }] }]}
+            style={[
+              s.income,
+              {
+                color: todayReward > 0 ? Colors.green : Colors.dim,
+                transform: [{ scale: rewardScale }],
+              },
+            ]}
+            numberOfLines={1}
           >
-            {day}
+            {todayReward > 0
+              ? `+${fmtCash(displayedReward || todayReward)}`
+              : "$0"}
           </Animated.Text>
         </View>
 
-        <View style={st.speedGroup}>
+        <View style={[s.dayBox, { borderColor: color + "44" }]}>
+          <Text style={s.dayLabel}>DAY</Text>
+          <Text style={[s.day, { color }]}>{day}</Text>
+        </View>
+
+        <View style={s.speedGroup}>
           {SPEEDS.map(({ value, label, icon }) => {
             const active = speed === value;
 
@@ -295,7 +191,7 @@ export default function TopHUD() {
               <TouchableOpacity
                 key={value}
                 style={[
-                  st.speedBtn,
+                  s.speedBtn,
                   active && {
                     backgroundColor: color,
                     borderColor: color,
@@ -305,13 +201,13 @@ export default function TopHUD() {
                 activeOpacity={0.82}
               >
                 <Ionicons
-                  name={icon as any}
+                  name={icon}
                   size={11}
                   color={active ? Colors.bg : Colors.dim}
                 />
                 <Text
                   style={[
-                    st.speedLabel,
+                    s.speedLabel,
                     { color: active ? Colors.bg : Colors.dim },
                   ]}
                 >
@@ -322,80 +218,11 @@ export default function TopHUD() {
           })}
         </View>
       </View>
-
-      <View style={st.flowRow}>
-        <FlowCard
-          icon="people-outline"
-          label="Waiting"
-          value={`${shortPax(waiting)} pax`}
-          color={waitingColor}
-        />
-
-        <FlowCard
-          icon="checkmark-done-outline"
-          label="Moved"
-          value={`${shortPax(movedToday)} pax`}
-          color={movedToday > 0 ? Colors.green : Colors.dim}
-          scale={movedScale}
-        />
-
-        <FlowCard
-          icon="cash-outline"
-          label="Today"
-          value={
-            todayReward > 0
-              ? `+${fmtCash(displayedReward || todayReward)}`
-              : "$0"
-          }
-          color={rewardColor}
-          scale={rewardScale}
-        />
-      </View>
     </View>
   );
 }
 
-const fc = StyleSheet.create({
-  card: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 7,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: "rgba(255,255,255,.035)",
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: 7,
-    minWidth: 0,
-  },
-  iconWrap: {
-    width: 25,
-    height: 25,
-    borderRadius: 8,
-    alignItems: "center",
-    justifyContent: "center",
-    flexShrink: 0,
-  },
-  body: {
-    flex: 1,
-    minWidth: 0,
-  },
-  label: {
-    fontSize: 7,
-    color: Colors.dim,
-    letterSpacing: 1.3,
-    fontWeight: "900",
-    textTransform: "uppercase",
-  },
-  value: {
-    fontSize: 12,
-    fontWeight: "900",
-    marginTop: 1,
-  },
-});
-
-const st = StyleSheet.create({
+const s = StyleSheet.create({
   container: {
     position: "absolute",
     top: 0,
@@ -407,13 +234,13 @@ const st = StyleSheet.create({
     borderBottomColor: Colors.border,
     paddingHorizontal: Spacing.md,
     paddingBottom: Spacing.sm,
-    gap: Spacing.sm,
   },
-  topRow: {
+  row: {
     flexDirection: "row",
     alignItems: "center",
     gap: Spacing.sm,
   },
+
   identity: {
     flex: 1,
     minWidth: 0,
@@ -428,34 +255,58 @@ const st = StyleSheet.create({
     fontWeight: "900",
     marginTop: 1,
   },
+
+  incomeBox: {
+    minWidth: 48,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.green + "33",
+    backgroundColor: Colors.green + "10",
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 5,
+    alignItems: "center",
+  },
+  incomeLabel: {
+    fontSize: 7,
+    color: Colors.dim,
+    letterSpacing: 1.5,
+    fontWeight: "900",
+  },
+  income: {
+    fontSize: 15,
+    fontWeight: "900",
+    marginTop: 1,
+  },
+
   dayBox: {
     alignItems: "center",
     justifyContent: "center",
     borderRadius: Radius.lg,
     borderWidth: 1,
     backgroundColor: "rgba(255,255,255,.04)",
-    paddingHorizontal: Spacing.sm + 1,
+    paddingHorizontal: Spacing.sm,
     paddingVertical: 5,
-    minWidth: 52,
+    minWidth: 48,
   },
   dayLabel: {
     fontSize: 7,
     color: Colors.dim,
-    letterSpacing: 1.8,
+    letterSpacing: 1.6,
     fontWeight: "900",
   },
   day: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: "900",
-    lineHeight: 22,
+    lineHeight: 20,
   },
+
   speedGroup: {
     flexDirection: "row",
-    gap: 4,
+    gap: 3,
   },
   speedBtn: {
-    minWidth: 34,
-    minHeight: 31,
+    minWidth: 30,
+    minHeight: 30,
     borderRadius: Radius.md,
     borderWidth: 1,
     borderColor: Colors.border,
@@ -468,9 +319,5 @@ const st = StyleSheet.create({
     fontSize: 7,
     fontWeight: "900",
     lineHeight: 8,
-  },
-  flowRow: {
-    flexDirection: "row",
-    gap: Spacing.sm,
   },
 });

@@ -145,7 +145,7 @@ export default function MissionsPill() {
       style={[
         s.pill,
         {
-          top: hudH + FLOAT_GAP + 90,
+          top: hudH + FLOAT_GAP,
           borderColor: accent + "55",
           backgroundColor: allDone ? "#22c55e18" : "rgba(8,15,30,0.94)",
         },

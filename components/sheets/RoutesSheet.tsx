@@ -162,34 +162,6 @@ function routeFlowInfo(
   };
 }
 
-function MetricCell({
-  value,
-  label,
-  accent,
-}: {
-  value: string;
-  label: string;
-  accent?: string;
-}) {
-  return (
-    <View style={rr.metricCell}>
-      <Text
-        style={[
-          rr.metricVal,
-          accent ? { color: accent } : { color: Colors.text },
-          { fontFamily: Typography.mono },
-        ]}
-        numberOfLines={1}
-        adjustsFontSizeToFit
-        minimumFontScale={0.75}
-      >
-        {value}
-      </Text>
-      <Text style={rr.metricLbl}>{label}</Text>
-    </View>
-  );
-}
-
 function RouteRow({
   route,
   hub,
@@ -209,16 +181,8 @@ function RouteRow({
   const p = route.plane.plane_model;
   const isConnecting = !!route.via_iata;
 
-  const {
-    demand,
-    deliveredPax,
-    targetPax,
-    waitingPax,
-    canBoardNow,
-    leftToMove,
-    movedPct,
-    status,
-  } = routeFlowInfo(route, liveDemands, dayProgress);
+  const { demand, deliveredPax, targetPax, waitingPax, movedPct, status } =
+    routeFlowInfo(route, liveDemands, dayProgress);
 
   const tickerScale = useTickerAnim(deliveredPax);
 
@@ -232,29 +196,16 @@ function RouteRow({
     fuelPerNm: p.fuel_per_nm ?? 2,
   });
 
-  const haulColor =
-    demand.haul === "short"
-      ? Colors.green
-      : demand.haul === "medium"
-        ? Colors.amber
-        : Colors.purple;
-
   const isProblem = status.label === "STALLED" || status.label === "JAMMED";
   const isCleared = status.label === "CLEARED";
-
   const accent = status.color;
-  const summaryTint = isProblem
-    ? Colors.red + "22"
-    : isCleared
-      ? Colors.green + "14"
-      : "rgba(255,255,255,.04)";
 
   return (
     <TouchableOpacity
       style={[
-        rr.cardWrap,
-        isProblem && rr.cardProblem,
-        isCleared && rr.cardCleared,
+        rr.card,
+        isProblem && rr.problem,
+        isCleared && rr.cleared,
         deactivating && { opacity: 0.45 },
       ]}
       onLongPress={() => onLongPress(route)}
@@ -263,15 +214,16 @@ function RouteRow({
     >
       <View style={[rr.stripe, { backgroundColor: accent }]} />
 
-      <View style={rr.cardBody}>
-        <View style={rr.topBand}>
+      <View style={rr.body}>
+        <View style={rr.top}>
           <View style={rr.routeLine}>
             <Text style={rr.iata}>{demand.origin.iata}</Text>
+
             {isConnecting && (
               <>
-                <MaterialCommunityIcons
-                  name="swap-horizontal"
-                  size={12}
+                <Ionicons
+                  name="git-branch-outline"
+                  size={11}
                   color={Colors.purple}
                 />
                 <Text style={[rr.iata, { color: Colors.purple }]}>
@@ -279,122 +231,81 @@ function RouteRow({
                 </Text>
               </>
             )}
-            <Ionicons name="arrow-forward" size={12} color={Colors.dim} />
+
+            <Ionicons name="arrow-forward" size={11} color={Colors.dim} />
             <Text style={rr.iata}>{demand.dest.iata}</Text>
           </View>
 
           <View
             style={[
-              rr.statusPill,
+              rr.status,
               {
-                backgroundColor: accent + "22",
+                backgroundColor: accent + "18",
                 borderColor: accent + "44",
               },
             ]}
           >
-            <Text style={[rr.statusText, { color: accent }]}>
+            <Text style={[rr.statusTxt, { color: accent }]}>
               {status.label}
             </Text>
           </View>
         </View>
 
-        <View style={rr.planeRow}>
-          <Ionicons name="airplane" size={12} color={Colors.muted} />
-          <Text style={rr.planeName} numberOfLines={1}>
+        <View style={rr.metaRow}>
+          <Ionicons name="airplane" size={11} color={Colors.dim} />
+          <Text style={rr.meta} numberOfLines={1}>
             {p.nickname}
-            {isConnecting ? ` · via ${route.via_iata}` : ""}
           </Text>
-          <View
+
+          <Text style={rr.dot}>•</Text>
+
+          <Animated.Text
             style={[
-              rr.haulPill,
+              rr.moved,
               {
-                backgroundColor: haulColor + "18",
-                borderColor: haulColor + "44",
+                color: deliveredPax > 0 ? accent : Colors.dim,
+                transform: [{ scale: tickerScale }],
+                fontFamily: Typography.mono,
               },
             ]}
           >
-            <Text style={[rr.haulText, { color: haulColor }]}>
-              {demand.haul.toUpperCase()}
-            </Text>
-          </View>
+            {deliveredPax.toLocaleString()} pax
+          </Animated.Text>
+
+          {waitingPax > 0 && (
+            <>
+              <Text style={rr.dot}>•</Text>
+              <Text style={[rr.waiting, { color: Colors.amber }]}>
+                {waitingPax.toLocaleString()} waiting
+              </Text>
+            </>
+          )}
         </View>
 
-        <View style={[rr.metricsRow, { backgroundColor: summaryTint }]}>
-          <MetricCell
-            value={waitingPax.toLocaleString()}
-            label="WAIT"
-            accent={waitingPax > 0 ? Colors.amber : Colors.dim}
-          />
-          <View style={rr.metricSep} />
-          <MetricCell
-            value={canBoardNow.toLocaleString()}
-            label="BOARD"
-            accent={
-              canBoardNow > 0 ? Colors.sky : Colors.dim
-            }
-          />
-          <View style={rr.metricSep} />
-          <MetricCell value={leftToMove.toLocaleString()} label="LEFT" />
-        </View>
-
-        <View style={rr.progressBlock}>
-          <View style={rr.barRow}>
-            <View style={rr.barTrack}>
-              <View
-                style={[
-                  rr.barFill,
-                  {
-                    width: `${movedPct}%` as `${number}%`,
-                    backgroundColor: accent,
-                  },
-                ]}
-              />
-            </View>
-            <Animated.Text
+        <View style={rr.bottom}>
+          <View style={rr.progressTrack}>
+            <View
               style={[
-                rr.barLabel,
+                rr.progressFill,
                 {
-                  color: deliveredPax > 0 ? accent : Colors.dim,
-                  transform: [{ scale: tickerScale }],
-                  fontFamily: Typography.mono,
+                  width: `${movedPct}%` as `${number}%`,
+                  backgroundColor: accent,
                 },
               ]}
-            >
-              {movedPct}%
-            </Animated.Text>
+            />
           </View>
-          <Text style={rr.paxLine} numberOfLines={1}>
-            {deliveredPax.toLocaleString()} / {targetPax.toLocaleString()} moved
-            today
-          </Text>
-        </View>
 
-        <View style={rr.footerRow}>
-          <Text style={[rr.hint, { color: accent }]} numberOfLines={1}>
-            {status.hint}
-          </Text>
-          <Text style={rr.nmTxt}>{distNm.toLocaleString()} nm</Text>
+          <Text style={[rr.percent, { color: accent }]}>{movedPct}%</Text>
+
+          <Text style={rr.cash}>{fmtCash(revenueResult.net)}</Text>
         </View>
       </View>
 
-      <View style={[rr.sideCol, { borderLeftColor: Colors.border }]}>
-        {deactivating ? (
+      {deactivating && (
+        <View style={rr.loadingOverlay}>
           <ActivityIndicator size="small" color={Colors.dim} />
-        ) : (
-          <>
-            <Text style={rr.sideLbl}>TODAY</Text>
-            <Text style={[rr.sideNum, { color: accent, fontFamily: Typography.mono }]}>
-              {deliveredPax.toLocaleString()}
-            </Text>
-            <Text style={rr.sideSub}>pax</Text>
-            <View style={rr.sideRule} />
-            <Text style={[rr.sideCash, { fontFamily: Typography.mono }]}>
-              {fmtCash(revenueResult.net)}
-            </Text>
-            <Text style={rr.sideCashLbl}>net</Text>
-          </>
-        )}
-      </View>
+        </View>
+      )}
     </TouchableOpacity>
   );
 }
@@ -471,11 +382,7 @@ export default function RoutesSheet() {
   }, 0);
 
   const flowHighlight =
-    stalledCount > 0
-      ? Colors.red
-      : avgFlow >= 80
-        ? Colors.green
-        : color;
+    stalledCount > 0 ? Colors.red : avgFlow >= 80 ? Colors.green : color;
 
   const summaryBorder =
     stalledCount > 0
@@ -554,9 +461,7 @@ export default function RoutesSheet() {
                 },
               ]}
             >
-              <Text style={[s.badgeTxt, { color }]}>
-                {activeRoutes.length}
-              </Text>
+              <Text style={[s.badgeTxt, { color }]}>{activeRoutes.length}</Text>
             </View>
           )}
         </View>
@@ -585,7 +490,13 @@ export default function RoutesSheet() {
             <View style={s.rushDivider} />
             <View style={s.rushStat}>
               <Text
-                style={[s.rushVal, { fontFamily: Typography.mono, color: totalWaiting > 0 ? Colors.amber : Colors.text }]}
+                style={[
+                  s.rushVal,
+                  {
+                    fontFamily: Typography.mono,
+                    color: totalWaiting > 0 ? Colors.amber : Colors.text,
+                  },
+                ]}
               >
                 {totalWaiting.toLocaleString()}
               </Text>
@@ -594,7 +505,10 @@ export default function RoutesSheet() {
             <View style={s.rushDivider} />
             <View style={s.rushStat}>
               <Text
-                style={[s.rushVal, { fontFamily: Typography.mono, color: Colors.sky }]}
+                style={[
+                  s.rushVal,
+                  { fontFamily: Typography.mono, color: Colors.sky },
+                ]}
               >
                 {totalCanBoard.toLocaleString()}
               </Text>
@@ -619,7 +533,12 @@ export default function RoutesSheet() {
 
           <View style={[s.miniBarWrap, { borderColor: summaryBorder }]}>
             <Text style={s.miniStatPair}>
-              <Text style={[s.miniStatKey, { color: stalledCount > 0 ? Colors.red : Colors.green }]}>
+              <Text
+                style={[
+                  s.miniStatKey,
+                  { color: stalledCount > 0 ? Colors.red : Colors.green },
+                ]}
+              >
                 {stalledCount}
               </Text>
               <Text style={s.miniStatWord}> stalled</Text>
@@ -716,47 +635,45 @@ export default function RoutesSheet() {
 }
 
 const rr = StyleSheet.create({
-  cardWrap: {
+  card: {
     flexDirection: "row",
-    alignItems: "stretch",
     borderRadius: Radius.lg,
     borderWidth: 1,
     borderColor: Colors.border,
     overflow: "hidden",
     marginBottom: Spacing.sm,
-    backgroundColor: "rgba(255,255,255,.022)",
+    backgroundColor: "rgba(255,255,255,.025)",
   },
-  cardProblem: {
+  problem: {
     borderColor: Colors.red + "33",
     backgroundColor: Colors.red + "06",
   },
-  cardCleared: {
+  cleared: {
     borderColor: Colors.green + "28",
     backgroundColor: Colors.green + "05",
   },
   stripe: {
     width: 4,
-    alignSelf: "stretch",
   },
-  cardBody: {
+  body: {
     flex: 1,
     minWidth: 0,
-    paddingVertical: Spacing.md,
+    paddingVertical: Spacing.sm,
     paddingHorizontal: Spacing.md,
-    gap: Spacing.sm,
+    gap: 7,
   },
-  topBand: {
+  top: {
     flexDirection: "row",
-    alignItems: "flex-start",
+    alignItems: "center",
     justifyContent: "space-between",
     gap: Spacing.sm,
   },
   routeLine: {
     flex: 1,
+    minWidth: 0,
     flexDirection: "row",
     alignItems: "center",
     gap: 5,
-    flexWrap: "wrap",
   },
   iata: {
     fontSize: 15,
@@ -764,160 +681,77 @@ const rr = StyleSheet.create({
     fontWeight: "900",
     letterSpacing: 0.4,
   },
-  statusPill: {
-    borderRadius: Radius.full,
-    borderWidth: 1,
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    flexShrink: 0,
-  },
-  statusText: {
-    fontSize: 8,
-    fontWeight: "900",
-    letterSpacing: 1.1,
-  },
-  planeRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    flexWrap: "wrap",
-  },
-  planeName: {
-    flex: 1,
-    fontSize: 11,
-    color: Colors.muted,
-    fontWeight: "600",
-    minWidth: 120,
-  },
-  haulPill: {
+  status: {
     borderRadius: Radius.full,
     borderWidth: 1,
     paddingHorizontal: 7,
     paddingVertical: 2,
   },
-  haulText: {
+  statusTxt: {
     fontSize: 8,
     fontWeight: "900",
-    letterSpacing: 0.65,
+    letterSpacing: 0.8,
   },
-  metricsRow: {
+  metaRow: {
     flexDirection: "row",
-    alignItems: "stretch",
-    borderRadius: Radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.border,
-    overflow: "hidden",
-  },
-  metricCell: {
-    flex: 1,
     alignItems: "center",
-    paddingVertical: Spacing.sm,
-    paddingHorizontal: 4,
-    gap: 2,
+    gap: 5,
   },
-  metricSep: {
-    width: StyleSheet.hairlineWidth,
-    backgroundColor: Colors.border,
+  meta: {
+    flexShrink: 1,
+    fontSize: 11,
+    color: Colors.muted,
+    fontWeight: "700",
   },
-  metricVal: {
-    fontSize: 13,
-    fontWeight: "800",
-    maxWidth: "100%",
-  },
-  metricLbl: {
-    fontSize: 7,
+  dot: {
+    fontSize: 10,
     color: Colors.dim,
+  },
+  moved: {
+    fontSize: 11,
     fontWeight: "900",
-    letterSpacing: 1,
   },
-  progressBlock: {
-    gap: 4,
+  waiting: {
+    fontSize: 10,
+    fontWeight: "800",
   },
-  barRow: {
+  bottom: {
     flexDirection: "row",
     alignItems: "center",
-    gap: Spacing.sm,
+    gap: 8,
   },
-  barTrack: {
+  progressTrack: {
     flex: 1,
     height: 5,
-    backgroundColor: "rgba(255,255,255,.08)",
     borderRadius: Radius.full,
+    backgroundColor: "rgba(255,255,255,.08)",
     overflow: "hidden",
   },
-  barFill: {
+  progressFill: {
     height: "100%",
     borderRadius: Radius.full,
   },
-  barLabel: {
-    fontSize: 11,
-    fontWeight: "900",
-    minWidth: 38,
+  percent: {
+    minWidth: 34,
     textAlign: "right",
-  },
-  paxLine: {
     fontSize: 10,
-    color: Colors.dim,
-    fontWeight: "600",
+    fontWeight: "900",
+    fontFamily: Typography.mono,
   },
-  footerRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: Spacing.sm,
+  cash: {
+    minWidth: 64,
+    textAlign: "right",
+    fontSize: 11,
+    color: Colors.green,
+    fontWeight: "900",
+    fontFamily: Typography.mono,
   },
-  hint: {
-    flex: 1,
-    fontSize: 10,
-    fontWeight: "800",
-  },
-  nmTxt: {
-    fontSize: 9,
-    color: Colors.dim,
-    fontWeight: "700",
-  },
-  sideCol: {
-    width: 78,
-    borderLeftWidth: StyleSheet.hairlineWidth,
+  loadingOverlay: {
+    width: 40,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: Spacing.sm,
-    backgroundColor: "rgba(255,255,255,.035)",
-    gap: 1,
-    paddingVertical: Spacing.sm,
-  },
-  sideLbl: {
-    fontSize: 7,
-    color: Colors.dim,
-    letterSpacing: 1.6,
-    fontWeight: "900",
-  },
-  sideNum: {
-    fontSize: 16,
-    fontWeight: "900",
-    marginTop: 1,
-  },
-  sideSub: {
-    fontSize: 9,
-    color: Colors.dim,
-    marginBottom: 2,
-  },
-  sideRule: {
-    height: StyleSheet.hairlineWidth,
-    width: "70%",
-    backgroundColor: Colors.border,
-    marginVertical: 4,
-  },
-  sideCash: {
-    fontSize: 11,
-    fontWeight: "800",
-    color: Colors.green,
-    textAlign: "center",
-  },
-  sideCashLbl: {
-    fontSize: 8,
-    color: Colors.dim,
-    fontWeight: "700",
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderLeftColor: Colors.border,
   },
 });
 

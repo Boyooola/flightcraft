@@ -20,7 +20,6 @@ import {
   useDemands,
   useGameStore,
   useHubs,
-  useMissionsCompleted,
   useRoutes,
 } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
@@ -141,13 +140,16 @@ function useMissionProgress(mission: Mission) {
         return { progress: 0, complete: false };
     }
   }, [
-    mission,
-    demands,
-    routes,
-    hubs,
-    airline?.loan,
-    ledger.length,
+    mission.completed,
+    mission.target,
+    mission.type,
     boughtPlane,
+    routes,
+    demands,
+    airline?.day,
+    airline?.loan,
+    ledger,
+    hubs,
   ]);
 }
 
@@ -330,7 +332,6 @@ function WeeklyChallengeCard({
 
 export default function MissionsSheet() {
   const missions = useDailyMissions();
-  const completed = useMissionsCompleted();
   const airline = useAirline();
   const day = useDay();
   const closeSheet = useGameStore((s) => s.closeSheet);
@@ -439,26 +440,6 @@ export default function MissionsSheet() {
       )}
 
       <View style={s.divider} />
-
-      <View style={s.stats}>
-        <Text style={s.sectionTitleNoPad}>ALL-TIME RUSH</Text>
-
-        <View style={s.statsRow}>
-          <View style={s.statBox}>
-            <Text style={[s.statVal, { color }]}>{completed}</Text>
-            <Text style={s.statLbl}>Completed</Text>
-          </View>
-
-          <View style={s.statBox}>
-            <Text
-              style={[s.statVal, { color: doneCount >= 3 ? GREEN : color }]}
-            >
-              {doneCount}/3
-            </Text>
-            <Text style={s.statLbl}>Today</Text>
-          </View>
-        </View>
-      </View>
     </BottomSheetScrollView>
   );
 }
