@@ -223,7 +223,7 @@ class SoundManager {
         this.musicPlayer = createAudioPlayer(MUSIC_FILE);
       }
 
-      this.musicPlayer.volume = 0.2;
+      this.musicPlayer.volume = 0.05;
       this.musicPlayer.seekTo?.(0);
       this.musicPlayer.play();
 
@@ -233,7 +233,7 @@ class SoundManager {
           if (!this.musicEnabled || !this.musicPlayer) return;
 
           try {
-            this.musicPlayer.volume = 0.2;
+            this.musicPlayer.volume = 0.05;
             this.musicPlayer.seekTo?.(0);
             this.musicPlayer.play();
           } catch {}
