@@ -3,10 +3,9 @@
  *
  * WorldWide Rush-style passenger flow helpers.
  *
- * IMPORTANT:
- *   Demand is still the source of truth.
- *   These helpers only derive passenger-flow numbers from Demand-like data.
- *   Do not store PassengerFlowDemand separately in Zustand/Supabase.
+ * Supports:
+ * - single-plane boarding
+ * - multi-plane route group boarding
  */
 
 import type { Demand, DemandStatus } from "@/store";
@@ -20,8 +19,32 @@ export type PassengerFlowDemand = Pick<
   status?: DemandStatus | "preview";
 };
 
-// Backward-compatible alias for older imports while we migrate files.
 export type FlowDemand = PassengerFlowDemand;
+
+export type RouteBoardingInput = {
+  id: string;
+  plane: {
+    id: string;
+    plane_model: {
+      pax_capacity: number;
+    };
+  };
+};
+
+export type RouteBoardingResult = {
+  routeId: string;
+  planeId: string;
+  capacity: number;
+  practicalCapacity: number;
+  boarded: number;
+};
+
+export type RouteGroupBoardingResult = {
+  totalBoarded: number;
+  waitingBefore: number;
+  totalPracticalCapacity: number;
+  results: RouteBoardingResult[];
+};
 
 export function clampDayProgress(dayProgress: number): number {
   return Math.max(
@@ -36,13 +59,9 @@ export function spawnedPaxForDay(
 ): number {
   if (demand.status === "served") return demand.pax_day;
 
-  const progress = Math.max(0, Math.min(1, dayProgress));
+  const progress = clampDayProgress(dayProgress);
 
-  // Front-load passengers so queues exists earlier in the day
-  // 0.35 means 35% of demand can appear
   const frontLoad = demand.pax_day * 0.35;
-
-  // Remaining pax spawn throughout the day
   const rolling = demand.pax_day * 0.65 * progress;
 
   return Math.min(demand.pax_day, Math.floor(frontLoad + rolling));
@@ -62,6 +81,29 @@ export function waitingPaxForDemand(
   return Math.max(0, Math.min(remainingPax(demand), spawned - delivered));
 }
 
+function randomLoadFactor(min = 0.65, max = 1): number {
+  const safeMin = Math.max(0, Math.min(1, min));
+  const safeMax = Math.max(safeMin, Math.min(1, max));
+
+  return safeMin + Math.random() * Math.max(0, safeMax - safeMin);
+}
+
+export function practicalPlaneCapacity(params: {
+  planeCapacity: number;
+  loadFactorMin?: number;
+  loadFactorMax?: number;
+}): number {
+  const loadFactor = randomLoadFactor(
+    params.loadFactorMin ?? 0.65,
+    params.loadFactorMax ?? 1,
+  );
+
+  return Math.max(1, Math.round(params.planeCapacity * loadFactor));
+}
+
+/**
+ * Backward-compatible single-plane boarding.
+ */
 export function boardPassengers(params: {
   demand: PassengerFlowDemand;
   planeCapacity: number;
@@ -72,15 +114,143 @@ export function boardPassengers(params: {
   const waiting = waitingPaxForDemand(params.demand, params.dayProgress);
   if (waiting <= 0) return 0;
 
-  const min = params.loadFactorMin ?? 0.65;
-  const max = params.loadFactorMax ?? 1;
-  const loadFactor = min + Math.random() * Math.max(0, max - min);
-  const practicalCapacity = Math.max(
-    1,
-    Math.round(params.planeCapacity * loadFactor),
-  );
+  const practicalCapacity = practicalPlaneCapacity({
+    planeCapacity: params.planeCapacity,
+    loadFactorMin: params.loadFactorMin,
+    loadFactorMax: params.loadFactorMax,
+  });
 
   return Math.max(0, Math.min(waiting, practicalCapacity));
+}
+
+/**
+ * Multi-plane boarding for one demand / one route group.
+ *
+ * Use this when several active route rows share the same demand_id.
+ *
+ * Important:
+ * - Waiting passengers are calculated once.
+ * - Every plane gets a practical capacity.
+ * - Passengers are distributed fairly across all assigned planes.
+ * - Total boarded never exceeds waiting passengers.
+ */
+export function boardPassengersForRouteGroup(params: {
+  demand: PassengerFlowDemand;
+  routes: RouteBoardingInput[];
+  dayProgress: number;
+  loadFactorMin?: number;
+  loadFactorMax?: number;
+}): RouteGroupBoardingResult {
+  const waitingBefore = waitingPaxForDemand(params.demand, params.dayProgress);
+
+  if (waitingBefore <= 0 || params.routes.length === 0) {
+    return {
+      totalBoarded: 0,
+      waitingBefore,
+      totalPracticalCapacity: 0,
+      results: params.routes.map((route) => ({
+        routeId: route.id,
+        planeId: route.plane.id,
+        capacity: route.plane.plane_model.pax_capacity,
+        practicalCapacity: 0,
+        boarded: 0,
+      })),
+    };
+  }
+
+  const prepared = params.routes.map((route) => {
+    const capacity = route.plane.plane_model.pax_capacity;
+    const practicalCapacity = practicalPlaneCapacity({
+      planeCapacity: capacity,
+      loadFactorMin: params.loadFactorMin,
+      loadFactorMax: params.loadFactorMax,
+    });
+
+    return {
+      routeId: route.id,
+      planeId: route.plane.id,
+      capacity,
+      practicalCapacity,
+      boarded: 0,
+    };
+  });
+
+  const totalPracticalCapacity = prepared.reduce(
+    (sum, item) => sum + item.practicalCapacity,
+    0,
+  );
+
+  if (totalPracticalCapacity <= 0) {
+    return {
+      totalBoarded: 0,
+      waitingBefore,
+      totalPracticalCapacity: 0,
+      results: prepared,
+    };
+  }
+
+  const totalBoarded = Math.min(waitingBefore, totalPracticalCapacity);
+
+  if (totalPracticalCapacity <= waitingBefore) {
+    return {
+      totalBoarded,
+      waitingBefore,
+      totalPracticalCapacity,
+      results: prepared.map((item) => ({
+        ...item,
+        boarded: item.practicalCapacity,
+      })),
+    };
+  }
+
+  let assigned = 0;
+
+  const results = prepared.map((item) => {
+    const share = item.practicalCapacity / totalPracticalCapacity;
+    const boarded = Math.min(
+      item.practicalCapacity,
+      Math.floor(totalBoarded * share),
+    );
+
+    assigned += boarded;
+
+    return {
+      ...item,
+      boarded,
+    };
+  });
+
+  let remaining = totalBoarded - assigned;
+
+  for (let i = 0; i < results.length && remaining > 0; i++) {
+    const room = results[i].practicalCapacity - results[i].boarded;
+    if (room <= 0) continue;
+
+    const add = Math.min(room, remaining);
+    results[i].boarded += add;
+    remaining -= add;
+  }
+
+  return {
+    totalBoarded,
+    waitingBefore,
+    totalPracticalCapacity,
+    results,
+  };
+}
+
+export function totalRouteGroupCapacity(routes: RouteBoardingInput[]): number {
+  return routes.reduce(
+    (sum, route) => sum + route.plane.plane_model.pax_capacity,
+    0,
+  );
+}
+
+export function routeGroupCanClearDemand(params: {
+  demand: PassengerFlowDemand;
+  routes: RouteBoardingInput[];
+}): boolean {
+  return totalRouteGroupCapacity(params.routes) >= remainingPax(params.demand);
 }
 
 export function isDemandCleared(demand: PassengerFlowDemand): boolean {
@@ -128,6 +298,7 @@ export function hubFlowPercent(
 ): number {
   const hubDemands = demands.filter((d) => d.hub_iata === hubIata);
   const total = hubDemands.reduce((sum, d) => sum + (d.pax_day ?? 0), 0);
+
   if (total <= 0) return 0;
 
   return Math.min(

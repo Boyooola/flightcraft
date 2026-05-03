@@ -36,7 +36,7 @@ import {
 } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
 import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   StyleSheet,
@@ -412,11 +412,12 @@ export default function CreateRouteSheet() {
   const cash = useCash();
   const removeWaypoint = useGameStore((s) => s.removeWaypoint);
   const clearCreation = useGameStore((s) => s.clearRouteCreation);
+  const startCreation = useGameStore((s) => s.startRouteCreation);
   const haptics = useHaptics();
   const tabBarH = useTabBarHeight();
   const createCustom = useCreateCustomRoute();
 
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
@@ -531,8 +532,45 @@ export default function CreateRouteSheet() {
   ]);
 
   const eligibleCount = classified.filter((item) => item.canServe).length;
-  const selectedPlane =
-    classified.find((item) => item.plane.id === selectedId)?.plane ?? null;
+  const selectedItems = classified.filter((item) =>
+    selectedIds.includes(item.plane.id),
+  );
+  const selectedPlanes = selectedItems.map((item) => item.plane);
+  const selectedCount = selectedPlanes.length;
+  const selectedCapacity = selectedPlanes.reduce(
+    (sum, plane) => sum + plane.plane_model.pax_capacity,
+    0,
+  );
+  const selectedReward = selectedItems.reduce(
+    (sum, item) => sum + item.revenue,
+    0,
+  );
+  const totalFee = fee * Math.max(1, selectedCount);
+  const canAffordSelected = cash >= totalFee;
+
+  const recommended = classified.find((item) => item.canServe) ?? null;
+
+  useEffect(() => {
+    setSelectedIds((current) =>
+      current.filter((id) =>
+        classified.some((item) => item.canServe && item.plane.id === id),
+      ),
+    );
+  }, [classified]);
+
+  useEffect(() => {
+    if (selectedIds.length === 0 && recommended?.plane.id) {
+      setSelectedIds([recommended.plane.id]);
+    }
+  }, [recommended?.plane.id, selectedIds.length]);
+
+  const togglePlane = (planeId: string) => {
+    setSelectedIds((current) =>
+      current.includes(planeId)
+        ? current.filter((id) => id !== planeId)
+        : [...current, planeId],
+    );
+  };
 
   const handleRemoveWaypoint = (iata: string) => {
     const remaining = waypoints.filter((airport) => airport.iata !== iata);
@@ -540,32 +578,46 @@ export default function CreateRouteSheet() {
     else removeWaypoint(iata);
   };
 
+  const handleSwapStopDestination = () => {
+    if (waypoints.length !== 3) return;
+
+    const [originAirport, stopAirport, destinationAirport] = waypoints;
+
+    haptics.tap();
+    setSelectedIds([]);
+    setError(null);
+    startCreation([originAirport, destinationAirport, stopAirport]);
+  };
+
   const handleCreate = async () => {
-    if (!origin || !dest || !selectedPlane || !canAfford) return;
+    if (!origin || !dest || selectedPlanes.length === 0 || !canAffordSelected)
+      return;
 
     haptics.confirm();
     setCreating(true);
     setError(null);
 
-    const { error: err } = await createCustom(
-      origin,
-      dest,
-      via,
-      selectedPlane,
-      previewDemand.pax_day,
-      via ? legs[0] : totalDist,
-      haul,
-      totalDist,
-    );
+    for (const plane of selectedPlanes) {
+      const { error: err } = await createCustom(
+        origin,
+        dest,
+        via,
+        plane,
+        previewDemand.pax_day,
+        via ? legs[0] : totalDist,
+        haul,
+        totalDist,
+      );
 
-    setCreating(false);
-
-    if (err) {
-      setError(err);
-      haptics.error();
-      return;
+      if (err) {
+        setCreating(false);
+        setError(err);
+        haptics.error();
+        return;
+      }
     }
 
+    setCreating(false);
     haptics.success();
     setDone(true);
 
@@ -675,8 +727,8 @@ export default function CreateRouteSheet() {
           {via ? ` → ${via.iata}` : ""} → {dest?.iata}
         </Text>
         <Text style={s.successSub}>
-          Your plane will board waiting travelers as they appear and turn them
-          into cash flow.
+          Your assigned planes will board waiting travelers as they appear and
+          turn them into cash flow.
         </Text>
       </View>
     );
@@ -717,6 +769,21 @@ export default function CreateRouteSheet() {
             handleRemoveWaypoint(iata);
           }}
         />
+
+        {waypoints.length === 3 && (
+          <TouchableOpacity
+            style={s.swapBtn}
+            onPress={handleSwapStopDestination}
+            activeOpacity={0.84}
+          >
+            <Ionicons
+              name="swap-vertical-outline"
+              size={16}
+              color={Colors.purple}
+            />
+            <Text style={s.swapText}>Swap stop & destination</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       <View style={s.summaryBar}>
@@ -789,6 +856,47 @@ export default function CreateRouteSheet() {
               </Text>
             </View>
 
+            {recommended && (
+              <TouchableOpacity
+                style={[s.recommendedBox, { borderColor: color + "55" }]}
+                onPress={() => {
+                  haptics.tap();
+                  setSelectedIds([recommended.plane.id]);
+                }}
+                activeOpacity={0.84}
+              >
+                <Ionicons name="sparkles-outline" size={16} color={color} />
+
+                <View style={{ flex: 1 }}>
+                  <Text style={s.recommendedTitle}>Recommended Start</Text>
+                  <Text style={s.recommendedSub}>
+                    {recommended.plane.plane_model.nickname} ·{" "}
+                    {fmtCash(recommended.revenue)} first reward
+                  </Text>
+                </View>
+
+                <Ionicons name="checkmark-circle" size={18} color={color} />
+              </TouchableOpacity>
+            )}
+
+            {selectedCount > 0 && (
+              <View style={[s.selectedSummary, { borderColor: color + "44" }]}>
+                <View style={s.selectedSummaryTop}>
+                  <Text style={s.selectedSummaryTitle}>
+                    {selectedCount} plane{selectedCount !== 1 ? "s" : ""}{" "}
+                    selected
+                  </Text>
+                  <Text style={[s.selectedSummaryValue, { color }]}>
+                    {selectedCapacity.toLocaleString()} seats
+                  </Text>
+                </View>
+                <Text style={s.selectedSummarySub}>
+                  Est. first reward {fmtCash(selectedReward)} · Setup cost{" "}
+                  {fmtCash(totalFee)}
+                </Text>
+              </View>
+            )}
+
             {ownedPlanes.length === 0 ? (
               <View style={s.emptyPlanes}>
                 <Ionicons
@@ -807,7 +915,7 @@ export default function CreateRouteSheet() {
                   key={plane.id}
                   plane={plane}
                   canServe={canServe}
-                  selected={selectedId === plane.id}
+                  selected={selectedIds.includes(plane.id)}
                   reason={reason}
                   waitingNow={waitingNow}
                   paxDay={previewDemand.pax_day}
@@ -816,9 +924,7 @@ export default function CreateRouteSheet() {
                   color={color}
                   onSelect={() => {
                     haptics.tap();
-                    setSelectedId((current) =>
-                      current === plane.id ? null : plane.id,
-                    );
+                    togglePlane(plane.id);
                   }}
                 />
               ))
@@ -838,14 +944,16 @@ export default function CreateRouteSheet() {
                 s.confirm,
                 {
                   backgroundColor:
-                    selectedPlane && canAfford
+                    selectedCount > 0 && canAffordSelected
                       ? color
                       : "rgba(255,255,255,.055)",
                 },
-                (!selectedPlane || !canAfford || creating) && { opacity: 0.5 },
+                (selectedCount === 0 || !canAffordSelected || creating) && {
+                  opacity: 0.5,
+                },
               ]}
               onPress={handleCreate}
-              disabled={!selectedPlane || !canAfford || creating}
+              disabled={selectedCount === 0 || !canAffordSelected || creating}
               activeOpacity={0.86}
             >
               {creating ? (
@@ -855,32 +963,38 @@ export default function CreateRouteSheet() {
                   <Ionicons
                     name="flash-outline"
                     size={17}
-                    color={selectedPlane && canAfford ? Colors.bg : Colors.dim}
+                    color={
+                      selectedCount > 0 && canAffordSelected
+                        ? Colors.bg
+                        : Colors.dim
+                    }
                   />
                   <Text
                     style={[
                       s.confirmText,
                       {
                         color:
-                          selectedPlane && canAfford ? Colors.bg : Colors.dim,
+                          selectedCount > 0 && canAffordSelected
+                            ? Colors.bg
+                            : Colors.dim,
                       },
                     ]}
                   >
-                    {!selectedPlane
-                      ? "Select an idle plane"
-                      : !canAfford
-                        ? `Need ${fmtCash(fee - cash)} more`
+                    {selectedCount === 0
+                      ? "Select one or more idle planes"
+                      : !canAffordSelected
+                        ? `Need ${fmtCash(totalFee - cash)} more`
                         : existingDemand
-                          ? `Clear This Slot · ${fmtCash(fee)}`
-                          : `Open Market Route · ${fmtCash(fee)}`}
+                          ? `Assign ${selectedCount} Plane${selectedCount !== 1 ? "s" : ""} · ${fmtCash(totalFee)}`
+                          : `Open Route with ${selectedCount} Plane${selectedCount !== 1 ? "s" : ""} · ${fmtCash(totalFee)}`}
                   </Text>
                 </>
               )}
             </TouchableOpacity>
 
-            {!canAfford && (
+            {!canAffordSelected && selectedCount > 0 && (
               <Text style={s.shortfall}>
-                {fmtCash(cash)} cash · {fmtCash(fee)} needed
+                {fmtCash(cash)} cash · {fmtCash(totalFee)} needed
               </Text>
             )}
           </View>
@@ -1417,5 +1531,81 @@ const s = StyleSheet.create({
     color: Colors.red,
     textAlign: "center",
     marginTop: 4,
+  },
+  swapBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.purple + "33",
+
+    backgroundColor: Colors.purple + "10",
+
+    marginTop: Spacing.xs,
+  },
+
+  swapText: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: Colors.purple,
+  },
+
+  selectedSummary: {
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    backgroundColor: "rgba(255,255,255,.025)",
+    padding: Spacing.sm,
+    marginBottom: Spacing.sm,
+  },
+  selectedSummaryTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: Spacing.sm,
+  },
+  selectedSummaryTitle: {
+    fontSize: 12,
+    color: Colors.text,
+    fontWeight: "900",
+  },
+  selectedSummaryValue: {
+    fontSize: 11,
+    fontWeight: "900",
+  },
+  selectedSummarySub: {
+    fontSize: 10,
+    color: Colors.dim,
+    marginTop: 3,
+    fontWeight: "700",
+  },
+
+  recommendedBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    backgroundColor: "rgba(255,255,255,.025)",
+    padding: Spacing.md,
+    marginBottom: Spacing.sm,
+  },
+
+  recommendedTitle: {
+    fontSize: 12,
+    color: Colors.text,
+    fontWeight: "900",
+  },
+
+  recommendedSub: {
+    fontSize: 10,
+    color: Colors.dim,
+    marginTop: 2,
+    fontWeight: "700",
   },
 });

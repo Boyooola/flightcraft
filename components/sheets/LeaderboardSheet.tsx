@@ -174,7 +174,7 @@ export default function LeaderboardSheet() {
 
     try {
       const { data, error: err } = await supabase
-        .from("airlines")
+        .from("leaderboard")
         .select(
           "id, name, color, cash, loan, demand_score, reputation, achievements",
         )

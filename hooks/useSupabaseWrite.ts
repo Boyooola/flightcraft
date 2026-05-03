@@ -3,6 +3,12 @@
  *
  * Centralised Supabase write-back.
  * Pattern: optimistic store update first → async DB write → rollback on error.
+ *
+ * Multi-plane route model:
+ *   - 1 route row = 1 assigned plane
+ *   - multiple route rows may share the same demand_id
+ *   - assigning a plane does NOT mark demand as served
+ *   - demand is considered cleared by passenger flow when delivered_pax_today >= pax_day
  */
 
 import { gameSounds } from "@/hooks/useGameSounds";
@@ -65,8 +71,6 @@ export function useBuyHub() {
       ]);
 
       const existingDests = demands.map((d) => d.dest.iata);
-      // Use pre-generated demands if provided (from AirportSheet preview)
-      // so the player sees the same destinations before and after purchase
       const newDemands =
         preGenerated && preGenerated.length > 0
           ? preGenerated
@@ -174,28 +178,24 @@ export function useSellHub() {
         setOwnedPlanes,
         addLedgerEntries,
       } = store();
+
       if (!airline) return { error: "No airline", refund: 0 };
 
       const hub = hubs.find((h) => h.id === hubId);
       if (!hub) return { error: "Hub not found", refund: 0 };
 
-      // Refund 50% of hub purchase cost
-      const { hubPurchaseCost } = await import("@/lib/demands");
       const refund = Math.round(hubPurchaseCost(hub.airport) * 0.5);
 
-      // Collect IDs to cascade delete
       const hubDemands = demands.filter((d) => d.hub_iata === hub.airport.iata);
       const demandIds = hubDemands.map((d) => d.id);
       const hubRoutes = routes.filter((r) => r.hub_iata === hub.airport.iata);
       const routeIds = hubRoutes.map((r) => r.id);
 
-      // Optimistic update — remove from store immediately
       earnCash(refund);
       setHubs(hubs.filter((h) => h.id !== hubId));
       setDemands(demands.filter((d) => !demandIds.includes(d.id)));
       setRoutes(routes.filter((r) => !routeIds.includes(r.id)));
 
-      // Free planes that were on these routes
       const assignedPlaneIds = new Set(hubRoutes.map((r) => r.plane.id));
       setOwnedPlanes(
         store().ownedPlanes.map((p) =>
@@ -215,7 +215,6 @@ export function useSellHub() {
       ]);
 
       try {
-        // DB cascade: deactivate routes → delete demands → delete hub
         if (routeIds.length > 0) {
           await supabase
             .from("routes")
@@ -241,7 +240,6 @@ export function useSellHub() {
 
         return { error: null, refund };
       } catch (err) {
-        // Rollback — reload page state would be cleanest but just report error
         return {
           error: err instanceof Error ? err.message : "Failed to sell hub",
           refund: 0,
@@ -268,6 +266,7 @@ export function useRefreshDemands() {
         spendCash,
         addLedgerEntries,
       } = useGameStore.getState();
+
       if (!airline) return { error: "No airline" };
 
       const hub = hubs.find((h) => h.airport.iata === hubIata);
@@ -309,7 +308,7 @@ export function useRefreshDemands() {
 
       try {
         const d = newDemands[0];
-        const { data } = await supabase
+        const { data, error } = await supabase
           .from("demands")
           .insert({
             airline_id: airline.id,
@@ -324,6 +323,8 @@ export function useRefreshDemands() {
           .select()
           .single();
 
+        if (error) throw new Error(error.message);
+
         if (data) {
           addDemands([
             {
@@ -335,6 +336,7 @@ export function useRefreshDemands() {
             },
           ]);
         }
+
         return { error: null };
       } catch (err) {
         return {
@@ -346,6 +348,10 @@ export function useRefreshDemands() {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────
+// CREATE ROUTE — existing generated demand
+// ─────────────────────────────────────────────────────────────────
+
 export function useCreateRoute() {
   const store = useGameStore.getState;
 
@@ -356,7 +362,7 @@ export function useCreateRoute() {
       viaIata: string | null = null,
       totalDistNm: number | null = null,
     ): Promise<{ error: string | null }> => {
-      const { airline, addRoute, updateDemand } = store();
+      const { airline, addRoute } = store();
       if (!airline) return { error: "No airline found" };
 
       const routeDistNm = totalDistNm ?? demand.dist_nm;
@@ -369,10 +375,19 @@ export function useCreateRoute() {
         };
       }
 
-      const tempRouteId = `temp-${Date.now()}`;
+      const planeBusy = store().routes.some(
+        (r) => r.active && r.plane.id === plane.id,
+      );
+
+      if (planeBusy) {
+        return { error: `${plane.plane_model.nickname} is already assigned` };
+      }
+
+      const tempRouteId = `temp-route-${Date.now()}-${plane.id}`;
+
       addRoute({
         id: tempRouteId,
-        demand,
+        demand: { ...demand, status: "pending" },
         plane,
         hub_iata: demand.hub_iata,
         via_iata: viaIata,
@@ -380,7 +395,9 @@ export function useCreateRoute() {
         active: true,
         via_pax_ratio: null,
       });
-      updateDemand(demand.id, { status: "served" });
+
+      // Multi-plane safe: demand stays pending/active while planes serve it.
+      store().updateDemand(demand.id, { status: "pending" });
       gameSounds.play("routeCreate");
 
       try {
@@ -402,15 +419,21 @@ export function useCreateRoute() {
 
         await supabase
           .from("demands")
-          .update({ status: "served" })
+          .update({ status: "pending" })
           .eq("id", demand.id);
 
-        const { removeRoute, addRoute: ar } = store();
+        await supabase
+          .from("owned_planes")
+          .update({ route_id: routeData.id })
+          .eq("id", plane.id);
+
+        const { removeRoute, addRoute: ar, setOwnedPlanes } = store();
+
         removeRoute(tempRouteId);
         ar({
           id: routeData.id,
-          demand,
-          plane,
+          demand: { ...demand, status: "pending" },
+          plane: { ...plane, route_id: routeData.id },
           hub_iata: demand.hub_iata,
           via_iata: viaIata,
           total_dist_nm: routeDistNm,
@@ -418,7 +441,13 @@ export function useCreateRoute() {
           via_pax_ratio: null,
         });
 
-        const newScore = (airline.demand_score ?? 0) + 1;
+        setOwnedPlanes(
+          store().ownedPlanes.map((p) =>
+            p.id === plane.id ? { ...p, route_id: routeData.id } : p,
+          ),
+        );
+
+        const newScore = (store().airline?.demand_score ?? 0) + 1;
         await supabase
           .from("airlines")
           .update({ demand_score: newScore })
@@ -427,9 +456,8 @@ export function useCreateRoute() {
 
         return { error: null };
       } catch (err) {
-        const { removeRoute, updateDemand: ud } = store();
+        const { removeRoute } = store();
         removeRoute(tempRouteId);
-        ud(demand.id, { status: "pending" });
         return {
           error: err instanceof Error ? err.message : "Failed to create route",
         };
@@ -451,6 +479,7 @@ export function useSaveAirlineDay() {
     if (!airline) return;
 
     const { earnedAchievements, missionsCompleted } = store();
+
     await supabase
       .from("airlines")
       .update({
@@ -504,6 +533,7 @@ export function useSpawnDailyDemand() {
       airline.demand_score,
       hubDemands.length,
     );
+
     if (!newDemand) return;
 
     try {
@@ -567,14 +597,17 @@ export function useBuyPlane() {
         const remaining =
           planeModel.unlock_demands - (airline.demand_score ?? 0);
         return {
-          error: `Serve ${remaining} more demand${remaining > 1 ? "s" : ""} to unlock this aircraft`,
+          error: `Serve ${remaining} more demand${
+            remaining > 1 ? "s" : ""
+          } to unlock this aircraft`,
         };
       }
 
       const tempId = `temp-plane-${Date.now()}`;
       spendCash(planeModel.price);
       addOwnedPlane({ id: tempId, plane_model: planeModel, route_id: null });
-      store().setBoughtPlaneToday(true); // triggers live mission check
+      store().setBoughtPlaneToday(true);
+
       addLedgerEntries([
         {
           id: `led-plane-${Date.now()}`,
@@ -631,18 +664,27 @@ export function useDeactivateRoute() {
 
   return useCallback(
     async (routeId: string): Promise<{ error: string | null }> => {
-      const { routes, removeRoute, updateDemand } = store();
+      const { routes, removeRoute, setOwnedPlanes } = store();
       const route = routes.find((r) => r.id === routeId);
       if (!route) return { error: "Route not found" };
 
       const otherActiveRoutes = routes.filter(
         (r) => r.active && r.demand.id === route.demand.id && r.id !== routeId,
       );
+
       const isLastRoute = otherActiveRoutes.length === 0;
+      const previousDemandStatus = route.demand.status;
 
       removeRoute(routeId);
+
+      setOwnedPlanes(
+        store().ownedPlanes.map((p) =>
+          p.id === route.plane.id ? { ...p, route_id: null } : p,
+        ),
+      );
+
       if (isLastRoute) {
-        updateDemand(route.demand.id, { status: "pending" });
+        store().updateDemand(route.demand.id, { status: "pending" });
       }
 
       try {
@@ -652,6 +694,11 @@ export function useDeactivateRoute() {
           .eq("id", routeId);
 
         if (routeErr) throw new Error(routeErr.message);
+
+        await supabase
+          .from("owned_planes")
+          .update({ route_id: null })
+          .eq("id", route.plane.id);
 
         if (isLastRoute) {
           await supabase
@@ -663,9 +710,18 @@ export function useDeactivateRoute() {
         return { error: null };
       } catch (err) {
         store().addRoute(route);
+        store().setOwnedPlanes(
+          store().ownedPlanes.map((p) =>
+            p.id === route.plane.id ? { ...p, route_id: route.id } : p,
+          ),
+        );
+
         if (isLastRoute) {
-          store().updateDemand(route.demand.id, { status: "served" });
+          store().updateDemand(route.demand.id, {
+            status: previousDemandStatus,
+          });
         }
+
         return {
           error:
             err instanceof Error ? err.message : "Failed to deactivate route",
@@ -727,8 +783,9 @@ export function useLoanActions() {
 
       const actual = Math.min(amount, airline.loan);
       if (actual <= 0) return { error: "No loan balance to repay" };
-      if (airline.cash < actual)
+      if (airline.cash < actual) {
         return { error: "Insufficient cash to repay that amount" };
+      }
 
       repayLoan(actual);
 
@@ -760,8 +817,8 @@ export function useLoanActions() {
 
 // ─────────────────────────────────────────────────────────────────
 // CREATE CUSTOM ROUTE
-// Bug fix: reuses existing demand if one already exists for this
-// origin→dest corridor at this hub, instead of creating a duplicate.
+// Reuses existing demand for the same origin→dest corridor.
+// Multi-plane safe: creating a route keeps demand status as pending.
 // ─────────────────────────────────────────────────────────────────
 
 const ROUTE_CREATION_FEE: Record<string, number> = {
@@ -775,10 +832,10 @@ export function useCreateCustomRoute() {
 
   return useCallback(
     async (
-      origin: import("@/store").Airport,
-      dest: import("@/store").Airport,
-      via: import("@/store").Airport | null,
-      plane: import("@/store").OwnedPlane,
+      origin: Airport,
+      dest: Airport,
+      via: Airport | null,
+      plane: OwnedPlane,
       paxDay: number,
       distNm: number,
       haul: string,
@@ -792,6 +849,7 @@ export function useCreateCustomRoute() {
         clearRouteCreation,
         demands,
       } = store();
+
       if (!airline) return { error: "No airline found" };
 
       const fee = ROUTE_CREATION_FEE[haul] ?? 150_000;
@@ -805,8 +863,14 @@ export function useCreateCustomRoute() {
         };
       }
 
-      // ── Bug 1 fix: reuse existing demand if corridor already exists ──
-      // Check for an existing demand at this hub for the same origin→dest
+      const planeBusy = store().routes.some(
+        (r) => r.active && r.plane.id === plane.id,
+      );
+
+      if (planeBusy) {
+        return { error: `${plane.plane_model.nickname} is already assigned` };
+      }
+
       const existingDemand = demands.find(
         (d) =>
           d.hub_iata === origin.iata &&
@@ -814,10 +878,6 @@ export function useCreateCustomRoute() {
           d.dest.iata === dest.iata,
       );
 
-      // ── Compute O&D via_pax_ratio ─────────────────────────────
-      // Fraction of passengers deplaning at the via stop.
-      // Based on relative leg demand vs through demand.
-      // DOH→AYT leg=120, DOH→BUD through=80 → ratio = 120/(120+80) = 0.60
       let viaPaxRatio: number | null = null;
       if (via) {
         const legDemand = demands.find(
@@ -829,19 +889,21 @@ export function useCreateCustomRoute() {
         viaPaxRatio = legPaxDay / Math.max(1, legPaxDay + throughPaxDay);
       }
 
-      const tempRouteId = `custom-route-${Date.now()}`;
+      const tempRouteId = `custom-route-${Date.now()}-${plane.id}`;
+      const tempDemandId = `custom-demand-${Date.now()}`;
+
       spendCash(fee);
 
-      let demandToUse: typeof existingDemand extends undefined
-        ? (typeof demands)[0]
-        : typeof existingDemand;
+      let demandToUse: Demand;
 
       if (existingDemand) {
-        // Reuse the existing demand — just create the route
-        demandToUse = existingDemand;
+        demandToUse = { ...existingDemand, status: "pending" };
+
+        store().updateDemand(existingDemand.id, { status: "pending" });
+
         addRoute({
           id: tempRouteId,
-          demand: existingDemand,
+          demand: demandToUse,
           plane,
           hub_iata: origin.iata,
           via_iata: via?.iata ?? null,
@@ -850,21 +912,21 @@ export function useCreateCustomRoute() {
           active: true,
         });
       } else {
-        // Create a new synthetic demand
-        const tempDemandId = `custom-demand-${Date.now()}`;
-        const syntheticDemand = {
+        const syntheticDemand: Demand = {
           id: tempDemandId,
           airline_id: airline.id,
           hub_iata: origin.iata,
           origin,
           dest,
           dist_nm: distNm,
-          haul: haul as any,
+          haul: haul as Demand["haul"],
           pax_day: paxDay,
-          status: "served" as const,
+          status: "pending",
           delivered_pax_today: 0,
         };
+
         addDemands([syntheticDemand]);
+
         addRoute({
           id: tempRouteId,
           demand: syntheticDemand,
@@ -875,25 +937,23 @@ export function useCreateCustomRoute() {
           via_pax_ratio: viaPaxRatio,
           active: true,
         });
+
         demandToUse = syntheticDemand;
       }
+
+      gameSounds.play("routeCreate");
 
       try {
         let demandId: string;
 
         if (existingDemand) {
-          // Use existing demand ID — no insert needed
           demandId = existingDemand.id;
-          // Mark as served if it was pending
-          if (existingDemand.status === "pending") {
-            store().updateDemand(existingDemand.id, { status: "served" });
-            await supabase
-              .from("demands")
-              .update({ status: "served" })
-              .eq("id", existingDemand.id);
-          }
+
+          await supabase
+            .from("demands")
+            .update({ status: "pending" })
+            .eq("id", existingDemand.id);
         } else {
-          // Insert new synthetic demand
           const { data: demandData, error: demandErr } = await supabase
             .from("demands")
             .insert({
@@ -904,57 +964,33 @@ export function useCreateCustomRoute() {
               dist_nm: distNm,
               haul,
               pax_day: paxDay,
-              status: "served",
+              status: "pending",
               source: "custom",
             })
             .select()
             .single();
+
           if (demandErr) throw new Error(demandErr.message);
 
-          // Replace temp demand ID with real one
-          const { setDemands } = store();
-          const realDemand = { ...demandToUse, id: demandData.id };
-          setDemands(
+          const realDemand: Demand = {
+            ...demandToUse,
+            id: demandData.id,
+            status: "pending",
+          };
+
+          store().setDemands(
             store().demands.map((d) =>
-              d.id === demandToUse!.id ? realDemand : d,
+              d.id === demandToUse.id ? realDemand : d,
             ),
           );
+
           demandToUse = realDemand;
           demandId = demandData.id;
         }
 
-        // ── Mark leg demands as served ───────────────────────────────
-        // When creating DOH→AYT→BUD, the DOH→AYT demand should be served
-        // since the plane physically flies that leg and delivers pax.
-        if (via) {
-          const legDemands = [
-            // origin → via leg
-            demands.find(
-              (d) =>
-                d.origin.iata === origin.iata &&
-                d.dest.iata === via.iata &&
-                d.status === "pending",
-            ),
-            // via → dest leg
-            demands.find(
-              (d) =>
-                d.origin.iata === via.iata &&
-                d.dest.iata === dest.iata &&
-                d.status === "pending",
-            ),
-          ].filter(Boolean);
+        // Important: via leg demands are no longer marked served here.
+        // They should only be considered cleared by actual delivered pax.
 
-          for (const legDemand of legDemands) {
-            if (!legDemand) continue;
-            store().updateDemand(legDemand.id, { status: "served" });
-            await supabase
-              .from("demands")
-              .update({ status: "served" })
-              .eq("id", legDemand.id);
-          }
-        }
-
-        // Insert route
         const { data: routeData, error: routeErr } = await supabase
           .from("routes")
           .insert({
@@ -968,27 +1004,34 @@ export function useCreateCustomRoute() {
           })
           .select()
           .single();
+
         if (routeErr) throw new Error(routeErr.message);
 
-        // Persist cash + demand score
+        await supabase
+          .from("owned_planes")
+          .update({ route_id: routeData.id })
+          .eq("id", plane.id);
+
+        const newScore = (store().airline?.demand_score ?? 0) + 1;
+
         await supabase
           .from("airlines")
           .update({
             cash: store().airline?.cash,
-            demand_score: (airline.demand_score ?? 0) + 1,
+            demand_score: newScore,
           })
           .eq("id", airline.id);
-        store().updateAirline({
-          demand_score: (airline.demand_score ?? 0) + 1,
-        });
 
-        // Replace temp route ID with real one
-        const { removeRoute, addRoute: ar } = store();
+        store().updateAirline({ demand_score: newScore });
+
+        const { removeRoute, addRoute: ar, setOwnedPlanes } = store();
+
         removeRoute(tempRouteId);
+
         ar({
           id: routeData.id,
-          demand: demandToUse!,
-          plane,
+          demand: demandToUse,
+          plane: { ...plane, route_id: routeData.id },
           hub_iata: origin.iata,
           via_iata: via?.iata ?? null,
           total_dist_nm: totalDist,
@@ -996,20 +1039,24 @@ export function useCreateCustomRoute() {
           active: true,
         });
 
+        setOwnedPlanes(
+          store().ownedPlanes.map((p) =>
+            p.id === plane.id ? { ...p, route_id: routeData.id } : p,
+          ),
+        );
+
         clearRouteCreation();
         return { error: null };
       } catch (err) {
-        // Rollback
-        const { removeRoute: rr, earnCash } = store();
-        rr(tempRouteId);
+        store().removeRoute(tempRouteId);
+        store().earnCash(fee);
+
         if (!existingDemand) {
           store().setDemands(
-            store().demands.filter((d) =>
-              d.id === demandToUse?.id ? false : true,
-            ),
+            store().demands.filter((d) => d.id !== demandToUse.id),
           );
         }
-        earnCash(fee);
+
         return {
           error: err instanceof Error ? err.message : "Failed to create route",
         };

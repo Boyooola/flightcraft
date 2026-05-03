@@ -1,16 +1,4 @@
 import { useTabBarHeight } from "@/hooks/useSheetLayout";
-/**
- * components/sheets/RoutesSheet.tsx
- *
- * Route flow dashboard — prioritized active routes with live passenger flow.
- *
- * Focus:
- *   - active routes sorted by live passenger-flow priority
- *   - waiting / can board / moved visible at a glance
- *   - stalled and jammed routes rise to the top
- *   - cleared routes sink to the bottom
- *   - long-press removes a route and frees the plane
- */
 
 import { GameAlert, useGameAlert } from "@/components/ui/GameAlert";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
@@ -22,7 +10,7 @@ import {
   waitingPaxForDemand,
 } from "@/lib/passengerFlow";
 import { calcRouteRevenue, fmtCash } from "@/lib/revenue";
-import type { Demand, OwnedHub, Route } from "@/store";
+import type { Demand, Route } from "@/store";
 import {
   useAirline,
   useDayProgress,
@@ -33,41 +21,14 @@ import {
 } from "@/store";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
-  Animated,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
-
-function useTickerAnim(value: number) {
-  const anim = useRef(new Animated.Value(1)).current;
-  const prevVal = useRef(value);
-
-  useEffect(() => {
-    if (value > prevVal.current) {
-      Animated.sequence([
-        Animated.timing(anim, {
-          toValue: 1.18,
-          duration: 120,
-          useNativeDriver: true,
-        }),
-        Animated.timing(anim, {
-          toValue: 1,
-          duration: 180,
-          useNativeDriver: true,
-        }),
-      ]).start();
-    }
-
-    prevVal.current = value;
-  }, [anim, value]);
-
-  return anim;
-}
 
 type RouteFlowStatus = {
   label: "CLEARED" | "JAMMED" | "STALLED" | "BOARDING" | "MOVING" | "WAITING";
@@ -76,129 +37,123 @@ type RouteFlowStatus = {
   hint: string;
 };
 
+type RouteGroup = {
+  id: string;
+  demand: Demand;
+  routes: Route[];
+  hub_iata: string;
+  via_iata: string | null;
+  total_dist_nm: number;
+  deliveredPax: number;
+  targetPax: number;
+  waitingPax: number;
+  canBoardNow: number;
+  leftToMove: number;
+  movedPct: number;
+  status: RouteFlowStatus;
+  totalCapacity: number;
+  totalReward: number;
+  planeLabel: string;
+};
+
 function getLiveDemand(route: Route, liveDemands: Demand[]) {
   return liveDemands.find((d) => d.id === route.demand.id) ?? route.demand;
 }
 
-function routeFlowInfo(
-  route: Route,
-  liveDemands: Demand[],
+function buildStatus(
+  demand: Demand,
+  waitingPax: number,
+  deliveredPax: number,
+  leftToMove: number,
+  canBoardNow: number,
   dayProgress: number,
-) {
-  const demand = getLiveDemand(route, liveDemands);
-  const deliveredPax = demand.delivered_pax_today ?? 0;
-  const targetPax = demand.pax_day ?? 0;
-  const waitingPax = waitingPaxForDemand(demand, dayProgress);
-  const leftToMove = remainingPax(demand);
-  const planeCapacity = route.plane.plane_model.pax_capacity;
-  const canBoardNow = Math.min(waitingPax, planeCapacity);
-
-  const movedPct =
-    targetPax > 0
-      ? Math.min(100, Math.round((deliveredPax / targetPax) * 100))
-      : 0;
-
+): RouteFlowStatus {
   const flowStatus = demandFlowStatus(demand, dayProgress);
-
-  let status: RouteFlowStatus;
 
   if (
     flowStatus === "cleared" ||
     demand.status === "served" ||
     leftToMove <= 0
   ) {
-    status = {
+    return {
       label: "CLEARED",
       color: Colors.green,
       priority: 6,
       hint: "Demand slot cleared",
     };
-  } else if (flowStatus === "jammed") {
-    status = {
+  }
+
+  if (flowStatus === "jammed") {
+    return {
       label: "JAMMED",
       color: Colors.red,
       priority: 0,
       hint: "Queue is growing fast",
     };
-  } else if (waitingPax > 0 && deliveredPax <= 0) {
-    status = {
+  }
+
+  if (waitingPax > 0 && deliveredPax <= 0) {
+    return {
       label: "STALLED",
       color: Colors.red,
       priority: 1,
       hint: "Passengers are waiting",
     };
-  } else if (canBoardNow > 0) {
-    status = {
+  }
+
+  if (canBoardNow > 0) {
+    return {
       label: "BOARDING",
       color: Colors.amber,
       priority: 2,
       hint: "Ready to board more pax",
     };
-  } else if (deliveredPax > 0) {
-    status = {
+  }
+
+  if (deliveredPax > 0) {
+    return {
       label: "MOVING",
       color: Colors.green,
       priority: 3,
       hint: "Flow is moving",
     };
-  } else {
-    status = {
-      label: "WAITING",
-      color: Colors.sky,
-      priority: 4,
-      hint: "Demand is spawning",
-    };
   }
 
   return {
-    demand,
-    deliveredPax,
-    targetPax,
-    waitingPax,
-    canBoardNow,
-    leftToMove,
-    movedPct,
-    status,
+    label: "WAITING",
+    color: Colors.sky,
+    priority: 4,
+    hint: "Demand is spawning",
   };
 }
 
-function RouteRow({
-  route,
-  hub,
-  deactivating,
-  liveDemands,
-  dayProgress,
-  onLongPress,
-}: {
-  route: Route;
-  hub: OwnedHub | undefined;
-  deactivating: boolean;
-  liveDemands: Demand[];
-  dayProgress: number;
-  onLongPress: (route: Route) => void;
-}) {
-  const distNm = route.total_dist_nm ?? route.demand.dist_nm;
-  const p = route.plane.plane_model;
-  const isConnecting = !!route.via_iata;
+function buildPlaneLabel(routes: Route[]) {
+  const counts = new Map<string, number>();
 
-  const { demand, deliveredPax, targetPax, waitingPax, movedPct, status } =
-    routeFlowInfo(route, liveDemands, dayProgress);
-
-  const tickerScale = useTickerAnim(deliveredPax);
-
-  const revenueResult = calcRouteRevenue({
-    distNm,
-    speedKts: p.speed_kts,
-    trustPct: hub?.trust ?? 0,
-    deliveredPax,
-    paxDay: targetPax,
-    costPerSector: p.cost_per_sector ?? 500,
-    fuelPerNm: p.fuel_per_nm ?? 2,
+  routes.forEach((route) => {
+    const name = route.plane.plane_model.nickname;
+    counts.set(name, (counts.get(name) ?? 0) + 1);
   });
 
-  const isProblem = status.label === "STALLED" || status.label === "JAMMED";
-  const isCleared = status.label === "CLEARED";
-  const accent = status.color;
+  return Array.from(counts.entries())
+    .map(([name, count]) => (count > 1 ? `${name} ×${count}` : name))
+    .join(" · ");
+}
+
+function RouteGroupRow({
+  group,
+  deactivating,
+  onLongPress,
+}: {
+  group: RouteGroup;
+  deactivating: boolean;
+  onLongPress: (group: RouteGroup) => void;
+}) {
+  const isConnecting = !!group.via_iata;
+  const isProblem =
+    group.status.label === "STALLED" || group.status.label === "JAMMED";
+  const isCleared = group.status.label === "CLEARED";
+  const accent = group.status.color;
 
   return (
     <TouchableOpacity
@@ -208,7 +163,7 @@ function RouteRow({
         isCleared && rr.cleared,
         deactivating && { opacity: 0.45 },
       ]}
-      onLongPress={() => onLongPress(route)}
+      onLongPress={() => onLongPress(group)}
       delayLongPress={400}
       activeOpacity={0.88}
     >
@@ -217,7 +172,7 @@ function RouteRow({
       <View style={rr.body}>
         <View style={rr.top}>
           <View style={rr.routeLine}>
-            <Text style={rr.iata}>{demand.origin.iata}</Text>
+            <Text style={rr.iata}>{group.demand.origin.iata}</Text>
 
             {isConnecting && (
               <>
@@ -227,13 +182,13 @@ function RouteRow({
                   color={Colors.purple}
                 />
                 <Text style={[rr.iata, { color: Colors.purple }]}>
-                  {route.via_iata}
+                  {group.via_iata}
                 </Text>
               </>
             )}
 
             <Ionicons name="arrow-forward" size={11} color={Colors.dim} />
-            <Text style={rr.iata}>{demand.dest.iata}</Text>
+            <Text style={rr.iata}>{group.demand.dest.iata}</Text>
           </View>
 
           <View
@@ -246,40 +201,37 @@ function RouteRow({
             ]}
           >
             <Text style={[rr.statusTxt, { color: accent }]}>
-              {status.label}
+              {group.status.label}
             </Text>
           </View>
         </View>
 
         <View style={rr.metaRow}>
           <Ionicons name="airplane" size={11} color={Colors.dim} />
+
           <Text style={rr.meta} numberOfLines={1}>
-            {p.nickname}
+            {group.planeLabel}
           </Text>
 
           <Text style={rr.dot}>•</Text>
 
-          <Animated.Text
+          <Text
+            style={[rr.moved, { color: accent, fontFamily: Typography.mono }]}
+          >
+            ×{group.routes.length}
+          </Text>
+
+          <Text style={rr.dot}>•</Text>
+
+          <Text
             style={[
               rr.moved,
-              {
-                color: deliveredPax > 0 ? accent : Colors.dim,
-                transform: [{ scale: tickerScale }],
-                fontFamily: Typography.mono,
-              },
+              { color: Colors.text, fontFamily: Typography.mono },
             ]}
           >
-            {deliveredPax.toLocaleString()} pax
-          </Animated.Text>
-
-          {waitingPax > 0 && (
-            <>
-              <Text style={rr.dot}>•</Text>
-              <Text style={[rr.waiting, { color: Colors.amber }]}>
-                {waitingPax.toLocaleString()} waiting
-              </Text>
-            </>
-          )}
+            {group.deliveredPax.toLocaleString()} /{" "}
+            {group.targetPax.toLocaleString()} pax
+          </Text>
         </View>
 
         <View style={rr.bottom}>
@@ -288,17 +240,30 @@ function RouteRow({
               style={[
                 rr.progressFill,
                 {
-                  width: `${movedPct}%` as `${number}%`,
+                  width: `${group.movedPct}%` as `${number}%`,
                   backgroundColor: accent,
                 },
               ]}
             />
           </View>
 
-          <Text style={[rr.percent, { color: accent }]}>{movedPct}%</Text>
+          <Text style={[rr.percent, { color: accent }]}>{group.movedPct}%</Text>
 
-          <Text style={rr.cash}>{fmtCash(revenueResult.net)}</Text>
+          <Text
+            style={[
+              rr.cash,
+              { color: group.totalReward >= 0 ? Colors.green : Colors.red },
+            ]}
+          >
+            {group.totalReward >= 0 ? "+" : ""}
+            {fmtCash(group.totalReward)}
+          </Text>
         </View>
+
+        <Text style={rr.hint} numberOfLines={1}>
+          {group.waitingPax.toLocaleString()} waiting ·{" "}
+          {group.totalCapacity.toLocaleString()} seats assigned
+        </Text>
       </View>
 
       {deactivating && (
@@ -318,6 +283,7 @@ export default function RoutesSheet() {
   const dayProgress = useDayProgress();
   const tabBarH = useTabBarHeight();
   const closeSheet = useGameStore((s) => s.closeSheet);
+  const startCreation = useGameStore((s) => s.startRouteCreation);
   const haptics = useHaptics();
   const deactivate = useDeactivateRoute();
 
@@ -327,15 +293,83 @@ export default function RoutesSheet() {
   const color = airline?.color ?? Colors.sky;
   const activeRoutes = routes.filter((r) => r.active);
 
-  const routeStats = useMemo(() => {
-    return activeRoutes.map((route) => {
-      const info = routeFlowInfo(route, liveDemands, dayProgress);
-      return { route, ...info };
-    });
-  }, [activeRoutes, liveDemands, dayProgress]);
+  const groupedRoutes = useMemo<RouteGroup[]>(() => {
+    const map = new Map<string, Route[]>();
 
-  const sortedRoutes = useMemo(() => {
-    return [...routeStats].sort((a, b) => {
+    activeRoutes.forEach((route) => {
+      const key = route.demand.id;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(route);
+    });
+
+    return Array.from(map.entries()).map(([demandId, groupRoutes]) => {
+      const first = groupRoutes[0];
+      const demand = getLiveDemand(first, liveDemands);
+      const deliveredPax = demand.delivered_pax_today ?? 0;
+      const targetPax = demand.pax_day ?? 0;
+      const waitingPax = waitingPaxForDemand(demand, dayProgress);
+      const leftToMove = remainingPax(demand);
+      const totalCapacity = groupRoutes.reduce(
+        (sum, route) => sum + route.plane.plane_model.pax_capacity,
+        0,
+      );
+      const canBoardNow = Math.min(waitingPax, totalCapacity);
+      const movedPct =
+        targetPax > 0
+          ? Math.min(100, Math.round((deliveredPax / targetPax) * 100))
+          : 0;
+
+      const status = buildStatus(
+        demand,
+        waitingPax,
+        deliveredPax,
+        leftToMove,
+        canBoardNow,
+        dayProgress,
+      );
+
+      const hub = hubs.find((h) => h.airport.iata === first.hub_iata);
+
+      const totalReward = groupRoutes.reduce((sum, route) => {
+        const p = route.plane.plane_model;
+        const dist = route.total_dist_nm ?? demand.dist_nm;
+
+        const result = calcRouteRevenue({
+          distNm: dist,
+          speedKts: p.speed_kts,
+          trustPct: hub?.trust ?? 0,
+          deliveredPax,
+          paxDay: demand.pax_day,
+          costPerSector: p.cost_per_sector ?? 500,
+          fuelPerNm: p.fuel_per_nm ?? 2,
+        });
+
+        return sum + result.net;
+      }, 0);
+
+      return {
+        id: demandId,
+        demand,
+        routes: groupRoutes,
+        hub_iata: first.hub_iata,
+        via_iata: first.via_iata,
+        total_dist_nm: first.total_dist_nm ?? demand.dist_nm,
+        deliveredPax,
+        targetPax,
+        waitingPax,
+        canBoardNow,
+        leftToMove,
+        movedPct,
+        status,
+        totalCapacity,
+        totalReward,
+        planeLabel: buildPlaneLabel(groupRoutes),
+      };
+    });
+  }, [activeRoutes, liveDemands, dayProgress, hubs]);
+
+  const sortedGroups = useMemo(() => {
+    return [...groupedRoutes].sort((a, b) => {
       if (a.status.priority !== b.status.priority) {
         return a.status.priority - b.status.priority;
       }
@@ -343,43 +377,29 @@ export default function RoutesSheet() {
       if (a.waitingPax !== b.waitingPax) return b.waitingPax - a.waitingPax;
       return b.leftToMove - a.leftToMove;
     });
-  }, [routeStats]);
+  }, [groupedRoutes]);
 
-  const totalMoved = routeStats.reduce((sum, r) => sum + r.deliveredPax, 0);
-  const totalTarget = routeStats.reduce((sum, r) => sum + r.targetPax, 0);
-  const totalWaiting = routeStats.reduce((sum, r) => sum + r.waitingPax, 0);
-  const totalCanBoard = routeStats.reduce((sum, r) => sum + r.canBoardNow, 0);
+  const totalMoved = groupedRoutes.reduce((sum, r) => sum + r.deliveredPax, 0);
+  const totalTarget = groupedRoutes.reduce((sum, r) => sum + r.targetPax, 0);
+  const totalWaiting = groupedRoutes.reduce((sum, r) => sum + r.waitingPax, 0);
+  const totalCanBoard = groupedRoutes.reduce(
+    (sum, r) => sum + r.canBoardNow,
+    0,
+  );
+  const totalReward = groupedRoutes.reduce((sum, r) => sum + r.totalReward, 0);
+
   const avgFlow =
     totalTarget > 0
       ? Math.min(100, Math.round((totalMoved / totalTarget) * 100))
       : 0;
 
-  const stalledCount = routeStats.filter(
+  const stalledCount = groupedRoutes.filter(
     (r) => r.status.label === "STALLED" || r.status.label === "JAMMED",
   ).length;
-  const clearedCount = routeStats.filter(
+
+  const clearedCount = groupedRoutes.filter(
     (r) => r.status.label === "CLEARED",
   ).length;
-
-  const totalReward = activeRoutes.reduce((sum, route) => {
-    const hub = hubs.find((h) => h.airport.iata === route.hub_iata);
-    const demand = getLiveDemand(route, liveDemands);
-    const deliveredPax = demand.delivered_pax_today ?? 0;
-    const p = route.plane.plane_model;
-    const dist = route.total_dist_nm ?? demand.dist_nm;
-
-    const result = calcRouteRevenue({
-      distNm: dist,
-      speedKts: p.speed_kts,
-      trustPct: hub?.trust ?? 0,
-      deliveredPax,
-      paxDay: demand.pax_day,
-      costPerSector: p.cost_per_sector ?? 500,
-      fuelPerNm: p.fuel_per_nm ?? 2,
-    });
-
-    return sum + result.net;
-  }, 0);
 
   const flowHighlight =
     stalledCount > 0 ? Colors.red : avgFlow >= 80 ? Colors.green : color;
@@ -391,40 +411,48 @@ export default function RoutesSheet() {
         ? Colors.green + "44"
         : color + "33";
 
+  const handleCreateRoute = useCallback(() => {
+    haptics.confirm();
+    closeSheet();
+    setTimeout(() => startCreation(), 120);
+  }, [closeSheet, haptics, startCreation]);
+
   const handleLongPress = useCallback(
-    (route: Route) => {
+    (group: RouteGroup) => {
       haptics.confirm();
 
-      const via = route.via_iata ? ` via ${route.via_iata}` : "";
-      const label = `${route.demand.origin.iata}${via} → ${route.demand.dest.iata}`;
-      const plane = route.plane.plane_model.nickname;
+      const via = group.via_iata ? ` via ${group.via_iata}` : "";
+      const label = `${group.demand.origin.iata}${via} → ${group.demand.dest.iata}`;
 
       gameAlert.show({
         icon: "git-branch-outline",
-        title: "Remove Route",
-        message: `Stop flying ${label} with ${plane}?\n\nThe plane becomes idle and this demand returns to pending.`,
+        title: "Remove Route Group",
+        message: `Stop flying ${label}?\n\nThis removes ${group.routes.length} plane assignment${group.routes.length !== 1 ? "s" : ""}.`,
         buttons: [
           { label: "Keep Flying", style: "cancel" },
           {
-            label: "Remove Route",
+            label: "Remove Group",
             style: "destructive",
             onPress: async () => {
-              setDeactivating(route.id);
+              setDeactivating(group.id);
 
-              const { error } = await deactivate(route.id);
+              for (const route of group.routes) {
+                const { error } = await deactivate(route.id);
+
+                if (error) {
+                  setDeactivating(null);
+                  gameAlert.show({
+                    title: "Error",
+                    message: error,
+                    buttons: [{ label: "OK", style: "cancel" }],
+                  });
+                  haptics.error();
+                  return;
+                }
+              }
 
               setDeactivating(null);
-
-              if (error) {
-                gameAlert.show({
-                  title: "Error",
-                  message: error,
-                  buttons: [{ label: "OK", style: "cancel" }],
-                });
-                haptics.error();
-              } else {
-                haptics.success();
-              }
+              haptics.success();
             },
           },
         ],
@@ -449,8 +477,9 @@ export default function RoutesSheet() {
           <Ionicons name="flash-outline" size={21} color={color} />
           <View>
             <Text style={s.title}>Route Rush</Text>
-            <Text style={s.subtitle}>Live demand · priority order</Text>
+            <Text style={s.subtitle}>Grouped by destination</Text>
           </View>
+
           {activeRoutes.length > 0 && (
             <View
               style={[
@@ -472,9 +501,19 @@ export default function RoutesSheet() {
             closeSheet();
           }}
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-          accessibilityLabel="Close"
         >
           <Ionicons name="close" size={22} color={Colors.dim} />
+        </TouchableOpacity>
+      </View>
+
+      <View style={s.topActions}>
+        <TouchableOpacity
+          style={[s.primaryCta, { backgroundColor: color }]}
+          onPress={handleCreateRoute}
+          activeOpacity={0.86}
+        >
+          <Ionicons name="git-branch-outline" size={16} color={Colors.bg} />
+          <Text style={s.primaryCtaText}>Create New Route</Text>
         </TouchableOpacity>
       </View>
 
@@ -485,46 +524,25 @@ export default function RoutesSheet() {
               <Text style={[s.rushVal, { color: flowHighlight }]}>
                 {avgFlow}%
               </Text>
-              <Text style={s.rushLbl}>DAY FLOW</Text>
+              <Text style={s.rushLbl}>FLOW</Text>
             </View>
             <View style={s.rushDivider} />
             <View style={s.rushStat}>
-              <Text
-                style={[
-                  s.rushVal,
-                  {
-                    fontFamily: Typography.mono,
-                    color: totalWaiting > 0 ? Colors.amber : Colors.text,
-                  },
-                ]}
-              >
+              <Text style={[s.rushVal, { color: Colors.amber }]}>
                 {totalWaiting.toLocaleString()}
               </Text>
               <Text style={s.rushLbl}>WAITING</Text>
             </View>
             <View style={s.rushDivider} />
             <View style={s.rushStat}>
-              <Text
-                style={[
-                  s.rushVal,
-                  { fontFamily: Typography.mono, color: Colors.sky },
-                ]}
-              >
+              <Text style={[s.rushVal, { color: Colors.sky }]}>
                 {totalCanBoard.toLocaleString()}
               </Text>
               <Text style={s.rushLbl}>READY</Text>
             </View>
             <View style={s.rushDivider} />
             <View style={s.rushStat}>
-              <Text
-                style={[
-                  s.rushVal,
-                  {
-                    fontFamily: Typography.mono,
-                    color: Colors.green,
-                  },
-                ]}
-              >
+              <Text style={[s.rushVal, { color: Colors.green }]}>
                 {fmtCash(totalReward)}
               </Text>
               <Text style={s.rushLbl}>EARNED</Text>
@@ -572,10 +590,11 @@ export default function RoutesSheet() {
           <Ionicons name="warning-outline" size={16} color={Colors.red} />
           <View style={{ flex: 1 }}>
             <Text style={s.alertTitle}>
-              {stalledCount} route{stalledCount !== 1 ? "s" : ""} need attention
+              {stalledCount} route group{stalledCount !== 1 ? "s" : ""} need
+              attention
             </Text>
             <Text style={s.alertSub}>
-              Queues are building. Add capacity, upgrade aircraft, or cut weak
+              Queues are building. Add aircraft, upgrade capacity, or cut weak
               routes.
             </Text>
           </View>
@@ -587,16 +606,13 @@ export default function RoutesSheet() {
           <MaterialCommunityIcons name="routes" size={48} color={Colors.dim} />
           <Text style={s.emptyTitle}>No active routes</Text>
           <Text style={s.emptySub}>
-            Open the map, assign a hub demand to a plane, and the rush starts
+            Open the map, assign a hub demand to planes, and the rush starts
             here.
           </Text>
 
           <TouchableOpacity
             style={[s.emptyBtn, { borderColor: color + "55" }]}
-            onPress={() => {
-              haptics.tap();
-              closeSheet();
-            }}
+            onPress={handleCreateRoute}
             activeOpacity={0.8}
           >
             <Ionicons name="map-outline" size={15} color={color} />
@@ -607,20 +623,18 @@ export default function RoutesSheet() {
 
       {activeRoutes.length > 0 && (
         <>
-          <Text style={s.eyebrow}>PRIORITY ROUTES</Text>
+          <Text style={s.eyebrow}>ROUTE GROUPS</Text>
           <Text style={s.eyebrowSub}>
-            Hold a card to remove a route · worst problems listed first
+            Same destination routes are grouped · hold a row to remove all
+            assigned planes
           </Text>
 
           <View style={s.section}>
-            {sortedRoutes.map(({ route }) => (
-              <RouteRow
-                key={route.id}
-                route={route}
-                hub={hubs.find((h) => h.airport.iata === route.hub_iata)}
-                deactivating={deactivating === route.id}
-                liveDemands={liveDemands}
-                dayProgress={dayProgress}
+            {sortedGroups.map((group) => (
+              <RouteGroupRow
+                key={group.id}
+                group={group}
+                deactivating={deactivating === group.id}
                 onLongPress={handleLongPress}
               />
             ))}
@@ -652,9 +666,7 @@ const rr = StyleSheet.create({
     borderColor: Colors.green + "28",
     backgroundColor: Colors.green + "05",
   },
-  stripe: {
-    width: 4,
-  },
+  stripe: { width: 4 },
   body: {
     flex: 1,
     minWidth: 0,
@@ -698,7 +710,8 @@ const rr = StyleSheet.create({
     gap: 5,
   },
   meta: {
-    flexShrink: 1,
+    flex: 1,
+    minWidth: 0,
     fontSize: 11,
     color: Colors.muted,
     fontWeight: "700",
@@ -710,10 +723,6 @@ const rr = StyleSheet.create({
   moved: {
     fontSize: 11,
     fontWeight: "900",
-  },
-  waiting: {
-    fontSize: 10,
-    fontWeight: "800",
   },
   bottom: {
     flexDirection: "row",
@@ -742,9 +751,13 @@ const rr = StyleSheet.create({
     minWidth: 64,
     textAlign: "right",
     fontSize: 11,
-    color: Colors.green,
     fontWeight: "900",
     fontFamily: Typography.mono,
+  },
+  hint: {
+    fontSize: 10,
+    color: Colors.dim,
+    fontWeight: "700",
   },
   loadingOverlay: {
     width: 40,
@@ -756,12 +769,8 @@ const rr = StyleSheet.create({
 });
 
 const s = StyleSheet.create({
-  root: {
-    flex: 1,
-  },
-  content: {
-    paddingBottom: Spacing.xxl,
-  },
+  root: { flex: 1 },
+  content: { paddingBottom: Spacing.xxl },
   handle: {
     alignSelf: "center",
     width: 40,
@@ -802,6 +811,23 @@ const s = StyleSheet.create({
   },
   badgeTxt: {
     fontSize: 11,
+    fontWeight: "900",
+  },
+  topActions: {
+    paddingHorizontal: Spacing.lg,
+    marginBottom: Spacing.md,
+  },
+  primaryCta: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: Spacing.sm,
+    borderRadius: Radius.lg,
+    paddingVertical: Spacing.md,
+  },
+  primaryCtaText: {
+    fontSize: 13,
+    color: Colors.bg,
     fontWeight: "900",
   },
   rushStats: {

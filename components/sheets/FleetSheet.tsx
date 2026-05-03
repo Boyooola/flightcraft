@@ -163,6 +163,55 @@ function OwnedPlaneRow({
   );
 }
 
+function OwnedPlaneGroup({
+  group,
+  planeRouteMap,
+  onAssign,
+}: {
+  group: { model: PlaneModel; planes: OwnedPlane[] };
+  planeRouteMap: Map<string, string>;
+  onAssign: () => void;
+}) {
+  const fc = FAMILY_COLOR[group.model.family] ?? Colors.sky;
+
+  const total = group.planes.length;
+  const active = group.planes.filter((p) => planeRouteMap.has(p.id)).length;
+  const idle = total - active;
+
+  return (
+    <View style={g.row}>
+      <View style={[g.stripe, { backgroundColor: fc }]} />
+
+      <View style={g.body}>
+        <View style={g.top}>
+          <Text style={g.name}>{group.model.nickname}</Text>
+
+          <Text style={g.count}>×{total}</Text>
+        </View>
+
+        <Text style={g.meta}>
+          {active} flying · {idle} idle
+        </Text>
+
+        <Text style={g.specs}>
+          {group.model.pax_capacity} pax ·{" "}
+          {group.model.range_nm.toLocaleString()}nm
+        </Text>
+      </View>
+
+      {idle > 0 && (
+        <TouchableOpacity
+          style={[g.assignBtn, { backgroundColor: fc }]}
+          onPress={onAssign}
+        >
+          <Ionicons name="flash-outline" size={13} color={Colors.bg} />
+          <Text style={g.assignTxt}>Assign</Text>
+        </TouchableOpacity>
+      )}
+    </View>
+  );
+}
+
 function PlaneCard({
   model,
   demandScore,
@@ -182,29 +231,21 @@ function PlaneCard({
   const [error, setError] = useState<string | null>(null);
 
   const fc = FAMILY_COLOR[model.family] ?? Colors.sky;
+
   const lockedByDemands =
     model.unlock_demands > 0 && demandScore < model.unlock_demands;
   const lockedByCash = model.unlock_cash > 0 && cash < model.unlock_cash;
   const locked = lockedByDemands || lockedByCash;
 
   const lockReason = lockedByDemands
-    ? `Clear ${model.unlock_demands - demandScore} more demand slot${model.unlock_demands - demandScore !== 1 ? "s" : ""}`
+    ? `${model.unlock_demands - demandScore} slots needed`
     : lockedByCash
-      ? `Reach ${fmtCash(model.unlock_cash)} cash`
+      ? `${fmtCash(model.unlock_cash)} cash needed`
       : "";
 
   const totalCost = model.price * qty;
   const canAfford = cash >= totalCost;
   const canBuy = !locked && canAfford && !buying;
-
-  const flowPower =
-    model.pax_capacity * Math.max(1, Math.round(model.speed_kts / 100));
-  const rangeLabel =
-    model.range_nm >= 3500
-      ? "Long rush"
-      : model.range_nm >= 1600
-        ? "Regional rush"
-        : "Short rush";
 
   const handleBuy = async () => {
     haptics.confirm();
@@ -233,26 +274,33 @@ function PlaneCard({
     setBought(true);
     haptics.success();
     sounds.planeBuy();
-    setTimeout(() => setBought(false), 1600);
+    setTimeout(() => setBought(false), 1200);
   };
 
   return (
-    <View style={[pc.card, locked && pc.locked]}>
+    <View style={[pc.cardCompact, locked && pc.locked]}>
       <View
         style={[pc.stripe, { backgroundColor: locked ? Colors.dim : fc }]}
       />
 
-      <View style={pc.body}>
-        <View style={pc.header}>
-          <View style={{ flex: 1 }}>
+      <View style={pc.compactMain}>
+        <View style={pc.compactTop}>
+          <View style={pc.compactInfo}>
             <Text style={[pc.family, { color: locked ? Colors.dim : fc }]}>
               {FAMILY_LABEL[model.family] ?? model.family}
             </Text>
-            <Text style={pc.name}>{model.nickname}</Text>
-            <Text style={pc.role}>{rangeLabel} plane</Text>
+
+            <Text style={pc.name} numberOfLines={1}>
+              {model.nickname}
+            </Text>
+
+            <Text style={pc.compactSpecs} numberOfLines={1}>
+              {model.pax_capacity} pax · {model.range_nm.toLocaleString()}nm ·{" "}
+              {model.speed_kts}kts
+            </Text>
           </View>
 
-          <View style={pc.priceBox}>
+          <View style={pc.compactPrice}>
             <Text
               style={[
                 pc.price,
@@ -265,32 +313,13 @@ function PlaneCard({
           </View>
         </View>
 
-        <View style={pc.flowBox}>
-          <View style={pc.flowItem}>
-            <Text style={[pc.flowVal, { color: fc }]}>
-              {model.pax_capacity}
-            </Text>
-            <Text style={pc.flowLbl}>pax</Text>
-          </View>
-          <View style={pc.flowItem}>
-            <Text style={[pc.flowVal, { color: fc }]}>
-              {model.range_nm.toLocaleString()}
-            </Text>
-            <Text style={pc.flowLbl}>nm</Text>
-          </View>
-          <View style={pc.flowItem}>
-            <Text style={[pc.flowVal, { color: fc }]}>{flowPower}</Text>
-            <Text style={pc.flowLbl}>flow</Text>
-          </View>
-        </View>
-
         {locked ? (
-          <View style={pc.lockRow}>
+          <View style={pc.lockRowCompact}>
             <Ionicons name="lock-closed" size={11} color={Colors.dim} />
             <Text style={pc.lockTxt}>{lockReason}</Text>
           </View>
         ) : (
-          <View style={pc.buyRow}>
+          <View style={pc.buyRowCompact}>
             <QuantitySelector
               value={qty}
               min={1}
@@ -301,34 +330,36 @@ function PlaneCard({
 
             <Text
               style={[
-                pc.total,
+                pc.totalCompact,
                 { color: canAfford ? Colors.green : Colors.red },
               ]}
+              numberOfLines={1}
             >
               {fmtCash(totalCost)}
             </Text>
 
             <TouchableOpacity
               style={[
-                pc.buyBtn,
+                pc.buyBtnCompact,
                 { backgroundColor: canBuy ? fc : "rgba(255,255,255,.06)" },
                 !canBuy && { opacity: 0.5 },
               ]}
               onPress={handleBuy}
               disabled={!canBuy}
+              activeOpacity={0.84}
             >
               {buying ? (
                 <ActivityIndicator size="small" color={Colors.bg} />
               ) : bought ? (
                 <>
-                  <Ionicons name="checkmark" size={14} color={Colors.bg} />
+                  <Ionicons name="checkmark" size={13} color={Colors.bg} />
                   <Text style={pc.buyTxt}>Added</Text>
                 </>
               ) : (
                 <>
                   <Ionicons
                     name="add-circle-outline"
-                    size={14}
+                    size={13}
                     color={canBuy ? Colors.bg : Colors.dim}
                   />
                   <Text
@@ -407,6 +438,31 @@ export default function FleetSheet() {
       }))
       .filter((g) => g.planes.length > 0);
   }, [planes]);
+
+  const groupedOwned = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        model: PlaneModel;
+        planes: OwnedPlane[];
+      }
+    >();
+
+    ownedPlanes.forEach((p) => {
+      const key = p.plane_model.id;
+
+      if (!map.has(key)) {
+        map.set(key, {
+          model: p.plane_model,
+          planes: [],
+        });
+      }
+
+      map.get(key)!.planes.push(p);
+    });
+
+    return Array.from(map.values());
+  }, [ownedPlanes]);
 
   const handleAssign = () => {
     haptics.confirm();
@@ -490,26 +546,16 @@ export default function FleetSheet() {
           <Ionicons name="chevron-forward" size={18} color={Colors.dim} />
         </TouchableOpacity>
       )}
-
-      {ownedPlanes.length > 0 && (
-        <>
-          <Text style={s.eyebrow}>ACTIVE FLEET</Text>
-          <View style={s.section}>
-            {ownedPlanes.map((plane) => (
-              <OwnedPlaneRow
-                key={plane.id}
-                plane={plane}
-                route={planeRouteMap.get(plane.id) ?? null}
-                onAssign={
-                  !planeRouteMap.has(plane.id) ? handleAssign : undefined
-                }
-              />
-            ))}
-          </View>
-        </>
-      )}
-
-      <View style={s.divider} />
+      {/* 
+      <View style={[s.topAction, { borderColor: color + "44" }]}>
+        <Ionicons name="add-circle-outline" size={17} color={color} />
+        <View style={{ flex: 1 }}>
+          <Text style={s.topActionTitle}>Buy Aircraft</Text>
+          <Text style={s.topActionSub}>
+            Purchase more planes without scrolling past your fleet.
+          </Text>
+        </View>
+      </View> */}
 
       <Text style={s.eyebrow}>BUY MORE FLOW</Text>
       <Text style={s.eyebrowSub}>
@@ -533,9 +579,93 @@ export default function FleetSheet() {
           ))}
         </View>
       ))}
+
+      {ownedPlanes.length > 0 && (
+        <>
+          <View style={s.divider} />
+
+          <Text style={s.eyebrow}>ACTIVE FLEET</Text>
+          <View style={s.section}>
+            {groupedOwned.map((group) => (
+              <OwnedPlaneGroup
+                key={group.model.id}
+                group={group}
+                planeRouteMap={planeRouteMap}
+                onAssign={handleAssign}
+              />
+            ))}
+          </View>
+        </>
+      )}
     </BottomSheetScrollView>
   );
 }
+
+const g = StyleSheet.create({
+  row: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    overflow: "hidden",
+    marginBottom: Spacing.sm,
+    backgroundColor: "rgba(255,255,255,.025)",
+  },
+
+  stripe: { width: 4, alignSelf: "stretch" },
+
+  body: {
+    flex: 1,
+    padding: Spacing.md,
+    gap: 4,
+  },
+
+  top: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+
+  name: {
+    fontSize: 13,
+    color: Colors.text,
+    fontWeight: "800",
+  },
+
+  count: {
+    fontSize: 12,
+    fontWeight: "900",
+    color: Colors.dim,
+  },
+
+  meta: {
+    fontSize: 10,
+    color: Colors.dim,
+    fontWeight: "600",
+  },
+
+  specs: {
+    fontSize: 9,
+    color: Colors.dim,
+  },
+
+  assignBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    borderRadius: Radius.md,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginRight: Spacing.md,
+  },
+
+  assignTxt: {
+    fontSize: 11,
+    fontWeight: "900",
+    color: Colors.bg,
+  },
+});
 
 const qs = StyleSheet.create({
   wrap: { flexDirection: "row", alignItems: "center", gap: 2 },
@@ -662,6 +792,79 @@ const pc = StyleSheet.create({
   },
   buyTxt: { fontSize: 12, fontWeight: "900" },
   error: { fontSize: 10, color: Colors.red },
+  cardCompact: {
+    flexDirection: "row",
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    overflow: "hidden",
+    marginBottom: Spacing.sm,
+    backgroundColor: "rgba(255,255,255,.025)",
+  },
+
+  compactMain: {
+    flex: 1,
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    gap: 7,
+  },
+
+  compactTop: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: Spacing.sm,
+  },
+
+  compactInfo: {
+    flex: 1,
+    minWidth: 0,
+  },
+
+  compactSpecs: {
+    fontSize: 10,
+    color: Colors.dim,
+    fontWeight: "700",
+    marginTop: 1,
+  },
+
+  compactPrice: {
+    alignItems: "flex-end",
+    flexShrink: 0,
+  },
+
+  buyRowCompact: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
+
+  totalCompact: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: "900",
+  },
+
+  buyBtnCompact: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+    borderRadius: Radius.md,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    minWidth: 78,
+  },
+
+  lockRowCompact: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    borderRadius: Radius.md,
+    backgroundColor: "rgba(255,255,255,.04)",
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+  },
 });
 
 const s = StyleSheet.create({
@@ -736,4 +939,33 @@ const s = StyleSheet.create({
   },
   familyDot: { width: 8, height: 8, borderRadius: 999 },
   familyLabel: { fontSize: 11, fontWeight: "900", letterSpacing: 1 },
+  topAction: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+
+    backgroundColor: "rgba(255,255,255,0.02)",
+
+    marginTop: Spacing.sm,
+    marginBottom: Spacing.sm,
+  },
+
+  topActionTitle: {
+    fontSize: 13,
+    fontWeight: "900",
+    color: Colors.text,
+  },
+
+  topActionSub: {
+    fontSize: 11,
+    color: Colors.dim,
+    marginTop: 2,
+    fontWeight: "600",
+  },
 });
