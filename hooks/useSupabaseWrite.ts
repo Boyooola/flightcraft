@@ -110,6 +110,8 @@ export function useBuyHub() {
             haul: d.haul,
             pax_day: d.pax_day,
             status: "pending",
+            popularity: d.popularity,
+            base_pax_day: d.base_pax_day ?? d.pax_day,
           }));
 
           const { data: demandData, error: demandErr } = await supabase
@@ -131,6 +133,8 @@ export function useBuyHub() {
             pax_day: row.pax_day,
             status: row.status as Demand["status"],
             delivered_pax_today: 0,
+            popularity: row.popularity,
+            base_pax_day: row.base_pax_day ?? row.pax_day,
           }));
 
           addDemands(fullDemands);
@@ -475,7 +479,7 @@ export function useSaveAirlineDay() {
   const store = useGameStore.getState;
 
   return useCallback(async () => {
-    const { airline, hubs } = store();
+    const { airline, hubs, demands } = store();
     if (!airline) return;
 
     const { earnedAchievements, missionsCompleted } = store();
@@ -504,6 +508,19 @@ export function useSaveAirlineDay() {
       );
 
     await Promise.all(hubUpdates);
+
+    await Promise.all(
+      demands.map((d) =>
+        supabase
+          .from("demands")
+          .update({
+            pax_day: d.pax_day,
+            popularity: d.popularity,
+            delivered_pax_today: d.delivered_pax_today,
+          })
+          .eq("id", d.id),
+      ),
+    );
   }, []);
 }
 
@@ -566,7 +583,9 @@ export function useSpawnDailyDemand() {
           haul: data.haul,
           pax_day: data.pax_day,
           status: "pending",
-          delivered_pax_today: 0,
+          delivered_pax_today: data.delivered_pax_today,
+          base_pax_day: data.base_pax_day ?? data.pax_day,
+          popularity: data.populary,
         },
       ]);
     } catch {
@@ -923,6 +942,8 @@ export function useCreateCustomRoute() {
           pax_day: paxDay,
           status: "pending",
           delivered_pax_today: 0,
+          base_pax_day: 0,
+          popularity: 0,
         };
 
         addDemands([syntheticDemand]);

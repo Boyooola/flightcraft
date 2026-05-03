@@ -140,6 +140,48 @@ function buildPlaneLabel(routes: Route[]) {
     .join(" · ");
 }
 
+function routeGrowthLabel(demand: Demand) {
+  const popularity = demand.popularity ?? 0;
+
+  if (popularity >= 30) {
+    return {
+      text: `+${popularity}% booming`,
+      color: Colors.green,
+      icon: "flame-outline" as const,
+    };
+  }
+
+  if (popularity >= 10) {
+    return {
+      text: `+${popularity}% growing`,
+      color: Colors.green,
+      icon: "trending-up-outline" as const,
+    };
+  }
+
+  if (popularity <= -20) {
+    return {
+      text: `${popularity}% declining`,
+      color: Colors.red,
+      icon: "trending-down-outline" as const,
+    };
+  }
+
+  if (popularity <= -5) {
+    return {
+      text: `${popularity}% soft`,
+      color: Colors.amber,
+      icon: "arrow-down-outline" as const,
+    };
+  }
+
+  return {
+    text: "Stable demand",
+    color: Colors.dim,
+    icon: "remove-outline" as const,
+  };
+}
+
 function RouteGroupRow({
   group,
   deactivating,
@@ -154,6 +196,7 @@ function RouteGroupRow({
     group.status.label === "STALLED" || group.status.label === "JAMMED";
   const isCleared = group.status.label === "CLEARED";
   const accent = group.status.color;
+  const growth = routeGrowthLabel(group.demand);
 
   return (
     <TouchableOpacity
@@ -260,10 +303,29 @@ function RouteGroupRow({
           </Text>
         </View>
 
-        <Text style={rr.hint} numberOfLines={1}>
-          {group.waitingPax.toLocaleString()} waiting ·{" "}
-          {group.totalCapacity.toLocaleString()} seats assigned
-        </Text>
+        <View style={rr.hintRow}>
+          <Text style={rr.hint}>
+            {group.waitingPax.toLocaleString()} waiting ·{" "}
+            {group.totalCapacity.toLocaleString()} seats
+          </Text>
+
+          <View style={rr.growthWrap}>
+            <Ionicons name={growth.icon} size={11} color={growth.color} />
+            <Text style={[rr.growth, { color: growth.color }]}>
+              {growth.text}
+            </Text>
+          </View>
+        </View>
+
+        {(group.demand.ai_stolen_pax ?? 0) > 0 && (
+          <View style={rr.aiRow}>
+            <Ionicons name="shield-half-outline" size={10} color={Colors.red} />
+            <Text style={rr.aiText}>
+              {(group.demand.ai_stolen_pax ?? 0).toLocaleString()} pax lost to
+              rivals
+            </Text>
+          </View>
+        )}
       </View>
 
       {deactivating && (
@@ -765,6 +827,32 @@ const rr = StyleSheet.create({
     justifyContent: "center",
     borderLeftWidth: StyleSheet.hairlineWidth,
     borderLeftColor: Colors.border,
+  },
+  hintRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: Spacing.sm,
+  },
+  growth: {
+    fontSize: 10,
+    fontWeight: "900",
+    flexShrink: 0,
+  },
+  growthWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  aiRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+
+  aiText: {
+    fontSize: 10,
+    fontWeight: "700",
   },
 });
 

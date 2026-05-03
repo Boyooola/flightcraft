@@ -10,6 +10,7 @@
  * - Revenue uses calcInstantDeliveryReward instead of old inline formula.
  */
 
+import { computePlayerMarketShare } from "@/lib/AIAirline";
 import { boardPassengers } from "@/lib/passengerFlow";
 import { calcInstantDeliveryReward } from "@/lib/revenue";
 import type { Airport, Route } from "@/store";
@@ -200,7 +201,7 @@ export default function RouteLayer({
               demands.find((demand) => demand.id === route.demand.id) ??
               route.demand;
 
-            const boarded = boardPassengers({
+            const delieveredPax = boardPassengers({
               demand: liveDemand,
               planeCapacity: route.plane.plane_model.pax_capacity,
               dayProgress,
@@ -208,15 +209,27 @@ export default function RouteLayer({
               loadFactorMax: 1,
             });
 
-            if (boarded > 0) {
-              addPaxDelivered(liveDemand.id, boarded);
+            const aiAirlines = useGameStore.getState().aiAirlines;
 
+            if (delieveredPax > 0) {
               const hub = hubs.find((h) => h.airport.iata === route.hub_iata);
+
+              const share = computePlayerMarketShare(
+                hub?.trust!,
+                aiAirlines,
+                liveDemand.origin.iata,
+                liveDemand.dest.iata,
+              );
+
+              const effectiveDelivered = Math.floor(delieveredPax * share);
+              const lostToAI = delieveredPax - effectiveDelivered;
+
+              addPaxDelivered(liveDemand.id, effectiveDelivered, lostToAI);
 
               const reward = calcInstantDeliveryReward({
                 distNm: route.total_dist_nm ?? liveDemand.dist_nm,
                 trustPct: hub?.trust ?? 0,
-                deliveredPax: boarded,
+                deliveredPax: effectiveDelivered,
               });
 
               earnCash(reward);
@@ -408,51 +421,6 @@ export default function RouteLayer({
 
       {planes.length > 0 && (
         <MapboxGL.ShapeSource id="planes-source" shape={planeGeoJSON}>
-          <MapboxGL.CircleLayer
-            id="plane-glow"
-            existing={false}
-            style={{
-              circleRadius: [
-                "interpolate",
-                ["linear"],
-                ["zoom"],
-                1,
-                6,
-                5,
-                10,
-                10,
-                16,
-              ],
-              circleColor: airlineColor,
-              circleOpacity: 0.25,
-              circleBlur: 1.5,
-              circlePitchAlignment: "map",
-            }}
-          />
-
-          <MapboxGL.CircleLayer
-            id="plane-body"
-            existing={false}
-            style={{
-              circleRadius: [
-                "interpolate",
-                ["linear"],
-                ["zoom"],
-                1,
-                4,
-                5,
-                7,
-                10,
-                11,
-              ],
-              circleColor: airlineColor,
-              circleStrokeColor: "#ffffff",
-              circleStrokeWidth: 1.5,
-              circleStrokeOpacity: 0.9,
-              circlePitchAlignment: "map",
-            }}
-          />
-
           <MapboxGL.SymbolLayer
             id="plane-icon"
             existing={false}

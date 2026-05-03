@@ -25,7 +25,7 @@ import { useGameStore } from "@/store";
 import { useEffect, useRef } from "react";
 
 // ── Column mappers ────────────────────────────────────────────────
- 
+
 function rowToAirport(row: any): Airport {
   return {
     iata: row.iata_code ?? row.iata,
@@ -42,7 +42,6 @@ function rowToAirport(row: any): Airport {
   };
 }
 
- 
 function rowToPlaneModel(row: any): PlaneModel {
   return {
     id: String(row.id),
@@ -292,6 +291,9 @@ export function useGameLoader() {
               haul: string;
               pax_day: number;
               status: string;
+              base_pax_day: number;
+              popularity: number;
+              delivered_pax_today: number;
             }) => {
               const origin = airportMap.get(d.origin_iata);
               const dest = airportMap.get(d.dest_iata);
@@ -304,7 +306,12 @@ export function useGameLoader() {
                 dest,
                 dist_nm: d.dist_nm,
                 haul: d.haul as HaulClass,
+
                 pax_day: d.pax_day,
+                base_pax_day: d.base_pax_day ?? d.pax_day,
+                popularity: d.popularity ?? 0,
+                delivered_pax_today: d.delivered_pax_today ?? 0,
+
                 status: d.status as "pending" | "served" | "no_plane",
               };
             },

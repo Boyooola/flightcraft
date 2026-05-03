@@ -113,6 +113,10 @@ export interface Demand {
   pax_day: number;
   status: DemandStatus;
   delivered_pax_today: number; // resets each game-day
+  base_pax_day: number;
+  popularity: number;
+  ai_stolen_pax?: number;
+  ai_pressure?: number;
 }
 
 export interface OwnedPlane {
@@ -254,7 +258,7 @@ export interface GameStore {
   addDemands: (demands: Demand[]) => void;
   updateDemand: (id: string, patch: Partial<Demand>) => void;
   resetDailyPax: () => void;
-  addPaxDelivered: (demandId: string, pax: number) => void;
+  addPaxDelivered: (demandId: string, pax: number, lostToAI: number) => void;
 
   // Fleet
   setOwnedPlanes: (planes: OwnedPlane[]) => void;
@@ -506,16 +510,52 @@ export const useGameStore = create<GameStore>()(
           "updateDemand",
         ),
 
-      resetDailyPax: () =>
-        set(
-          (s) => ({
-            demands: s.demands.map((d) => ({ ...d, delivered_pax_today: 0 })),
-          }),
-          false,
-          "resetDailyPax",
-        ),
+      resetDailyPax: () => {
+        const demands = get().demands.map((d) => {
+          const delivered = d.delivered_pax_today ?? 0;
+          const base = d.base_pax_day ?? d.pax_day;
+          const ratio = base > 0 ? delivered / base : 0;
 
-      addPaxDelivered: (demandId, pax) =>
+          let popularity = d.popularity ?? 0;
+
+          // ── Growth logic ─────────────────────────────
+
+          if (ratio >= 0.9) {
+            popularity += 3;
+          } else if (ratio >= 0.75) {
+            popularity += 2;
+          } else if (ratio >= 0.55) {
+            popularity += 1;
+          } else if (ratio < 0.35) {
+            popularity -= 2;
+          } else if (ratio < 0.5) {
+            popularity -= 1;
+          }
+
+          // ── Clamp ───────────────────────────────────
+
+          popularity = Math.max(-40, Math.min(80, popularity));
+
+          // ── Apply growth ────────────────────────────
+
+          const multiplier = 1 + popularity / 100;
+
+          const newPax = Math.max(10, Math.round(base * multiplier));
+
+          return {
+            ...d,
+            popularity,
+            pax_day: newPax,
+            delivered_pax_today: 0,
+            ai_stolen_pax: 0,
+            status: newPax > 0 ? "pending" : ("served" as DemandStatus),
+          };
+        });
+
+        set({ demands }, false, "resetDailyPax");
+      },
+
+      addPaxDelivered: (demandId, pax, lostToAi) =>
         set(
           (s) => ({
             demands: s.demands.map((d) =>
@@ -523,6 +563,7 @@ export const useGameStore = create<GameStore>()(
                 ? {
                     ...d,
                     delivered_pax_today: (d.delivered_pax_today ?? 0) + pax,
+                    ai_stolen_pax: (d.ai_stolen_pax ?? 0) + lostToAi,
                   }
                 : d,
             ),
