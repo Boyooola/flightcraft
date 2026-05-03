@@ -135,7 +135,7 @@ export default function GameMap({ airlineColor, onMapReady }: GameMapProps) {
         ))}
 
         {/* AI routes — rendered behind player routes */}
-        <AIRouteLayer />
+        <AIRouteLayer paused={speed === 0} speed={speed} />
 
         <RouteLayer airlineColor={color} speed={speed} paused={speed === 0} />
 

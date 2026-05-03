@@ -1,7 +1,10 @@
 /**
  * components/sheets/LeaderboardSheet.tsx
  *
- * WorldWide Rush-style leaderboard.
+ * Leaderboard rules:
+ * - Global tab = real/public airlines only. No AI mixed in.
+ * - Rivals tab = AI rivals only.
+ * - Rank display changes per tab so it is not misleading.
  */
 
 import { Colors, Radius, Spacing } from "@/constants/theme";
@@ -12,7 +15,7 @@ import { supabase } from "@/lib/supabase";
 import { useAIAirlines, useAirline, useGameStore } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
 import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   StyleSheet,
@@ -20,6 +23,9 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+
+type BoardTab = "global" | "rivals";
+type RowKind = "player" | "real" | "ai";
 
 interface LeaderRow {
   id: string;
@@ -31,9 +37,10 @@ interface LeaderRow {
   reputation: number;
   achievements: Record<string, number> | null;
   score: number;
+  kind: RowKind;
 }
 
-function calcScore(row: Omit<LeaderRow, "score">): number {
+function calcScore(row: Omit<LeaderRow, "score" | "kind">): number {
   const netWorth = Math.max(0, row.cash - row.loan);
   const earnedIds = Object.keys(row.achievements ?? {});
   const achPoints = ACHIEVEMENTS.filter((a) => earnedIds.includes(a.id)).reduce(
@@ -70,6 +77,14 @@ function formatLastUpdated(date: Date | null) {
   return `${Math.floor(seconds / 3600)}h ago`;
 }
 
+function sortRows(rows: LeaderRow[]) {
+  return [...rows].sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    if (b.cash !== a.cash) return b.cash - a.cash;
+    return a.name.localeCompare(b.name);
+  });
+}
+
 function RankBadge({ rank }: { rank: number }) {
   const color = rankColor(rank);
   const top = rank <= 3;
@@ -90,6 +105,26 @@ function RankBadge({ rank }: { rank: number }) {
   );
 }
 
+function TypeBadge({ kind }: { kind: RowKind }) {
+  if (kind === "player") {
+    return (
+      <View style={[type.badge, { backgroundColor: Colors.sky + "18" }]}>
+        <Text style={[type.text, { color: Colors.sky }]}>YOU</Text>
+      </View>
+    );
+  }
+
+  if (kind === "ai") {
+    return (
+      <View style={type.badge}>
+        <Text style={type.text}>AI</Text>
+      </View>
+    );
+  }
+
+  return null;
+}
+
 function LeaderRowCard({
   row,
   rank,
@@ -101,7 +136,6 @@ function LeaderRowCard({
 }) {
   const color = row.color ?? Colors.sky;
   const netWorth = Math.max(0, row.cash - row.loan);
-  const isAI = row.name.endsWith(" ✦");
 
   return (
     <View
@@ -120,15 +154,10 @@ function LeaderRowCard({
       <View style={rowStyles.body}>
         <View style={rowStyles.nameRow}>
           <Text style={[rowStyles.name, isMe && { color }]} numberOfLines={1}>
-            {isAI ? row.name.slice(0, -2) : row.name}
-            {isMe ? " (You)" : ""}
+            {row.name}
           </Text>
 
-          {isAI && (
-            <View style={rowStyles.aiBadge}>
-              <Text style={rowStyles.aiText}>AI</Text>
-            </View>
-          )}
+          <TypeBadge kind={row.kind} />
         </View>
 
         <Text style={rowStyles.meta} numberOfLines={1}>
@@ -160,13 +189,51 @@ export default function LeaderboardSheet() {
   const tabBarH = useTabBarHeight();
   const aiAirlines = useAIAirlines();
 
-  const [tab, setTab] = useState<"global" | "rivals">("global");
-  const [rows, setRows] = useState<LeaderRow[]>([]);
+  const [tab, setTab] = useState<BoardTab>("global");
+  const [globalRows, setGlobalRows] = useState<LeaderRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const color = airline?.color ?? Colors.sky;
+
+  const myRow = useMemo<LeaderRow | null>(() => {
+    if (!airline) return null;
+
+    const base = {
+      id: airline.id,
+      name: airline.name,
+      color: airline.color ?? Colors.sky,
+      cash: airline.cash ?? 0,
+      loan: airline.loan ?? 0,
+      demand_score: airline.demand_score ?? 0,
+      reputation: airline.reputation ?? 0,
+      achievements: null,
+    };
+
+    return {
+      ...base,
+      score: calcScore(base),
+      kind: "player",
+    };
+  }, [airline]);
+
+  const rivalRows = useMemo<LeaderRow[]>(() => {
+    return sortRows(
+      aiAirlines.map((ai) => ({
+        id: ai.id,
+        name: ai.name,
+        color: ai.color,
+        cash: ai.cash,
+        loan: Math.max(0, ai.cash - ai.netWorth),
+        demand_score: ai.demandScore,
+        reputation: ai.reputation,
+        achievements: null,
+        score: ai.score,
+        kind: "ai",
+      })),
+    );
+  }, [aiAirlines]);
 
   const fetchLeaderboard = useCallback(async () => {
     setLoading(true);
@@ -179,55 +246,76 @@ export default function LeaderboardSheet() {
           "id, name, color, cash, loan, demand_score, reputation, achievements",
         )
         .order("cash", { ascending: false })
-        .limit(50);
+        .limit(100);
 
       if (err) throw new Error(err.message);
 
-      const scored: LeaderRow[] = (data ?? [])
-        .map((row: any) => ({
-          ...row,
-          score: calcScore(row),
-        }))
-        .sort((a: LeaderRow, b: LeaderRow) => b.score - a.score);
+      const scored: LeaderRow[] = (data ?? []).map((row: any) => {
+        const base = {
+          id: row.id,
+          name: row.name ?? "Unnamed Airline",
+          color: row.color ?? Colors.sky,
+          cash: Number(row.cash ?? 0),
+          loan: Number(row.loan ?? 0),
+          demand_score: Number(row.demand_score ?? 0),
+          reputation: Number(row.reputation ?? 0),
+          achievements:
+            row.achievements && typeof row.achievements === "object"
+              ? row.achievements
+              : null,
+        };
 
-      setRows(scored.slice(0, 50));
+        return {
+          ...base,
+          score: calcScore(base),
+          kind: row.id === airline?.id ? "player" : "real",
+        };
+      });
+
+      const map = new Map<string, LeaderRow>();
+      scored.forEach((row) => map.set(row.id, row));
+
+      // Ensure you appear immediately even if the public view has not caught up.
+      if (myRow) {
+        map.set(myRow.id, {
+          ...(map.get(myRow.id) ?? myRow),
+          kind: "player",
+        });
+      }
+
+      setGlobalRows(sortRows(Array.from(map.values())).slice(0, 100));
       setLastUpdated(new Date());
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load leaderboard");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [airline?.id, myRow]);
 
   useEffect(() => {
     fetchLeaderboard();
   }, [fetchLeaderboard]);
 
-  useEffect(() => {
-    if (rows.length === 0) return;
+  const displayRows = tab === "global" ? globalRows : rivalRows;
 
-    const realRows = rows.filter((row) => !row.name.endsWith("✦"));
-    const aiRows: LeaderRow[] = aiAirlines.map((ai) => ({
-      id: ai.id,
-      name: `${ai.name} ✦`,
-      color: ai.color,
-      cash: ai.cash,
-      loan: ai.cash - ai.netWorth,
-      demand_score: ai.demandScore,
-      reputation: ai.reputation,
-      achievements: null,
-      score: ai.score,
-    }));
-
-    setRows(
-      [...realRows, ...aiRows].sort((a, b) => b.score - a.score).slice(0, 50),
-    );
-  }, [aiAirlines]);
-
-  const myRank = airline
-    ? rows.findIndex((row) => row.id === airline.id) + 1
+  const myGlobalRank = airline
+    ? globalRows.findIndex((row) => row.id === airline.id) + 1
     : 0;
-  const topRow = rows[0];
+
+  const topGlobal = globalRows[0] ?? null;
+  const topRival = rivalRows[0] ?? null;
+
+  const heroLabel = tab === "global" ? "YOUR GLOBAL RANK" : "TOP RIVAL";
+  const heroValue =
+    tab === "global" ? (myGlobalRank > 0 ? `#${myGlobalRank}` : "—") : "#1";
+  const heroSub =
+    tab === "global"
+      ? `Updated ${formatLastUpdated(lastUpdated)}`
+      : `${rivalRows.length} AI rival${rivalRows.length !== 1 ? "s" : ""}`;
+  const heroColor = tab === "global" ? color : (topRival?.color ?? color);
+
+  const topLabel = tab === "global" ? "TOP AIRLINE" : "RIVAL TO BEAT";
+  const topDisplay = tab === "global" ? topGlobal : topRival;
 
   return (
     <BottomSheetScrollView
@@ -243,7 +331,9 @@ export default function LeaderboardSheet() {
           <Ionicons name="flash-outline" size={21} color={color} />
           <View>
             <Text style={s.title}>Rank Rush</Text>
-            <Text style={s.subtitle}>Climb by moving passengers</Text>
+            <Text style={s.subtitle}>
+              {tab === "global" ? "Global airlines only" : "AI rivals only"}
+            </Text>
           </View>
         </View>
 
@@ -277,126 +367,100 @@ export default function LeaderboardSheet() {
           return (
             <TouchableOpacity
               key={value}
-              style={[s.tab, active && { borderColor: color + "44" }]}
+              style={[
+                s.tab,
+                active && {
+                  borderColor: color + "44",
+                  backgroundColor: color + "0c",
+                },
+              ]}
               onPress={() => setTab(value)}
               activeOpacity={0.82}
             >
               <Text style={[s.tabText, { color: active ? color : Colors.dim }]}>
-                {value === "global" ? "Global" : `Rivals ${aiAirlines.length}`}
+                {value === "global"
+                  ? `Global ${globalRows.length}`
+                  : `Rivals ${rivalRows.length}`}
               </Text>
             </TouchableOpacity>
           );
         })}
       </View>
 
-      <View style={[s.hero, { borderColor: color + "44" }]}>
+      <View style={[s.hero, { borderColor: heroColor + "44" }]}>
         <View>
-          <Text style={s.heroLabel}>YOUR RANK</Text>
-          <Text style={[s.heroValue, { color }]}>
-            {myRank > 0 ? `#${myRank}` : "—"}
-          </Text>
-          <Text style={s.heroSub}>
-            Updated {formatLastUpdated(lastUpdated)}
-          </Text>
+          <Text style={s.heroLabel}>{heroLabel}</Text>
+          <Text style={[s.heroValue, { color: heroColor }]}>{heroValue}</Text>
+          <Text style={s.heroSub}>{heroSub}</Text>
         </View>
 
-        {topRow && (
+        {topDisplay && (
           <View style={s.topBox}>
-            <Text style={s.topLabel}>TOP AIRLINE</Text>
+            <Text style={s.topLabel}>{topLabel}</Text>
             <Text style={s.topName} numberOfLines={1}>
-              {topRow.name.replace(" ✦", "")}
+              {topDisplay.name}
             </Text>
-            <Text style={s.topScore}>{shortScore(topRow.score)} score</Text>
+            <Text style={s.topScore}>{shortScore(topDisplay.score)} score</Text>
           </View>
         )}
       </View>
 
-      {tab === "rivals" ? (
-        <View style={s.section}>
-          {aiAirlines.length === 0 ? (
-            <View style={s.empty}>
-              <Ionicons name="people-outline" size={40} color={Colors.dim} />
-              <Text style={s.emptyTitle}>No rivals yet</Text>
-              <Text style={s.emptySub}>Add AI rivals during setup.</Text>
-            </View>
-          ) : (
-            [...aiAirlines]
-              .sort((a, b) => b.score - a.score)
-              .map((ai, index) => {
-                const rank = index + 1;
+      <View style={s.section}>
+        {error && tab === "global" && (
+          <View style={s.errorBox}>
+            <Ionicons name="warning-outline" size={14} color={Colors.red} />
+            <Text style={s.errorText}>{error}</Text>
+            <TouchableOpacity onPress={fetchLeaderboard}>
+              <Text style={s.retryText}>Retry</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
-                return (
-                  <View key={ai.id} style={s.rivalCard}>
-                    <RankBadge rank={rank} />
-                    <View style={[s.rivalDot, { backgroundColor: ai.color }]} />
+        {loading && displayRows.length === 0 && (
+          <View style={s.loading}>
+            <ActivityIndicator color={color} size="large" />
+            <Text style={s.loadingText}>Fetching rankings...</Text>
+          </View>
+        )}
 
-                    <View style={s.rivalBody}>
-                      <Text style={s.rivalName}>{ai.name}</Text>
-                      <Text style={s.rivalMeta}>
-                        {ai.routeCount} routes · {ai.hubIatas.length} hubs ·
-                        trust {ai.trust}%
-                      </Text>
-                    </View>
+        {!loading && displayRows.length === 0 && (
+          <View style={s.empty}>
+            <Ionicons name="trophy-outline" size={40} color={Colors.dim} />
+            <Text style={s.emptyTitle}>
+              {tab === "global" ? "No global rankings yet" : "No rivals yet"}
+            </Text>
+            <Text style={s.emptySub}>
+              {tab === "global"
+                ? "Run the public leaderboard SQL view and play more."
+                : "Add AI rivals during setup."}
+            </Text>
+          </View>
+        )}
 
-                    <Text style={[s.rivalScore, { color: ai.color }]}>
-                      {shortScore(ai.score)}
-                    </Text>
-                  </View>
-                );
-              })
-          )}
-        </View>
-      ) : (
-        <View style={s.section}>
-          {error && (
-            <View style={s.errorBox}>
-              <Ionicons name="warning-outline" size={14} color={Colors.red} />
-              <Text style={s.errorText}>{error}</Text>
-              <TouchableOpacity onPress={fetchLeaderboard}>
-                <Text style={s.retryText}>Retry</Text>
-              </TouchableOpacity>
-            </View>
-          )}
+        {displayRows.map((row, index) => (
+          <LeaderRowCard
+            key={row.id}
+            row={row}
+            rank={index + 1}
+            isMe={tab === "global" && row.id === airline?.id}
+          />
+        ))}
 
-          {loading && rows.length === 0 && (
-            <View style={s.loading}>
-              <ActivityIndicator color={color} size="large" />
-              <Text style={s.loadingText}>Fetching rankings...</Text>
-            </View>
-          )}
-
-          {rows.map((row, index) => (
-            <LeaderRowCard
-              key={row.id}
-              row={row}
-              rank={index + 1}
-              isMe={row.id === airline?.id}
+        {displayRows.length > 0 && (
+          <View style={s.note}>
+            <Ionicons
+              name="information-circle-outline"
+              size={13}
+              color={Colors.dim}
             />
-          ))}
-
-          {!loading && !error && rows.length === 0 && (
-            <View style={s.empty}>
-              <Ionicons name="trophy-outline" size={40} color={Colors.dim} />
-              <Text style={s.emptyTitle}>No rankings yet</Text>
-              <Text style={s.emptySub}>Play more to appear on the board.</Text>
-            </View>
-          )}
-
-          {rows.length > 0 && (
-            <View style={s.note}>
-              <Ionicons
-                name="information-circle-outline"
-                size={13}
-                color={Colors.dim}
-              />
-              <Text style={s.noteText}>
-                Score rewards net worth, cleared demand, reputation, and
-                trophies.
-              </Text>
-            </View>
-          )}
-        </View>
-      )}
+            <Text style={s.noteText}>
+              {tab === "global"
+                ? "Global shows real/public airlines only. AI rivals are not mixed into this ranking."
+                : "Rivals shows AI airlines only, ranked by their simulated score."}
+            </Text>
+          </View>
+        )}
+      </View>
     </BottomSheetScrollView>
   );
 }
@@ -414,6 +478,21 @@ const rb = StyleSheet.create({
   text: {
     fontSize: 11,
     fontWeight: "900",
+  },
+});
+
+const type = StyleSheet.create({
+  badge: {
+    borderRadius: Radius.sm,
+    backgroundColor: "rgba(255,255,255,.08)",
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+  },
+  text: {
+    fontSize: 7,
+    color: Colors.dim,
+    fontWeight: "900",
+    letterSpacing: 0.5,
   },
 });
 
@@ -451,18 +530,6 @@ const rowStyles = StyleSheet.create({
     color: Colors.text,
     fontWeight: "900",
   },
-  aiBadge: {
-    borderRadius: Radius.sm,
-    backgroundColor: "rgba(255,255,255,.08)",
-    paddingHorizontal: 5,
-    paddingVertical: 2,
-  },
-  aiText: {
-    fontSize: 7,
-    color: Colors.dim,
-    fontWeight: "900",
-    letterSpacing: 0.5,
-  },
   meta: {
     fontSize: 9,
     color: Colors.dim,
@@ -496,6 +563,8 @@ const s = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: Spacing.sm,
+    flex: 1,
+    minWidth: 0,
   },
   hdrR: {
     flexDirection: "row",
@@ -540,12 +609,6 @@ const s = StyleSheet.create({
   tabText: {
     fontSize: 12,
     fontWeight: "900",
-  },
-  tabDot: {
-    width: 5,
-    height: 5,
-    borderRadius: 999,
-    marginTop: 3,
   },
 
   hero: {
@@ -657,39 +720,5 @@ const s = StyleSheet.create({
     fontSize: 10,
     color: Colors.dim,
     lineHeight: 15,
-  },
-
-  rivalCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.sm,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: "rgba(255,255,255,.025)",
-    padding: Spacing.md,
-    marginBottom: Spacing.sm,
-  },
-  rivalDot: {
-    width: 9,
-    height: 9,
-    borderRadius: 999,
-  },
-  rivalBody: {
-    flex: 1,
-    gap: 2,
-  },
-  rivalName: {
-    fontSize: 13,
-    color: Colors.text,
-    fontWeight: "900",
-  },
-  rivalMeta: {
-    fontSize: 9,
-    color: Colors.dim,
-  },
-  rivalScore: {
-    fontSize: 15,
-    fontWeight: "900",
   },
 });

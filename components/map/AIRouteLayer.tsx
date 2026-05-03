@@ -8,7 +8,7 @@
 
 import { buildAIRoutes } from "@/lib/AIAirline";
 import type { Airport } from "@/store";
-import { useAIAirlines, useAirports, useGameStore } from "@/store";
+import { useAIAirlines, useAirports } from "@/store";
 import MapboxGL from "@rnmapbox/maps";
 import { useEffect, useMemo, useState } from "react";
 
@@ -64,11 +64,15 @@ interface AIPlaneState {
   color: string;
 }
 
-export default function AIRouteLayer() {
+export default function AIRouteLayer({
+  paused = false,
+  speed = 1,
+}: {
+  paused?: boolean;
+  speed?: number;
+}) {
   const aiAirlines = useAIAirlines();
   const airports = useAirports();
-  const airline = useGameStore((s) => s.airline);
-  const speed = airline?.speed ?? 1;
 
   const [planes, setPlanes] = useState<AIPlaneState[]>([]);
 
@@ -132,6 +136,8 @@ export default function AIRouteLayer() {
 
   // Animation loop — lighter interval
   useEffect(() => {
+    if (paused) return;
+
     if (allRoutes.length === 0) {
       setPlanes([]);
       return;

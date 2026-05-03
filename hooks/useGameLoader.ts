@@ -393,6 +393,7 @@ export function useGameLoader() {
                 via_iata: r.via_iata ?? null,
                 total_dist_nm: r.total_dist_nm ?? demand.dist_nm,
                 active: r.active,
+                price_strategy: "standard",
               };
             },
           )

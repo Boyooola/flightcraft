@@ -18,6 +18,8 @@ import type { HaulClass } from "@/store";
 // CONSTANTS
 // ─────────────────────────────────────────────────────────────────
 
+export type PriceStrategy = "low" | "standard" | "premium";
+
 const SHORT_BASE_FARE = 18;
 const MEDIUM_BASE_FARE = 42;
 const LONG_BASE_FARE = 95;
@@ -131,6 +133,7 @@ export function calcRouteRevenue(params: {
   costPerSector: number;
   fuelPerNm: number;
   crowdMultiplier?: number;
+  priceStrategy?: PriceStrategy;
 }): RouteRevenueResult {
   const {
     distNm,
@@ -141,6 +144,7 @@ export function calcRouteRevenue(params: {
     costPerSector,
     fuelPerNm,
     crowdMultiplier = 1.0,
+    priceStrategy,
   } = params;
 
   const safeDelivered = Math.max(0, deliveredPax);
@@ -152,8 +156,10 @@ export function calcRouteRevenue(params: {
   const paxRatio = Math.min(1, safeDelivered / safePaxDay);
   const isCompleted = safeDelivered >= safePaxDay;
 
-  const baseGross = Math.round(safeDelivered * ypp * crowdMultiplier);
-
+  const pricing = priceStrategyConfig(priceStrategy);
+  const baseGross = Math.round(
+    safeDelivered * ypp * crowdMultiplier * pricing.fareMultiplier,
+  );
   const completionBonus = isCompleted
     ? Math.round(baseGross * COMPLETION_BONUS)
     : 0;
@@ -165,12 +171,10 @@ export function calcRouteRevenue(params: {
     fuelPerNm,
   );
 
-  const cost = Math.round(fullCost * paxRatio);
+  const cost = fullCost;
 
-  // Important: WorldWide Rush style should usually feel rewarding.
-  // Cost exists, but it should not easily make early deliveries negative.
   const gross = baseGross + completionBonus;
-  const net = Math.max(0, gross - cost);
+  const net = gross - cost;
 
   return {
     gross,
@@ -252,4 +256,31 @@ export function fmtCashShort(v: number): string {
   if (abs >= 1_000) return sign + (abs / 1_000).toFixed(0) + "K";
 
   return sign + Math.round(abs).toLocaleString();
+}
+
+export function priceStrategyConfig(strategy?: PriceStrategy) {
+  if (strategy === "low") {
+    return {
+      label: "Low Fare",
+      fareMultiplier: 0.85,
+      demandMultiplier: 1.18,
+      popularityBonus: 1,
+    };
+  }
+
+  if (strategy === "premium") {
+    return {
+      label: "Premium",
+      fareMultiplier: 1.28,
+      demandMultiplier: 0.82,
+      popularityBonus: -1,
+    };
+  }
+
+  return {
+    label: "Standard",
+    fareMultiplier: 1,
+    demandMultiplier: 1,
+    popularityBonus: 0,
+  };
 }

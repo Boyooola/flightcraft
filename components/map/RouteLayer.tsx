@@ -123,6 +123,7 @@ export default function RouteLayer({
   const routes = useRoutes();
   const airports = useGameStore((s) => s.airports);
   const dayProgress = useDayProgress();
+  const updateDemand = useGameStore((s) => s.updateDemand);
 
   const [planes, setPlanes] = useState<PlaneState[]>([]);
   const [revPops, setRevPops] = useState<RevenuePop[]>([]);
@@ -215,21 +216,28 @@ export default function RouteLayer({
               const hub = hubs.find((h) => h.airport.iata === route.hub_iata);
 
               const share = computePlayerMarketShare(
-                hub?.trust!,
+                hub?.trust ?? 0,
                 aiAirlines,
-                liveDemand.origin.iata,
                 liveDemand.dest.iata,
               );
 
-              const effectiveDelivered = Math.floor(delieveredPax * share);
-              const lostToAI = delieveredPax - effectiveDelivered;
+              const effective = Math.floor(delieveredPax * share);
+              const lost = delieveredPax - effective;
 
-              addPaxDelivered(liveDemand.id, effectiveDelivered, lostToAI);
+              if (effective > 0) {
+                addPaxDelivered(liveDemand.id, effective, lost);
+              }
+
+              if (lost > 0) {
+                updateDemand(liveDemand.id, {
+                  ai_stolen_pax: (liveDemand.ai_stolen_pax ?? 0) + lost,
+                });
+              }
 
               const reward = calcInstantDeliveryReward({
                 distNm: route.total_dist_nm ?? liveDemand.dist_nm,
                 trustPct: hub?.trust ?? 0,
-                deliveredPax: effectiveDelivered,
+                deliveredPax: effective,
               });
 
               earnCash(reward);

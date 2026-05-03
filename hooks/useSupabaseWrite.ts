@@ -398,6 +398,7 @@ export function useCreateRoute() {
         total_dist_nm: routeDistNm,
         active: true,
         via_pax_ratio: null,
+        price_strategy: "standard",
       });
 
       // Multi-plane safe: demand stays pending/active while planes serve it.
@@ -929,6 +930,7 @@ export function useCreateCustomRoute() {
           total_dist_nm: totalDist,
           via_pax_ratio: viaPaxRatio,
           active: true,
+          price_strategy: "standard",
         });
       } else {
         const syntheticDemand: Demand = {
@@ -957,6 +959,7 @@ export function useCreateCustomRoute() {
           total_dist_nm: totalDist,
           via_pax_ratio: viaPaxRatio,
           active: true,
+          price_strategy: "standard",
         });
 
         demandToUse = syntheticDemand;

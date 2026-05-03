@@ -199,7 +199,6 @@ export function useRevenueTick() {
       const marketShare = computePlayerMarketShare(
         hub?.trust ?? 50,
         aiAirlines,
-        demand.origin.iata,
         demand.dest.iata,
       );
 

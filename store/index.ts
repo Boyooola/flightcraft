@@ -9,6 +9,7 @@ import type { DailyEvent } from "@/hooks/useDailyEvents";
 import type { AIAirline } from "@/lib/AIAirline";
 import type { GlobalContractState } from "@/lib/globalContracts";
 import type { Mission } from "@/lib/missions";
+import { PriceStrategy, priceStrategyConfig } from "@/lib/revenue";
 import { create } from "zustand";
 import { devtools, subscribeWithSelector } from "zustand/middleware";
 
@@ -134,6 +135,7 @@ export interface Route {
   total_dist_nm: number;
   via_pax_ratio: number | null; // O&D split: fraction of pax deplaning at via stop
   active: boolean;
+  price_strategy?: PriceStrategy;
 }
 
 export interface LedgerEntry {
@@ -518,37 +520,40 @@ export const useGameStore = create<GameStore>()(
 
           let popularity = d.popularity ?? 0;
 
-          // ── Growth logic ─────────────────────────────
-
-          if (ratio >= 0.9) {
-            popularity += 3;
-          } else if (ratio >= 0.75) {
-            popularity += 2;
-          } else if (ratio >= 0.55) {
-            popularity += 1;
-          } else if (ratio < 0.35) {
-            popularity -= 2;
-          } else if (ratio < 0.5) {
-            popularity -= 1;
-          }
-
-          // ── Clamp ───────────────────────────────────
+          if (ratio >= 0.9) popularity += 3;
+          else if (ratio >= 0.75) popularity += 2;
+          else if (ratio >= 0.55) popularity += 1;
+          else if (ratio < 0.35) popularity -= 2;
+          else if (ratio < 0.5) popularity -= 1;
 
           popularity = Math.max(-40, Math.min(80, popularity));
 
-          // ── Apply growth ────────────────────────────
-
           const multiplier = 1 + popularity / 100;
 
-          const newPax = Math.max(10, Math.round(base * multiplier));
+          const activeRoutesForDemand = get().routes.filter(
+            (r) => r.active && r.demand.id === d.id,
+          );
+
+          const strategy =
+            activeRoutesForDemand[0]?.price_strategy ?? "standard";
+
+          const pricing = priceStrategyConfig(strategy);
+
+          popularity += pricing.popularityBonus;
+
+          const newPax = Math.max(
+            10,
+            Math.round(base * multiplier * pricing.demandMultiplier),
+          );
 
           return {
             ...d,
             popularity,
             pax_day: newPax,
+            base_pax_day: newPax,
             delivered_pax_today: 0,
             ai_stolen_pax: 0,
-            status: newPax > 0 ? "pending" : ("served" as DemandStatus),
+            status: "pending" as DemandStatus,
           };
         });
 

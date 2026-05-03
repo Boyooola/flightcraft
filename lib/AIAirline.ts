@@ -402,24 +402,41 @@ export function getNewAIRouteConflicts(
 
 export function computePlayerMarketShare(
   playerTrust: number,
-  aiAirlines: AIAirline[],
+  aiAirlines: any[],
   origin: string,
   dest: string,
 ): number {
-  // Check which AIs operate this corridor (seeded, deterministic)
   const competitors = aiAirlines.filter((ai) => {
-    const operatesRoute =
-      seedHash(ai.seed, "ai", ai.index, "route", origin, dest) % 100;
-    // Probability of AI operating this route scales with their route count
-    return operatesRoute < Math.min(60, ai.routeCount * 3);
+    const destinationMarket =
+      seedHash(ai.seed, "ai", ai.index, "destination", dest) % 100 <
+      Math.min(70, ai.routeCount * 4);
+
+    const exactCorridor =
+      seedHash(ai.seed, "ai", ai.index, "route", origin, dest) % 100 <
+      Math.min(45, ai.routeCount * 2);
+
+    return destinationMarket || exactCorridor;
   });
 
-  if (competitors.length === 0) return 1.0; // no competition
+  if (competitors.length === 0) return 1.0;
 
-  const playerWeight = playerTrust;
-  const totalWeight =
-    playerWeight + competitors.reduce((s, ai) => s + ai.trust, 0);
-  return playerWeight / Math.max(1, totalWeight);
+  const safePlayerTrust = Math.max(20, playerTrust);
+  const playerWeight = safePlayerTrust + 35;
+
+  const totalAIWeight = competitors.reduce((sum, ai) => {
+    const difficultyBonus =
+      ai.difficulty === "aggressive"
+        ? 1.25
+        : ai.difficulty === "balanced"
+          ? 1.0
+          : 0.75;
+
+    return sum + ai.trust * difficultyBonus;
+  }, 0);
+
+  const share = playerWeight / Math.max(1, playerWeight + totalAIWeight);
+
+  return Math.max(0.35, Math.min(1, share));
 }
 
 // ─────────────────────────────────────────────────────────────────
