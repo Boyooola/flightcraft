@@ -8,6 +8,7 @@ import { GameAlert, useGameAlert } from "@/components/ui/GameAlert";
 import { Colors, Radius, Spacing } from "@/constants/theme";
 import { getCurrentUser, useAuth } from "@/hooks/useAuth";
 import { useGameSounds } from "@/hooks/useGameSounds";
+import { openPlayStorePage } from "@/hooks/useRateUs";
 import { useTabBarHeight } from "@/hooks/useSheetLayout";
 import { fmtCash } from "@/lib/revenue";
 import { supabase } from "@/lib/supabase";
@@ -421,7 +422,7 @@ export default function SettingsSheet() {
         <SettingRow
           icon="information-circle-outline"
           label="Version"
-          sublabel="0.3.0"
+          sublabel="0.2.0"
           color={Colors.dim}
         />
         {/* <Divider />
@@ -432,6 +433,15 @@ export default function SettingsSheet() {
           onPress={() => openSheet("privacy-policy")}
           color={Colors.green}
         /> */}
+
+        <Divider />
+        <SettingRow
+          icon="star-outline"
+          label="Rate Flightcraft"
+          sublabel="Enjoying the game? Leave a review ★"
+          onPress={() => openPlayStorePage()}
+          color={Colors.amber}
+        />
       </View>
 
       <GameAlert ref={gameAlert.ref} />
