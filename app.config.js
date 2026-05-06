@@ -36,7 +36,7 @@ export default {
         foregroundImage: "./assets/images/adaptive-icon.png",
         backgroundColor: "#04090f",
       },
-      permissions: [],
+      permissions: ["com.android.vending.BILLING"],
       blockedPermissions: ["android.permission.RECORD_AUDIO"],
     },
 
