@@ -554,7 +554,6 @@ export const useGameStore = create<GameStore>()(
           let popularity = d.popularity ?? 0;
 
           if (hasActiveRoute) {
-            // Popularity only changes when a plane is actually serving the route
             const ratio = base > 0 ? delivered / base : 0;
             const strategy =
               routes.find((r) => r.active && r.demand.id === d.id)
@@ -575,10 +574,26 @@ export const useGameStore = create<GameStore>()(
             popularity = Math.max(-40, Math.min(80, popularity));
 
             const multiplier = 1 + popularity / 100;
-            const newPax = Math.max(
-              Math.max(20, Math.round(base * 0.3)), // never below 30% of base or 20 pax
-              Math.round(base * multiplier * pricing.demandMultiplier),
+            const computed = Math.round(
+              base * multiplier * pricing.demandMultiplier,
             );
+            const floor = Math.max(20, Math.round(base * 0.3));
+
+            // If player didn't clear the queue, demand should not grow.
+            // Passengers who couldn't get a seat find other ways — demand shrinks.
+            // If cleared → demand can grow normally.
+            // If not cleared → demand can only stay or shrink (computed may drop due to popularity).
+            const didClear = delivered >= d.base_pax_day;
+            const newPax = didClear
+              ? Math.max(floor, computed) // cleared → grow freely
+              : Math.max(
+                  floor,
+                  Math.min(
+                    d.base_pax_day,
+                    computed - Math.round(d.base_pax_day * 0.05),
+                  ),
+                );
+            // not cleared → shrink by up to 5%/day + popularity effect, never grow
 
             return {
               ...d,
@@ -591,8 +606,7 @@ export const useGameStore = create<GameStore>()(
               status: "pending" as DemandStatus,
             };
           } else {
-            // No active route — keep generating pax at base rate, no popularity change.
-            // Slowly recover toward base_pax_day if below it.
+            // No active route — slowly recover toward base_pax_day.
             const recovered = Math.min(base, Math.round(d.base_pax_day * 1.02));
 
             return {
