@@ -111,7 +111,7 @@ export default function SurgeIndicator() {
         }),
       ]).start();
     }
-  }, [hasEffect]);
+  }, [hasEffect, opacity, slideY]);
 
   // Slide out when day advances (store clears event + wave on new day)
   useEffect(() => {
