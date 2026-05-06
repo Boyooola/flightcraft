@@ -371,6 +371,141 @@ function ArrivalRow({
   );
 }
 
+// ─────────────────────────────────────────────────────────────────
+// CONGESTION HELPER
+// Analyses the situation and gives specific actionable suggestions.
+// ─────────────────────────────────────────────────────────────────
+
+function CongestionHelper({
+  hubDemands,
+  routes,
+  ownedPlanes,
+  color,
+  onCreateRoute,
+}: {
+  hubDemands: Demand[];
+  routes: Route[];
+  ownedPlanes: ReturnType<typeof useOwnedPlanes>;
+  color: string;
+  onCreateRoute: (d: Demand) => void;
+}) {
+  const idlePlanes = ownedPlanes.filter((p) => !p.route_id);
+
+  // Demands with NO active route at all
+  const unservedDemands = hubDemands.filter(
+    (d) => !routes.some((r) => r.active && r.demand.id === d.id),
+  );
+
+  // Demands with a route but capacity < pax_day (single plane can't keep up)
+  const undersizedDemands = hubDemands
+    .filter((d) => routes.some((r) => r.active && r.demand.id === d.id))
+    .map((d) => {
+      const routesForDemand = routes.filter(
+        (r) => r.active && r.demand.id === d.id,
+      );
+      const totalCap = routesForDemand.reduce(
+        (sum, r) => sum + r.plane.plane_model.pax_capacity,
+        0,
+      );
+      return { demand: d, totalCap, gap: d.base_pax_day - totalCap };
+    })
+    .filter((x) => x.gap > 30); // meaningfully undersized
+
+  const suggestions: {
+    icon: string;
+    text: string;
+    cta?: string;
+    demand?: Demand;
+  }[] = [];
+
+  if (unservedDemands.length > 0 && idlePlanes.length > 0) {
+    const d = unservedDemands[0];
+    suggestions.push({
+      icon: "airplane-outline",
+      text: `${idlePlanes.length} idle plane${idlePlanes.length > 1 ? "s" : ""} — assign to ${d.dest.iata} (${d.base_pax_day} pax/day unserved)`,
+      cta: "Assign now",
+      demand: d,
+    });
+  } else if (unservedDemands.length > 0) {
+    suggestions.push({
+      icon: "cart-outline",
+      text: `${unservedDemands.length} demand${unservedDemands.length > 1 ? "s" : ""} have no plane — buy a plane and assign it`,
+    });
+  }
+
+  if (undersizedDemands.length > 0) {
+    const worst = undersizedDemands.sort((a, b) => b.gap - a.gap)[0];
+    suggestions.push({
+      icon: "people-outline",
+      text: `${worst.demand.dest.iata} needs ${worst.gap} more seats/day — add a second plane`,
+      cta: idlePlanes.length > 0 ? "Add plane" : undefined,
+      demand: idlePlanes.length > 0 ? worst.demand : undefined,
+    });
+  }
+
+  if (suggestions.length === 0) {
+    // All demands served and sized — hub itself is just saturated
+    suggestions.push({
+      icon: "add-circle-outline",
+      text: "All demands are served — buy a larger hub tier to increase capacity",
+    });
+  }
+
+  return (
+    <View style={ch.wrap}>
+      <Text style={ch.heading}>What to do</Text>
+      {suggestions.map((s, i) => (
+        <View key={i} style={ch.row}>
+          <View style={[ch.iconWrap, { backgroundColor: color + "18" }]}>
+            <Ionicons name={s.icon as any} size={13} color={color} />
+          </View>
+          <Text style={ch.text} numberOfLines={3}>
+            {s.text}
+          </Text>
+          {s.cta && s.demand && (
+            <TouchableOpacity
+              style={[ch.cta, { borderColor: color + "55" }]}
+              onPress={() => onCreateRoute(s.demand!)}
+              activeOpacity={0.8}
+            >
+              <Text style={[ch.ctaTxt, { color }]}>{s.cta}</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      ))}
+    </View>
+  );
+}
+
+const ch = StyleSheet.create({
+  wrap: { marginTop: Spacing.sm, gap: Spacing.xs ?? 6 },
+  heading: {
+    fontSize: 9,
+    fontWeight: "900",
+    color: Colors.dim,
+    letterSpacing: 0.6,
+    marginBottom: 2,
+  },
+  row: { flexDirection: "row", alignItems: "center", gap: Spacing.sm },
+  iconWrap: {
+    width: 26,
+    height: 26,
+    borderRadius: 6,
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+  },
+  text: { flex: 1, fontSize: 11, color: Colors.muted, lineHeight: 15 },
+  cta: {
+    borderWidth: 1,
+    borderRadius: Radius.md,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    flexShrink: 0,
+  },
+  ctaTxt: { fontSize: 10, fontWeight: "700" },
+});
+
 export default function AirportSheet() {
   const airport = useSelectedAirport();
   const hubs = useHubs();
@@ -878,6 +1013,13 @@ export default function AirportSheet() {
                     on all rewards
                   </Text>
                 )}
+                <CongestionHelper
+                  hubDemands={hubDemands}
+                  routes={routes}
+                  ownedPlanes={ownedPlanes}
+                  color={cfg.color}
+                  onCreateRoute={handleCreateRoute}
+                />
               </View>
             </View>
           );
