@@ -130,7 +130,7 @@ export default function SurgeIndicator() {
       ]).start();
     }
     prevDay.current = day;
-  }, [day]);
+  }, [day, opacity, slideY]);
 
   // Never return null — let opacity handle visibility.
   // Returning null while hasEffect is true kills the animation.
