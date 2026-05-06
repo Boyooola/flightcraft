@@ -132,7 +132,7 @@ function scoreDemandForWave(
   wave: DemandWave,
   preferredHubIata?: string,
 ): number {
-  let score = demand.pax_day;
+  let score = demand.base_pax_day ?? 0;
 
   if (wave.kind === "business") {
     if (demand.haul === "medium") score += 400;
@@ -194,7 +194,7 @@ export function applyDemandWave(params: {
 
   const updates: DemandWaveUpdate[] = ranked
     .map(({ demand }) => {
-      const oldPaxDay = demand.pax_day;
+      const oldPaxDay = demand.base_pax_day ?? 0;
       const newPaxDay = Math.max(
         oldPaxDay + 1,
         Math.round(oldPaxDay * wave.multiplier),

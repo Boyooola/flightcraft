@@ -7,15 +7,18 @@
  */
 
 import { Colors, Radius, Spacing } from "@/constants/theme";
-import { calcRouteRevenue, fmtCash } from "@/lib/revenue";
+import { fmtCash } from "@/lib/revenue";
 import {
+  useActiveDemandWave,
   useAirline,
   useCash,
+  useDailyEvent,
   useDay,
   useDemands,
   useGameStore,
   useHubs,
   useRoutes,
+  useTodayCash,
 } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -52,6 +55,9 @@ export default function TopHUD() {
   const routes = useRoutes();
   const hubs = useHubs();
   const updateAirline = useGameStore((s) => s.updateAirline);
+  const dailyEvent = useDailyEvent();
+  const activeDemandWave = useActiveDemandWave();
+  const todayCash = useTodayCash();
 
   const color = airline?.color ?? Colors.sky;
   const speed = airline?.speed ?? 1;
@@ -62,35 +68,17 @@ export default function TopHUD() {
       ? (StatusBar.currentHeight ?? insets.top ?? 24)
       : insets.top;
 
+  // Combined revenue multiplier — must match RouteLayer exactly
+  const globalRevMul =
+    (dailyEvent?.revenueMultiplier ?? 1.0) *
+    (activeDemandWave?.wave.revenueMultiplier ?? 1.0);
+
   const activeRoutes = useMemo(
     () => routes.filter((route) => route.active),
     [routes],
   );
 
-  const todayReward = useMemo(() => {
-    return activeRoutes.reduce((total, route) => {
-      const demand = demands.find((d) => d.id === route.demand.id);
-      if (!demand) return total;
-
-      const deliveredPax = demand.delivered_pax_today ?? 0;
-      if (deliveredPax <= 0) return total;
-
-      const hub = hubs.find((h) => h.airport.iata === route.hub_iata);
-      const plane = route.plane.plane_model;
-
-      const result = calcRouteRevenue({
-        distNm: route.total_dist_nm ?? demand.dist_nm,
-        speedKts: plane.speed_kts,
-        trustPct: hub?.trust ?? 0,
-        deliveredPax,
-        paxDay: demand.pax_day,
-        costPerSector: plane.cost_per_sector ?? 500,
-        fuelPerNm: plane.fuel_per_nm ?? 2,
-      });
-
-      return total + result.net;
-    }, 0);
-  }, [activeRoutes, demands, hubs]);
+  const todayReward = todayCash;
 
   const rewardTicker = useRef(new Animated.Value(0)).current;
   const [displayedReward, setDisplayedReward] = useState(0);
@@ -166,7 +154,12 @@ export default function TopHUD() {
             style={[
               s.income,
               {
-                color: todayReward > 0 ? Colors.green : Colors.dim,
+                color:
+                  todayReward > 0
+                    ? Colors.green
+                    : todayReward < 0
+                      ? Colors.red
+                      : Colors.dim,
                 transform: [{ scale: rewardScale }],
               },
             ]}
@@ -174,7 +167,9 @@ export default function TopHUD() {
           >
             {todayReward > 0
               ? `+${fmtCash(displayedReward || todayReward)}`
-              : "$0"}
+              : todayReward < 0
+                ? fmtCash(displayedReward || todayReward)
+                : "$0"}
           </Animated.Text>
         </View>
 

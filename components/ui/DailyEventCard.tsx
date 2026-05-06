@@ -31,7 +31,7 @@ const TYPE_COLOR = {
 export default function DailyEventCard() {
   const hudH = useHudHeight();
   const dailyEvent = useDailyEvent();
-  const setDailyEvent = useGameStore((s) => s.setDailyEvent);
+  const day = useGameStore((s) => s.airline?.day ?? 0);
 
   const slideY = useRef(new Animated.Value(-120)).current;
   const opacity = useRef(new Animated.Value(0)).current;
@@ -40,6 +40,7 @@ export default function DailyEventCard() {
   const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const progAnim = useRef<Animated.CompositeAnimation | null>(null);
   const [shown, setShown] = useState(false);
+  const shownForDay = useRef<number>(-1);
 
   const top = hudH + Spacing.sm;
 
@@ -64,8 +65,10 @@ export default function DailyEventCard() {
         useNativeDriver: true,
       }),
     ]).start(() => {
+      // Only hide the card locally — DO NOT clear store.
+      // RevenueModifierBadge and SurgeIndicator need dailyEvent
+      // to persist until the day advances.
       setShown(false);
-      setDailyEvent(null);
       slideY.setValue(-120);
       opacity.setValue(0);
       scale.setValue(0.96);
@@ -74,7 +77,10 @@ export default function DailyEventCard() {
   }
 
   useEffect(() => {
-    if (!dailyEvent || shown) return;
+    if (!dailyEvent) return;
+    // Show once per day — track by day number not by event id
+    if (shownForDay.current === day) return;
+    shownForDay.current = day;
     setShown(true);
 
     Animated.parallel([
@@ -175,6 +181,17 @@ export default function DailyEventCard() {
           >
             <Ionicons name={trendIcon as any} size={11} color={color} />
             <Text style={[s.effectTxt, { color }]}>{dailyEvent.effect}</Text>
+            {dailyEvent.revenueMultiplier != null &&
+              dailyEvent.revenueMultiplier !== 1.0 && (
+                <View style={[s.mulBadge, { backgroundColor: color + "22" }]}>
+                  <Text style={[s.mulTxt, { color }]}>
+                    {dailyEvent.revenueMultiplier > 1
+                      ? `+${Math.round((dailyEvent.revenueMultiplier - 1) * 100)}%`
+                      : `${Math.round((dailyEvent.revenueMultiplier - 1) * 100)}%`}
+                    {" revenue"}
+                  </Text>
+                </View>
+              )}
           </View>
         </View>
 
@@ -271,6 +288,16 @@ const s = StyleSheet.create({
   },
   effectTxt: {
     fontSize: 10,
+    fontWeight: "900",
+  },
+  mulBadge: {
+    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    marginLeft: 4,
+  },
+  mulTxt: {
+    fontSize: 11,
     fontWeight: "900",
   },
   progress: {

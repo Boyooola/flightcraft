@@ -4,12 +4,19 @@ import { GameAlert, useGameAlert } from "@/components/ui/GameAlert";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useHaptics } from "@/hooks/useHaptics";
 import { useDeactivateRoute } from "@/hooks/useSupabaseWrite";
+import { hubCrowdingLevel } from "@/lib/demands";
+import { congestionEfficiencyMultiplier } from "@/lib/hubCongestion";
 import {
   demandFlowStatus,
   remainingPax,
   waitingPaxForDemand,
 } from "@/lib/passengerFlow";
-import { calcRouteRevenue, fmtCash } from "@/lib/revenue";
+import { passengerTypeBreakdown } from "@/lib/passengerTypes";
+import {
+  calcRouteRevenue,
+  computePriceElasticity,
+  fmtCash,
+} from "@/lib/revenue";
 import { supabase } from "@/lib/supabase";
 import type { Demand, Route } from "@/store";
 import {
@@ -66,7 +73,7 @@ const PRICE_OPTIONS: {
   },
 ];
 
-function priceStrategyConfig(strategy?: PriceStrategy) {
+function localPricingConfig(strategy?: PriceStrategy) {
   if (strategy === "low") {
     return {
       fareMultiplier: 0.85,
@@ -75,7 +82,6 @@ function priceStrategyConfig(strategy?: PriceStrategy) {
       label: "Low Fare",
     };
   }
-
   if (strategy === "premium") {
     return {
       fareMultiplier: 1.28,
@@ -84,7 +90,6 @@ function priceStrategyConfig(strategy?: PriceStrategy) {
       label: "Premium",
     };
   }
-
   return {
     fareMultiplier: 1,
     demandMultiplier: 1,
@@ -119,6 +124,10 @@ type RouteGroup = {
   totalReward: number;
   planeLabel: string;
   priceStrategy: PriceStrategy;
+  utilizationLabel: string;
+  utilizationPct: number;
+  congestionLevel: string;
+  congestionMultiplier: number;
 };
 
 function getLiveDemand(route: Route, liveDemands: Demand[]) {
@@ -264,7 +273,7 @@ function RouteGroupRow({
   const isCleared = group.status.label === "CLEARED";
   const accent = group.status.color;
   const growth = routeGrowthLabel(group.demand);
-  const pricing = priceStrategyConfig(group.priceStrategy);
+  const pricing = localPricingConfig(group.priceStrategy);
 
   return (
     <TouchableOpacity
@@ -343,6 +352,28 @@ function RouteGroupRow({
             {group.deliveredPax.toLocaleString()} /{" "}
             {group.targetPax.toLocaleString()} pax
           </Text>
+
+          {(() => {
+            const mix = passengerTypeBreakdown({
+              businessPct: group.demand.business_pct,
+              leisurePct: group.demand.leisure_pct,
+            });
+            return mix.businessPct > 0 ? (
+              <>
+                <Text style={rr.dot}>•</Text>
+                <Text
+                  style={[
+                    rr.paxMix,
+                    {
+                      color: mix.businessPct >= 35 ? Colors.amber : Colors.dim,
+                    },
+                  ]}
+                >
+                  {mix.businessPct}% biz
+                </Text>
+              </>
+            ) : null;
+          })()}
         </View>
 
         <View style={rr.bottom}>
@@ -372,9 +403,13 @@ function RouteGroupRow({
         </View>
 
         <View style={rr.hintRow}>
-          <Text style={rr.hint}>
+          <Text style={rr.hint} numberOfLines={1}>
             {group.waitingPax.toLocaleString()} waiting ·{" "}
-            {group.totalCapacity.toLocaleString()} seats
+            {group.totalCapacity.toLocaleString()} seats · Util{" "}
+            {group.utilizationPct}%
+            {group.congestionLevel !== "normal"
+              ? ` · Cong -${Math.round((1 - group.congestionMultiplier) * 100)}%`
+              : ""}
           </Text>
 
           <View style={rr.growthWrap}>
@@ -409,7 +444,7 @@ function RouteGroupRow({
           <View style={rr.priceButtons}>
             {PRICE_OPTIONS.map((option) => {
               const active = option.key === group.priceStrategy;
-              const optionConfig = priceStrategyConfig(option.key);
+              const optionConfig = localPricingConfig(option.key);
 
               return (
                 <TouchableOpacity
@@ -489,7 +524,7 @@ export default function RoutesSheet() {
       const first = groupRoutes[0];
       const demand = getLiveDemand(first, liveDemands);
       const deliveredPax = demand.delivered_pax_today ?? 0;
-      const targetPax = demand.pax_day ?? 0;
+      const targetPax = demand.base_pax_day ?? 0;
       const waitingPax = waitingPaxForDemand(demand, dayProgress);
       const leftToMove = remainingPax(demand);
       const totalCapacity = groupRoutes.reduce(
@@ -514,23 +549,52 @@ export default function RoutesSheet() {
       const hub = hubs.find((h) => h.airport.iata === first.hub_iata);
 
       const priceStrategy = getRoutePriceStrategy(first);
-      const pricing = priceStrategyConfig(priceStrategy);
+      const dist = first.total_dist_nm ?? demand.dist_nm;
+
+      // Congestion — computed once per group, used in reward + display
+      const hubCrowding = hub
+        ? hubCrowdingLevel(first.hub_iata, liveDemands, hub.airport)
+        : null;
+      const congestionMul = congestionEfficiencyMultiplier(hubCrowding?.level);
+      const priceElasticity =
+        demand.price_elasticity ?? computePriceElasticity(dist);
+
+      // Representative result from first plane — used for utilization display
+      const firstPlane = first.plane.plane_model;
+      const representativeResult = calcRouteRevenue({
+        distNm: dist,
+        speedKts: firstPlane.speed_kts,
+        trustPct: hub?.trust ?? 0,
+        deliveredPax,
+        paxDay: demand.base_pax_day,
+        costPerSector: firstPlane.cost_per_sector ?? 500,
+        fuelPerNm: firstPlane.fuel_per_nm ?? 2,
+        priceStrategy,
+        priceElasticity,
+        congestionMultiplier: congestionMul,
+        businessPct: demand.business_pct ?? 0.25,
+        leisurePct: demand.leisure_pct ?? 0.75,
+      });
 
       const totalReward = groupRoutes.reduce((sum, route) => {
         const p = route.plane.plane_model;
-        const dist = route.total_dist_nm ?? demand.dist_nm;
 
         const result = calcRouteRevenue({
           distNm: dist,
           speedKts: p.speed_kts,
           trustPct: hub?.trust ?? 0,
           deliveredPax,
-          paxDay: demand.pax_day,
+          paxDay: demand.base_pax_day,
           costPerSector: p.cost_per_sector ?? 500,
           fuelPerNm: p.fuel_per_nm ?? 2,
+          priceStrategy,
+          priceElasticity,
+          congestionMultiplier: congestionMul,
+          businessPct: demand.business_pct ?? 0.25,
+          leisurePct: demand.leisure_pct ?? 0.75,
         });
 
-        return sum + Math.round(result.net * pricing.fareMultiplier);
+        return sum + result.gross;
       }, 0);
 
       return {
@@ -539,7 +603,7 @@ export default function RoutesSheet() {
         routes: groupRoutes,
         hub_iata: first.hub_iata,
         via_iata: first.via_iata,
-        total_dist_nm: first.total_dist_nm ?? demand.dist_nm,
+        total_dist_nm: dist,
         deliveredPax,
         targetPax,
         waitingPax,
@@ -551,6 +615,12 @@ export default function RoutesSheet() {
         totalReward,
         planeLabel: buildPlaneLabel(groupRoutes),
         priceStrategy,
+        utilizationLabel: representativeResult.utilization?.label ?? "Healthy",
+        utilizationPct: Math.round(
+          (representativeResult.utilization?.utilization ?? 1) * 100,
+        ),
+        congestionLevel: hubCrowding?.level ?? "normal",
+        congestionMultiplier: congestionMul,
       };
     });
   }, [activeRoutes, liveDemands, dayProgress, hubs]);
@@ -965,6 +1035,7 @@ const rr = StyleSheet.create({
     alignItems: "center",
     gap: 4,
   },
+  paxMix: { fontSize: 10, fontWeight: "700" },
   aiRow: {
     flexDirection: "row",
     alignItems: "center",

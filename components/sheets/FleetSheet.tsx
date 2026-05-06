@@ -418,7 +418,7 @@ export default function FleetSheet() {
 
   const pendingDemands = demands.filter((d) => d.status === "pending");
   const waitingPax = pendingDemands.reduce((sum, d) => {
-    return sum + Math.max(0, d.pax_day - (d.delivered_pax_today ?? 0));
+    return sum + Math.max(0, d.base_pax_day - (d.delivered_pax_today ?? 0));
   }, 0);
 
   const totalCapacity = ownedPlanes.reduce(

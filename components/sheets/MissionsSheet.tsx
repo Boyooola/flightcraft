@@ -113,8 +113,8 @@ function useMissionProgress(mission: Mission) {
 
       case "fill_rate": {
         const best = demands.reduce((max, d) => {
-          if (d.pax_day <= 0) return max;
-          return Math.max(max, (d.delivered_pax_today ?? 0) / d.pax_day);
+          if (d.base_pax_day <= 0) return max;
+          return Math.max(max, (d.delivered_pax_today ?? 0) / d.base_pax_day);
         }, 0);
 
         const progress = Math.min(1, best / ((t.fillTarget ?? 100) / 100));

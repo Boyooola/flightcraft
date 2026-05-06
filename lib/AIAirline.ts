@@ -2,17 +2,12 @@
  * lib/AIAirline.ts
  *
  * AIAirline type + deterministic state computation.
- *
- * AI airlines don't run a real tick loop — their state is computed
- * from (seed + day) on demand. Same inputs → same outputs always.
- *
- * Growth model:
- *   - Each AI follows a timeline: buy hub → buy plane → open route → expand
- *   - Timeline is seeded so each AI expands differently
- *   - Revenue is calculated from real calcRouteRevenue using AI routes
- *   - Difficulty controls trust, expansion speed, and aggressiveness
  */
 
+import {
+  passengerElasticityMultiplier,
+  passengerMixFromDistance,
+} from "@/lib/passengerTypes";
 import { calcRouteRevenue } from "@/lib/revenue";
 import { seedHash } from "@/lib/seed";
 import { Demand } from "@/store";
@@ -26,10 +21,8 @@ export interface AIAirline {
   name: string;
   color: string;
   difficulty: "passive" | "balanced" | "aggressive";
-  seed: string; // game seed
-  index: number; // 0-4 (which AI this is)
-
-  // Computed state (from day)
+  seed: string;
+  index: number;
   day: number;
   cash: number;
   loan: number;
@@ -37,15 +30,11 @@ export interface AIAirline {
   score: number;
   demandScore: number;
   reputation: number;
-  trust: number; // 0-100, affects market share
+  trust: number;
   hubIatas: string[];
   routeCount: number;
   planeCount: number;
 }
-
-// ─────────────────────────────────────────────────────────────────
-// AI AIRLINE NAME + COLOR POOL
-// ─────────────────────────────────────────────────────────────────
 
 const AI_NAMES = [
   "SkyAsia Airways",
@@ -63,61 +52,52 @@ const AI_NAMES = [
 ];
 
 const AI_COLORS = [
-  "#ef4444", // red
-  "#8b5cf6", // purple
-  "#f59e0b", // amber
-  "#10b981", // emerald
-  "#3b82f6", // blue
-  "#ec4899", // pink
-  "#14b8a6", // teal
-  "#f97316", // orange
+  "#ef4444",
+  "#8b5cf6",
+  "#f59e0b",
+  "#10b981",
+  "#3b82f6",
+  "#ec4899",
+  "#14b8a6",
+  "#f97316",
 ];
-
-// ─────────────────────────────────────────────────────────────────
-// DIFFICULTY PARAMS
-// ─────────────────────────────────────────────────────────────────
 
 const DIFFICULTY_PARAMS = {
   passive: {
-    growthMultiplier: 0.6,
-    trust: 40,
+    growthMultiplier: 0.35,
+    trust: 30,
     reputation: 45,
     expansionInterval: 8,
-    startingCash: 2_000_000,
-    startingRoutes: 2, // pre-existing routes on day 1
+    startingCash: 1_000_000,
+    startingRoutes: 2,
     startingHubs: 1,
   },
   balanced: {
-    growthMultiplier: 1.0,
-    trust: 60,
+    growthMultiplier: 0.6,
+    trust: 45,
     reputation: 60,
     expansionInterval: 5,
-    startingCash: 3_000_000,
+    startingCash: 1_500_000,
     startingRoutes: 4,
     startingHubs: 1,
   },
   aggressive: {
-    growthMultiplier: 1.5,
-    trust: 80,
+    growthMultiplier: 0.9,
+    trust: 65,
     reputation: 75,
     expansionInterval: 3,
-    startingCash: 4_000_000,
+    startingCash: 2_000_000,
     startingRoutes: 6,
     startingHubs: 2,
   },
 };
 
-/**
- * Picks AI hub airports from the live airports store.
- * Prefers large/mega airports (high pax_annual_m) seeded deterministically.
- */
 export function pickAIHubs(
   gameSeed: string,
   aiIndex: number,
   count: number,
   airports: import("@/store").Airport[],
 ): string[] {
-  // Rank airports — prefer pax_annual_m, fall back to tier ordering
   const tierScore: Record<string, number> = {
     mega: 100,
     major: 70,
@@ -132,10 +112,10 @@ export function pickAIHubs(
       iata: a.iata,
       score:
         a.pax_annual_m != null
-          ? a.pax_annual_m * 10 // real data wins
-          : (tierScore[a.tier ?? "regional"] ?? 10), // fall back to tier
+          ? a.pax_annual_m * 10
+          : (tierScore[a.tier ?? "regional"] ?? 10),
     }))
-    .filter((a) => a.score >= 30) // major+ airports only (tier or by pax)
+    .filter((a) => a.score >= 30)
     .sort((a, b) => b.score - a.score)
     .slice(0, 80);
 
@@ -153,10 +133,6 @@ export function pickAIHubs(
   return picked;
 }
 
-/**
- * Build routes for an AI airline — used by both AIRouteLayer (visual)
- * and market share calculation. Single source of truth.
- */
 export function buildAIRoutes(
   ai: AIAirline,
   airports: import("@/store").Airport[],
@@ -177,7 +153,6 @@ export function buildAIRoutes(
     local: 5,
   };
 
-  // Destination pool — large+ airports, ranked by traffic
   const pool = [...airports]
     .map((a) => ({
       airport: a,
@@ -233,7 +208,7 @@ export function buildAIRoutes(
 }
 
 // ─────────────────────────────────────────────────────────────────
-// DETERMINISTIC AI STATE — computed from game seed + day
+// DETERMINISTIC AI STATE
 // ─────────────────────────────────────────────────────────────────
 
 export function computeAIState(
@@ -246,25 +221,20 @@ export function computeAIState(
   const params = DIFFICULTY_PARAMS[difficulty];
   const aiSeed = `${gameSeed}-ai-${index}`;
 
-  // Identity — stable across all days
   const name = AI_NAMES[seedHash(aiSeed, "name") % AI_NAMES.length];
   const color = AI_COLORS[seedHash(aiSeed, "color") % AI_COLORS.length];
 
-  // How many expansion steps has this AI taken by day N?
   const steps = Math.floor(day / params.expansionInterval);
-
-  // Hubs — starts with startingHubs, gains more over time
   const maxHubs = Math.min(10, params.startingHubs + Math.floor(steps / 2));
   const hubIatas = pickAIHubs(aiSeed, index, maxHubs, airports);
-
-  // Routes — starts with startingRoutes on day 1, grows each step
   const routeCount = Math.min(50, params.startingRoutes + steps);
   const planeCount = Math.max(1, Math.floor(routeCount * 0.8));
 
-  // Revenue model — estimate daily net from routes
-  // AI has generic routes at average distance 2000nm, 200 pax/day
+  // Passenger mix based on AI's typical route distance
   const avgDistNm = 1500 + (seedHash(aiSeed, "avgdist") % 3000);
   const avgPaxDay = 80 + (seedHash(aiSeed, "avgpax") % 200);
+  const aiMix = passengerMixFromDistance(avgDistNm);
+
   const dailyNetPerRoute = calcRouteRevenue({
     distNm: avgDistNm,
     speedKts: 450,
@@ -273,21 +243,18 @@ export function computeAIState(
     paxDay: avgPaxDay,
     costPerSector: 400,
     fuelPerNm: 2.0,
+    // Passenger mix — business-heavy AI routes yield more per pax
+    businessPct: aiMix.businessPct,
+    leisurePct: aiMix.leisurePct,
   }).net;
 
-  // Accumulate cash over days
   const dailyNet = dailyNetPerRoute * routeCount * params.growthMultiplier;
   const cash = params.startingCash + Math.round(dailyNet * day);
   const loan = Math.max(0, params.startingCash * 0.5 - day * 5000);
   const netWorth = Math.max(0, cash - loan);
 
-  // Demand score grows with routes
   const demandScore = routeCount;
-
-  // Reputation — starts at params level, grows slowly
   const reputation = Math.min(100, params.reputation + Math.floor(day * 0.1));
-
-  // Score — same formula as calcScore in LeaderboardSheet
   const score = Math.round(
     netWorth * 0.35 + demandScore * 1000 * 0.35 + reputation * 500 * 0.15,
   );
@@ -315,34 +282,23 @@ export function computeAIState(
 
 // ─────────────────────────────────────────────────────────────────
 // AI RESPONDS TO PLAYER
-//
-// If the player has many routes in a region, aggressive AI
-// will expand there faster. Simulates competitive response.
 // ─────────────────────────────────────────────────────────────────
 
 export function computeAIResponseMultiplier(
   ai: AIAirline,
   playerHubIatas: string[],
-  airports: import("@/store").Airport[],
 ): number {
   if (ai.difficulty !== "aggressive") return 1.0;
-
-  // Count overlap between player hubs and AI hubs
   const sharedHubs = playerHubIatas.filter((iata) =>
     ai.hubIatas.includes(iata),
   ).length;
-
-  // More overlap → AI is more aggressive (expands faster, higher trust)
-  if (sharedHubs >= 3) return 1.5; // heavy competition
-  if (sharedHubs >= 1) return 1.25; // some competition
+  if (sharedHubs >= 3) return 1.5;
+  if (sharedHubs >= 1) return 1.25;
   return 1.0;
 }
 
 // ─────────────────────────────────────────────────────────────────
 // COMPETITION NOTIFICATION DATA
-//
-// Returns routes where AI JUST started competing with the player.
-// Compares previous AI state (day-1) with current.
 // ─────────────────────────────────────────────────────────────────
 
 export function getNewAIRouteConflicts(
@@ -370,13 +326,11 @@ export function getNewAIRouteConflicts(
     airports,
   );
 
-  // Did AI gain any new routes today?
   if (current.routeCount <= previous.routeCount) return [];
 
   const aiSeed = `${gameSeed}-ai-${aiIndex}`;
   const conflicts: { aiName: string; origin: string; dest: string }[] = [];
 
-  // Check if any new AI routes overlap with player's demands
   for (const demand of playerDemands) {
     const operatesNow =
       seedHash(aiSeed, "route", demand.origin.iata, demand.dest.iata) % 100 <
@@ -395,9 +349,9 @@ export function getNewAIRouteConflicts(
 
   return conflicts;
 }
-//
-// When AI operates on the same corridor as the player,
-// pax is split by trust weighting.
+
+// ─────────────────────────────────────────────────────────────────
+// MARKET SHARE
 // ─────────────────────────────────────────────────────────────────
 
 export function computePlayerMarketShare(
@@ -410,11 +364,9 @@ export function computePlayerMarketShare(
     const destinationMarket =
       seedHash(ai.seed, "ai", ai.index, "destination", dest) % 100 <
       Math.min(70, ai.routeCount * 4);
-
     const exactCorridor =
       seedHash(ai.seed, "ai", ai.index, "route", origin, dest) % 100 <
       Math.min(45, ai.routeCount * 2);
-
     return destinationMarket || exactCorridor;
   });
 
@@ -430,21 +382,15 @@ export function computePlayerMarketShare(
         : ai.difficulty === "balanced"
           ? 1.0
           : 0.75;
-
     return sum + ai.trust * difficultyBonus;
   }, 0);
 
   const share = playerWeight / Math.max(1, playerWeight + totalAIWeight);
-
   return Math.max(0.35, Math.min(1, share));
 }
 
 // ─────────────────────────────────────────────────────────────────
 // WORLDWIDE RUSH AI PRESSURE
-//
-// This is the gameplay-pressure layer that sits on top of deterministic
-// AI growth. AI routes are still computed, but ignored passenger queues can
-// now be captured by rivals at day end.
 // ─────────────────────────────────────────────────────────────────
 
 export interface AIPressureSteal {
@@ -461,10 +407,7 @@ export interface AIPressureSteal {
 export interface AIPressureResult {
   totalStolenPax: number;
   steals: AIPressureSteal[];
-  demandUpdates: {
-    demandId: string;
-    pax_day: number;
-  }[];
+  demandUpdates: { demandId: string; pax_day: number }[];
 }
 
 const AI_PRESSURE_CONFIG = {
@@ -507,16 +450,22 @@ function aiContestChance(ai: AIAirline, origin: string, dest: string): number {
 }
 
 export function aiCanContestDemand(ai: AIAirline, demand: Demand): boolean {
-  const origin = demand.origin.iata;
-  const dest = demand.dest.iata;
-  const roll = seedHash(ai.seed, "ai-pressure", ai.index, origin, dest) % 100;
-  return roll < aiContestChance(ai, origin, dest);
+  const roll =
+    seedHash(
+      ai.seed,
+      "ai-pressure",
+      ai.index,
+      demand.origin.iata,
+      demand.dest.iata,
+    ) % 100;
+  return roll < aiContestChance(ai, demand.origin.iata, demand.dest.iata);
 }
 
 function aiStealRate(
   ai: AIAirline,
   waitingPax: number,
   paxDay: number,
+  demand?: Demand,
 ): number {
   const cfg = AI_PRESSURE_CONFIG[ai.difficulty];
   const pressure = Math.min(1, waitingPax / Math.max(1, paxDay));
@@ -528,9 +477,20 @@ function aiStealRate(
         ? 0.75
         : 1;
 
+  // Passenger mix elasticity:
+  //   Leisure passengers switch airlines readily  → easier to steal (elasticity > 1)
+  //   Business passengers are brand-loyal         → harder to steal (elasticity < 1)
+  const mix = demand
+    ? {
+        businessPct: demand.business_pct ?? 0.25,
+        leisurePct: demand.leisure_pct ?? 0.75,
+      }
+    : { businessPct: 0.25, leisurePct: 0.75 };
+  const elasticity = passengerElasticityMultiplier(mix);
+
   return Math.min(
     cfg.maxStealRate,
-    cfg.maxStealRate * pressure * trustFactor * difficultyFactor,
+    cfg.maxStealRate * pressure * trustFactor * difficultyFactor * elasticity,
   );
 }
 
@@ -550,8 +510,9 @@ export function applyAIPressure(params: {
   for (const demand of params.demands) {
     if (demand.status === "served") continue;
 
-    const currentPaxDay = nextPaxDayByDemand.get(demand.id) ?? demand.pax_day;
-    const currentDemand = { ...demand, pax_day: currentPaxDay };
+    const currentPaxDay =
+      nextPaxDayByDemand.get(demand.id) ?? demand.base_pax_day;
+    const currentDemand = { ...demand, base_pax_day: currentPaxDay };
     const waiting = params.waitingForDemand(currentDemand);
 
     const eligibleAis = params.aiAirlines.filter((ai) => {
@@ -565,14 +526,20 @@ export function applyAIPressure(params: {
       seedHash(demand.id, "ai-pressure-pick", params.day, eligibleAis.length) %
       eligibleAis.length;
     const ai = eligibleAis[pick];
-    const rate = aiStealRate(ai, waiting, currentDemand.pax_day);
+
+    // Pass demand so steal rate accounts for passenger mix
+    const rate = aiStealRate(
+      ai,
+      waiting,
+      currentDemand.base_pax_day,
+      currentDemand,
+    );
     const noise =
       0.75 + (seedHash(demand.id, "ai-pressure-noise", params.day) % 51) / 100;
     const requestedStolen = Math.floor(waiting * rate * noise);
 
     if (requestedStolen <= 0) continue;
 
-    // Never reduce the demand below already-moved passengers.
     const delivered = currentDemand.delivered_pax_today ?? 0;
     const nextPaxDay = Math.max(delivered, currentPaxDay - requestedStolen);
     const actualStolen = currentPaxDay - nextPaxDay;
@@ -593,7 +560,7 @@ export function applyAIPressure(params: {
   }
 
   return {
-    totalStolenPax: steals.reduce((sum, steal) => sum + steal.stolenPax, 0),
+    totalStolenPax: steals.reduce((sum, s) => sum + s.stolenPax, 0),
     steals,
     demandUpdates: Array.from(nextPaxDayByDemand.entries()).map(
       ([demandId, pax_day]) => ({ demandId, pax_day }),
@@ -603,9 +570,7 @@ export function applyAIPressure(params: {
 
 export function summarizeAIPressure(steals: AIPressureSteal[]): string | null {
   if (steals.length === 0) return null;
-
-  const total = steals.reduce((sum, steal) => sum + steal.stolenPax, 0);
+  const total = steals.reduce((sum, s) => sum + s.stolenPax, 0);
   const biggest = [...steals].sort((a, b) => b.stolenPax - a.stolenPax)[0];
-
   return `${biggest.aiName} captured ${biggest.stolenPax.toLocaleString()} travelers on ${biggest.originIata}→${biggest.destIata}. ${total.toLocaleString()} travelers switched to rivals today.`;
 }

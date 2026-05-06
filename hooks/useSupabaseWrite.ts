@@ -19,6 +19,7 @@ import {
   simulatePaxDay,
 } from "@/lib/demands";
 import { fmtCash } from "@/lib/revenue";
+
 import { supabase } from "@/lib/supabase";
 import type { Airport, Demand, OwnedPlane, PlaneModel } from "@/store";
 import { useGameStore } from "@/store";
@@ -108,10 +109,9 @@ export function useBuyHub() {
             dest_iata: d.dest.iata,
             dist_nm: d.dist_nm,
             haul: d.haul,
-            pax_day: d.pax_day,
             status: "pending",
             popularity: d.popularity,
-            base_pax_day: d.base_pax_day ?? d.pax_day,
+            base_pax_day: d.base_pax_day,
           }));
 
           const { data: demandData, error: demandErr } = await supabase
@@ -321,7 +321,7 @@ export function useRefreshDemands() {
             dest_iata: d.dest.iata,
             dist_nm: d.dist_nm,
             haul: d.haul,
-            pax_day: d.pax_day,
+            base_pax_day: d.base_pax_day,
             status: "pending",
           })
           .select()
@@ -515,7 +515,7 @@ export function useSaveAirlineDay() {
         supabase
           .from("demands")
           .update({
-            pax_day: d.pax_day,
+            base_pax_day: d.base_pax_day,
             popularity: d.popularity,
             delivered_pax_today: d.delivered_pax_today,
           })
@@ -564,7 +564,7 @@ export function useSpawnDailyDemand() {
           dest_iata: newDemand.dest.iata,
           dist_nm: newDemand.dist_nm,
           haul: newDemand.haul,
-          pax_day: newDemand.pax_day,
+          base_pax_day: newDemand.base_pax_day,
           status: "pending",
         })
         .select()
@@ -582,10 +582,9 @@ export function useSpawnDailyDemand() {
           dest: airportMap.get(data.dest_iata)!,
           dist_nm: data.dist_nm,
           haul: data.haul,
-          pax_day: data.pax_day,
+          base_pax_day: data.base_pax_day,
           status: "pending",
           delivered_pax_today: data.delivered_pax_today,
-          base_pax_day: data.base_pax_day ?? data.pax_day,
           popularity: data.populary,
         },
       ]);
@@ -904,7 +903,7 @@ export function useCreateCustomRoute() {
           (d) => d.origin.iata === origin.iata && d.dest.iata === via.iata,
         );
         const legPaxDay =
-          legDemand?.pax_day ?? simulatePaxDay(origin, via, distNm);
+          legDemand?.base_pax_day ?? simulatePaxDay(origin, via, distNm);
         const throughPaxDay = paxDay;
         viaPaxRatio = legPaxDay / Math.max(1, legPaxDay + throughPaxDay);
       }
@@ -941,10 +940,9 @@ export function useCreateCustomRoute() {
           dest,
           dist_nm: distNm,
           haul: haul as Demand["haul"],
-          pax_day: paxDay,
+          base_pax_day: paxDay,
           status: "pending",
           delivered_pax_today: 0,
-          base_pax_day: 0,
           popularity: 0,
         };
 

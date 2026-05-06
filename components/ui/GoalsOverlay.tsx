@@ -242,7 +242,7 @@ export default function GoalsOverlay() {
   const servedDemands = demands.filter((d) => d.status === "served").length;
 
   const totalDemandPax = pendingDemands.reduce(
-    (sum, d) => sum + Math.max(0, d.pax_day),
+    (sum, d) => sum + Math.max(0, d.base_pax_day),
     0,
   );
 

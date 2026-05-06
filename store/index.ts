@@ -7,6 +7,7 @@
 
 import type { DailyEvent } from "@/hooks/useDailyEvents";
 import type { AIAirline } from "@/lib/AIAirline";
+import type { AppliedDemandWave } from "@/lib/demandWaves";
 import type { GlobalContractState } from "@/lib/globalContracts";
 import type { Mission } from "@/lib/missions";
 import { PriceStrategy, priceStrategyConfig } from "@/lib/revenue";
@@ -111,13 +112,15 @@ export interface Demand {
   dest: Airport;
   dist_nm: number;
   haul: HaulClass;
-  pax_day: number;
   status: DemandStatus;
   delivered_pax_today: number; // resets each game-day
   base_pax_day: number;
   popularity: number;
   ai_stolen_pax?: number;
   ai_pressure?: number;
+  price_elasticity?: number;
+  business_pct?: number;
+  leisure_pct?: number;
 }
 
 export interface OwnedPlane {
@@ -166,9 +169,11 @@ export interface GameStore {
   dailyEvent: DailyEvent | null;
   globalContract: GlobalContractState | null;
   completedGlobalContracts: number;
+  activeDemandWave: AppliedDemandWave | null;
   awayEarnings: { days: number; amount: number } | null;
   isApplyingAwayEarnings: boolean;
   dayProgress: number; // 0 → 1 within the current game day
+  todayCash: number; // exact cash earned today (resets each day)
   aiAirlines: AIAirline[];
   weeklyProgress: {
     weekNumber: number;
@@ -234,6 +239,8 @@ export interface GameStore {
   setGlobalContract: (contract: GlobalContractState | null) => void;
   updateGlobalContract: (patch: Partial<GlobalContractState>) => void;
   completeGlobalContract: () => void;
+  setActiveDemandWave: (wave: AppliedDemandWave | null) => void;
+  applyWaveToStore: (wave: AppliedDemandWave) => void;
   setAwayEarnings: (data: { days: number; amount: number } | null) => void;
   setIsApplyingAway: (v: boolean) => void;
   setDayProgress: (value: number) => void;
@@ -242,6 +249,8 @@ export interface GameStore {
   resetWeeklyProgress: (weekNumber: number) => void;
   setAirline: (airline: AirlineConfig) => void;
   updateAirline: (patch: Partial<AirlineConfig>) => void;
+
+  resetTodayCash: (todayCash: number) => void;
 
   // Achievements
   earnAchievement: (id: string, day: number) => void;
@@ -270,8 +279,7 @@ export interface GameStore {
   setRoutes: (routes: Route[]) => void;
   addRoute: (route: Route) => void;
   removeRoute: (id: string) => void;
-
-  // Ledger
+  resetGame: () => void;
   setLedger: (entries: LedgerEntry[]) => void;
   addLedgerEntries: (entries: LedgerEntry[]) => void;
 
@@ -324,6 +332,8 @@ export const useGameStore = create<GameStore>()(
       dailyEvent: null,
       globalContract: null,
       completedGlobalContracts: 0,
+      todayCash: 0,
+      activeDemandWave: null,
       awayEarnings: null,
       isApplyingAwayEarnings: false,
       dayProgress: 0,
@@ -380,6 +390,8 @@ export const useGameStore = create<GameStore>()(
       setAirports: (airports) => set({ airports }, false, "setAirports"),
       setPlanes: (planes) => set({ planes }, false, "setPlanes"),
 
+      resetTodayCash: () => set({ todayCash: 0 }, false, "resetTodayCash"),
+
       // ── Session ──────────────────────────────────────────────────
       setPhase: (phase) => set({ phase }, false, "setPhase"),
       setBoughtPlaneToday: (val) =>
@@ -407,6 +419,23 @@ export const useGameStore = create<GameStore>()(
           }),
           false,
           "completeGlobalContract",
+        ),
+
+      setActiveDemandWave: (wave) =>
+        set({ activeDemandWave: wave }, false, "setActiveDemandWave"),
+
+      applyWaveToStore: (wave) =>
+        set(
+          (s) => ({
+            activeDemandWave: wave,
+            demands: s.demands.map((d) => {
+              const update = wave.updates.find((u) => u.demandId === d.id);
+              if (!update) return d;
+              return { ...d, pax_day: update.newPaxDay };
+            }),
+          }),
+          false,
+          "applyWaveToStore",
         ),
       setAwayEarnings: (data) =>
         set({ awayEarnings: data }, false, "setAwayEarnings"),
@@ -513,51 +542,71 @@ export const useGameStore = create<GameStore>()(
         ),
 
       resetDailyPax: () => {
-        const demands = get().demands.map((d) => {
+        const { demands, routes } = get();
+
+        const updatedDemands = demands.map((d) => {
+          const hasActiveRoute = routes.some(
+            (r) => r.active && r.demand.id === d.id,
+          );
           const delivered = d.delivered_pax_today ?? 0;
-          const base = d.base_pax_day ?? d.pax_day;
-          const ratio = base > 0 ? delivered / base : 0;
+          const base = d.base_pax_day ?? 0;
 
           let popularity = d.popularity ?? 0;
 
-          if (ratio >= 0.9) popularity += 3;
-          else if (ratio >= 0.75) popularity += 2;
-          else if (ratio >= 0.55) popularity += 1;
-          else if (ratio < 0.35) popularity -= 2;
-          else if (ratio < 0.5) popularity -= 1;
+          if (hasActiveRoute) {
+            // Popularity only changes when a plane is actually serving the route
+            const ratio = base > 0 ? delivered / base : 0;
+            const strategy =
+              routes.find((r) => r.active && r.demand.id === d.id)
+                ?.price_strategy ?? "standard";
+            const pricing = priceStrategyConfig(
+              strategy,
+              d.price_elasticity ?? 1,
+            );
 
-          popularity = Math.max(-40, Math.min(80, popularity));
+            popularity += pricing.popularityBonus;
 
-          const multiplier = 1 + popularity / 100;
+            if (ratio >= 0.9) popularity += 3;
+            else if (ratio >= 0.75) popularity += 2;
+            else if (ratio >= 0.55) popularity += 1;
+            else if (ratio < 0.35) popularity -= 2;
+            else if (ratio < 0.5) popularity -= 1;
 
-          const activeRoutesForDemand = get().routes.filter(
-            (r) => r.active && r.demand.id === d.id,
-          );
+            popularity = Math.max(-40, Math.min(80, popularity));
 
-          const strategy =
-            activeRoutesForDemand[0]?.price_strategy ?? "standard";
+            const multiplier = 1 + popularity / 100;
+            const newPax = Math.max(
+              Math.max(20, Math.round(base * 0.3)), // never below 30% of base or 20 pax
+              Math.round(base * multiplier * pricing.demandMultiplier),
+            );
 
-          const pricing = priceStrategyConfig(strategy);
+            return {
+              ...d,
+              popularity,
+              pax_day: newPax,
+              base_pax_day: newPax,
+              delivered_pax_today: 0,
+              ai_stolen_pax: 0,
+              price_elasticity: d.price_elasticity ?? 1,
+              status: "pending" as DemandStatus,
+            };
+          } else {
+            // No active route — keep generating pax at base rate, no popularity change.
+            // Slowly recover toward base_pax_day if below it.
+            const recovered = Math.min(base, Math.round(d.base_pax_day * 1.02));
 
-          popularity += pricing.popularityBonus;
-
-          const newPax = Math.max(
-            10,
-            Math.round(base * multiplier * pricing.demandMultiplier),
-          );
-
-          return {
-            ...d,
-            popularity,
-            pax_day: newPax,
-            base_pax_day: newPax,
-            delivered_pax_today: 0,
-            ai_stolen_pax: 0,
-            status: "pending" as DemandStatus,
-          };
+            return {
+              ...d,
+              pax_day: recovered,
+              delivered_pax_today: 0,
+              ai_stolen_pax: 0,
+              price_elasticity: d.price_elasticity ?? 1,
+              status: "pending" as DemandStatus,
+            };
+          }
         });
 
-        set({ demands }, false, "resetDailyPax");
+        set({ demands: updatedDemands, todayCash: 0 }, false, "resetDailyPax");
       },
 
       addPaxDelivered: (demandId, pax, lostToAi) =>
@@ -598,6 +647,29 @@ export const useGameStore = create<GameStore>()(
           "removeRoute",
         ),
 
+      // ── Reset (bankruptcy restart) ────────────────────────────────
+      resetGame: () =>
+        set(
+          {
+            airline: null,
+            hubs: [],
+            demands: [],
+            routes: [],
+            ownedPlanes: [],
+            ledger: [],
+            aiAirlines: [],
+            globalContract: null,
+            activeDemandWave: null,
+            dailyEvent: null,
+            awayEarnings: null,
+            completedGlobalContracts: 0,
+            dayProgress: 0,
+            todayCash: 0,
+          },
+          false,
+          "resetGame",
+        ),
+
       // ── Ledger ───────────────────────────────────────────────────
       setLedger: (ledger) => set({ ledger }, false, "setLedger"),
       addLedgerEntries: (entries) =>
@@ -627,6 +699,8 @@ export const useGameStore = create<GameStore>()(
             airline: s.airline
               ? { ...s.airline, cash: s.airline.cash + amount }
               : null,
+            // Only accumulate positive cash as "today earned"
+            todayCash: amount > 0 ? s.todayCash + amount : s.todayCash,
           }),
           false,
           "earnCash",
@@ -804,6 +878,8 @@ export const useBoughtPlaneToday = () =>
   useGameStore((s) => s.boughtPlaneToday);
 export const useDailyEvent = () => useGameStore((s) => s.dailyEvent);
 export const useGlobalContract = () => useGameStore((s) => s.globalContract);
+export const useActiveDemandWave = () =>
+  useGameStore((s) => s.activeDemandWave);
 export const useCompletedGlobalContracts = () =>
   useGameStore((s) => s.completedGlobalContracts);
 export const useAwayEarnings = () => useGameStore((s) => s.awayEarnings);
@@ -849,3 +925,5 @@ export const useRouteCreation = () => {
   const waypoints = useGameStore((s) => s.creationWaypoints);
   return { active, waypoints };
 };
+
+export const useTodayCash = () => useGameStore((s) => s.todayCash);

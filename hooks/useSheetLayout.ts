@@ -44,3 +44,25 @@ export function useAvailableSheetHeight(): number {
   const tabH = useTabBarHeight();
   return height - hudH - tabH;
 }
+
+/**
+ * Combined hook — returns all layout values in one call.
+ * Use this when a component needs multiple values.
+ *
+ * const { hudHeight, tabBarHeight, availableHeight } = useSheetLayout();
+ */
+export function useSheetLayout() {
+  const insets = useSafeAreaInsets();
+  const { height } = useWindowDimensions();
+
+  const topInset =
+    Platform.OS === "android"
+      ? (StatusBar.currentHeight ?? insets.top ?? 24)
+      : insets.top;
+
+  const hudHeight = topInset + HUD_CONTENT_H;
+  const tabBarHeight = TAB_CONTENT_H + Math.max(insets.bottom, 8);
+  const availableHeight = height - hudHeight - tabBarHeight;
+
+  return { hudHeight, tabBarHeight, availableHeight };
+}

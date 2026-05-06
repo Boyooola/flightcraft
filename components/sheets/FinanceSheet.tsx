@@ -194,22 +194,40 @@ export default function FinanceSheet() {
           distNm: dist,
           speedKts: p.speed_kts,
           trustPct: hub?.trust ?? 0,
-          deliveredPax: r.demand.pax_day,
-          paxDay: r.demand.pax_day,
+          deliveredPax: r.demand.delivered_pax_today ?? r.demand.base_pax_day,
+          paxDay: r.demand.base_pax_day,
           costPerSector: p.cost_per_sector ?? 500,
           fuelPerNm: p.fuel_per_nm ?? 2,
+          priceStrategy: (r as any).price_strategy ?? "standard",
+          priceElasticity: r.demand.price_elasticity ?? 1,
+          businessPct: r.demand.business_pct ?? 0.25,
+          leisurePct: r.demand.leisure_pct ?? 0.75,
         });
 
         return {
           route: r,
-          reward: result.net,
+          reward: result.gross, // gross only — costs don't actually deduct cash
         };
       })
       .sort((a, b) => b.reward - a.reward);
-  }, [routes, hubs, day]);
+  }, [routes, hubs]);
 
   const totalRouteReward = routeRewards.reduce((sum, r) => sum + r.reward, 0);
-  const dailyNet = totalRouteReward - interest;
+
+  // Maintenance cost for idle planes (no active route)
+  const ownedPlanes = useGameStore.getState().ownedPlanes ?? [];
+  const activeRoutes = routes.filter((r) => r.active);
+  const activePlaneIds = new Set(activeRoutes.map((r) => r.plane.id));
+  const idlePlanes = ownedPlanes.filter((p) => !activePlaneIds.has(p.id));
+  const maintenanceCost = idlePlanes.reduce((sum, p) => {
+    // Idle maintenance: 15% of daily operating cost at min utilization
+    const dailyOps =
+      (p.plane_model.cost_per_sector ?? 500) * 2 +
+      (p.plane_model.fuel_per_nm ?? 2) * 500;
+    return sum + Math.round(dailyOps * 0.15);
+  }, 0);
+
+  const dailyNet = totalRouteReward - interest - maintenanceCost;
   const netWorth = cash - loan;
 
   const recentLedger = useMemo(

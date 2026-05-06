@@ -24,6 +24,7 @@
  */
 
 import type { Airport, Demand, HaulClass } from "@/store";
+import { passengerMixFromDistance } from "./passengerTypes";
 import { seedHash } from "./seed";
 
 // ─────────────────────────────────────────────────────────────────
@@ -408,15 +409,20 @@ function generateFromPool(
     const dist = Math.round(distanceNm(hub.lat, hub.lng, dest.lat, dest.lng));
     if (dist < 50) continue;
 
+    const mix = passengerMixFromDistance(dist);
+
     demands.push({
       hub_iata: hub.iata,
       origin: hub,
       dest,
       dist_nm: dist,
       haul: haulClass(dist),
-      pax_day: simulatePaxDay(hub, dest, dist, demandScore),
       status: "pending",
       delivered_pax_today: 0,
+      business_pct: mix.businessPct,
+      leisure_pct: mix.leisurePct,
+      base_pax_day: simulatePaxDay(hub, dest, dist, demandScore),
+      popularity: 0,
     });
   }
 
@@ -541,7 +547,7 @@ export function hubCrowdingLevel(
   hubIata: string,
   demands: {
     hub_iata: string;
-    pax_day: number;
+    base_pax_day: number;
     delivered_pax_today: number;
     status?: string;
   }[],
@@ -554,7 +560,7 @@ export function hubCrowdingLevel(
 
   const waitingPax = hubDemands.reduce((sum, demand) => {
     const delivered = demand.delivered_pax_today ?? 0;
-    return sum + Math.max(0, demand.pax_day - delivered);
+    return sum + Math.max(0, demand.base_pax_day - delivered);
   }, 0);
 
   const paxM = airport.pax_annual_m ?? 2;

@@ -453,7 +453,7 @@ export function useWeeklyProgress(challenge: WeeklyChallenge | null): number {
         if (!d) return true;
         const dist = r.total_dist_nm ?? d.dist_nm;
         return (
-          d.pax_day * Math.min(750, Math.max(15, dist * 0.12)) >
+          d.base_pax_day * Math.min(750, Math.max(15, dist * 0.12)) >
           (p.cost_per_sector ?? 500) + dist * (p.fuel_per_nm ?? 2.0)
         );
       });

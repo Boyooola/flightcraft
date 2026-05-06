@@ -14,7 +14,7 @@ export type FlowStatus = "empty" | "waiting" | "moving" | "cleared" | "jammed";
 
 export type PassengerFlowDemand = Pick<
   Demand,
-  "id" | "hub_iata" | "pax_day" | "delivered_pax_today"
+  "id" | "hub_iata" | "base_pax_day" | "delivered_pax_today"
 > & {
   status?: DemandStatus | "preview";
 };
@@ -57,18 +57,27 @@ export function spawnedPaxForDay(
   demand: PassengerFlowDemand,
   dayProgress: number,
 ): number {
-  if (demand.status === "served") return demand.pax_day;
+  if (demand.status === "served") return demand.base_pax_day ?? 0;
 
   const progress = clampDayProgress(dayProgress);
 
-  const frontLoad = demand.pax_day * 0.35;
-  const rolling = demand.pax_day * 0.65 * progress;
+  // Smooth ease-in-out — peak spawn mid-day (rush hour feel)
+  const eased =
+    progress < 0.5
+      ? 2 * progress * progress
+      : 1 - Math.pow(-2 * progress + 2, 2) / 2;
 
-  return Math.min(demand.pax_day, Math.floor(frontLoad + rolling));
+  // 20% front-load, 80% rolling. Use Math.round (not floor) so the
+  // last pax spawns before dayProgress hits 1.0 exactly.
+  const total = demand.base_pax_day * 0.2 + demand.base_pax_day * 0.8 * eased;
+  return Math.min(demand.base_pax_day, Math.round(total));
 }
 
 export function remainingPax(demand: PassengerFlowDemand): number {
-  return Math.max(0, (demand.pax_day ?? 0) - (demand.delivered_pax_today ?? 0));
+  return Math.max(
+    0,
+    (demand.base_pax_day ?? 0) - (demand.delivered_pax_today ?? 0),
+  );
 }
 
 export function waitingPaxForDemand(
@@ -77,14 +86,17 @@ export function waitingPaxForDemand(
 ): number {
   const spawned = spawnedPaxForDay(demand, dayProgress);
   const delivered = demand.delivered_pax_today ?? 0;
+  const remaining = remainingPax(demand);
 
-  return Math.max(0, Math.min(remainingPax(demand), spawned - delivered));
+  // waiting = spawned pax minus already-delivered, capped at remaining
+  // spawned - delivered = pax at gate not yet boarded
+  // remaining = pax_day - delivered = total still to move today
+  return Math.max(0, Math.min(remaining, spawned - delivered));
 }
 
 function randomLoadFactor(min = 0.65, max = 1): number {
   const safeMin = Math.max(0, Math.min(1, min));
   const safeMax = Math.max(safeMin, Math.min(1, max));
-
   return safeMin + Math.random() * Math.max(0, safeMax - safeMin);
 }
 
@@ -102,7 +114,9 @@ export function practicalPlaneCapacity(params: {
 }
 
 /**
- * Backward-compatible single-plane boarding.
+ * Single-plane boarding.
+ * Boards as many waiting pax as the plane can carry.
+ * No random load factor — randomness caused demands to never fully clear.
  */
 export function boardPassengers(params: {
   demand: PassengerFlowDemand;
@@ -114,13 +128,8 @@ export function boardPassengers(params: {
   const waiting = waitingPaxForDemand(params.demand, params.dayProgress);
   if (waiting <= 0) return 0;
 
-  const practicalCapacity = practicalPlaneCapacity({
-    planeCapacity: params.planeCapacity,
-    loadFactorMin: params.loadFactorMin,
-    loadFactorMax: params.loadFactorMax,
-  });
-
-  return Math.max(0, Math.min(waiting, practicalCapacity));
+  // Board up to plane capacity — always fill available seats with waiting pax
+  return Math.min(waiting, params.planeCapacity);
 }
 
 /**
@@ -267,7 +276,8 @@ export function demandFlowStatus(
   const delivered = demand.delivered_pax_today ?? 0;
 
   if (waiting <= 0 && delivered <= 0) return "empty";
-  if (waiting >= Math.max(10, (demand.pax_day ?? 0) * 0.6)) return "jammed";
+  if (waiting >= Math.max(10, (demand.base_pax_day ?? 0) * 0.6))
+    return "jammed";
   if (delivered > 0) return "moving";
 
   return "waiting";
@@ -297,7 +307,7 @@ export function hubFlowPercent(
   demands: PassengerFlowDemand[],
 ): number {
   const hubDemands = demands.filter((d) => d.hub_iata === hubIata);
-  const total = hubDemands.reduce((sum, d) => sum + (d.pax_day ?? 0), 0);
+  const total = hubDemands.reduce((sum, d) => sum + (d.base_pax_day ?? 0), 0);
 
   if (total <= 0) return 0;
 

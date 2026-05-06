@@ -294,6 +294,7 @@ export function useGameLoader() {
               base_pax_day: number;
               popularity: number;
               delivered_pax_today: number;
+              price_elasticity: number;
             }) => {
               const origin = airportMap.get(d.origin_iata);
               const dest = airportMap.get(d.dest_iata);
@@ -310,6 +311,7 @@ export function useGameLoader() {
                 pax_day: d.pax_day,
                 base_pax_day: d.base_pax_day ?? d.pax_day,
                 popularity: d.popularity ?? 0,
+                price_elasticity: Number(d.price_elasticity ?? 1),
                 delivered_pax_today: d.delivered_pax_today ?? 0,
 
                 status: d.status as "pending" | "served" | "no_plane",
@@ -381,6 +383,8 @@ export function useGameLoader() {
               via_iata?: string | null;
               total_dist_nm?: number | null;
               active: boolean;
+              via_pax_ratio?: number | null;
+              price_strategy?: string | null;
             }) => {
               const demand = demandMap.get(r.demand_id);
               const plane = ownedMap.get(r.plane_id);
@@ -392,8 +396,12 @@ export function useGameLoader() {
                 hub_iata: r.hub_iata,
                 via_iata: r.via_iata ?? null,
                 total_dist_nm: r.total_dist_nm ?? demand.dist_nm,
+                via_pax_ratio: r.via_pax_ratio ?? null,
                 active: r.active,
-                price_strategy: "standard",
+                price_strategy: (r.price_strategy ?? "standard") as
+                  | "low"
+                  | "standard"
+                  | "premium",
               };
             },
           )

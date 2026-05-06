@@ -20,6 +20,10 @@ import {
   waitingPaxForDemand,
   type PassengerFlowDemand,
 } from "@/lib/passengerFlow";
+import {
+  passengerMixFromDistance,
+  passengerTypeBreakdown,
+} from "@/lib/passengerTypes";
 import { calcRouteRevenue, fmtCash } from "@/lib/revenue";
 import { distNm } from "@/lib/routing";
 import type { Airport, Demand, OwnedPlane } from "@/store";
@@ -158,7 +162,7 @@ function DemandRushCard({
   const moved = demand.delivered_pax_today ?? 0;
   const progress = Math.min(
     100,
-    Math.round((moved / Math.max(1, demand.pax_day)) * 100),
+    Math.round((moved / Math.max(1, demand.base_pax_day)) * 100),
   );
   const source = existingDemand ? "LIVE DEMAND" : "NEW MARKET";
   const waitingColor = waiting > 0 ? Colors.amber : Colors.dim;
@@ -235,6 +239,36 @@ function DemandRushCard({
         <Text style={[rush.progressText, { color }]}>{progress}%</Text>
       </View>
 
+      {(() => {
+        const paxDist =
+          existingDemand?.business_pct != null
+            ? {
+                businessPct: existingDemand.business_pct,
+                leisurePct: existingDemand.leisure_pct ?? 0.75,
+              }
+            : passengerMixFromDistance(totalDist);
+        const paxInfo = passengerTypeBreakdown(paxDist);
+        return (
+          <View style={rush.mixRow}>
+            <Ionicons
+              name="briefcase-outline"
+              size={11}
+              color={paxInfo.businessPct >= 35 ? Colors.amber : Colors.dim}
+            />
+            <Text
+              style={[
+                rush.mixTxt,
+                {
+                  color: paxInfo.businessPct >= 35 ? Colors.amber : Colors.dim,
+                },
+              ]}
+            >
+              {paxInfo.label} · {paxInfo.businessPct}% business
+            </Text>
+          </View>
+        );
+      })()}
+
       <View style={rush.noteRow}>
         <Ionicons
           name={existingDemand ? "flash-outline" : "sparkles-outline"}
@@ -246,7 +280,7 @@ function DemandRushCard({
             ? waiting > 0
               ? "This route can clear real travelers immediately."
               : "Travelers will keep appearing as the day progresses."
-            : `Estimated ${demand.pax_day.toLocaleString()} travelers/day · ${totalDist.toLocaleString()}nm corridor.`}
+            : `Estimated ${demand.base_pax_day.toLocaleString()} travelers/day · ${totalDist.toLocaleString()}nm corridor.`}
         </Text>
       </View>
     </View>
@@ -284,6 +318,7 @@ function PlaneRow({
     model.pax_capacity,
   );
 
+  const passMix = passengerMixFromDistance(totalDist);
   const revenue = canServe
     ? calcRouteRevenue({
         distNm: totalDist,
@@ -293,6 +328,8 @@ function PlaneRow({
         paxDay,
         costPerSector: model.cost_per_sector ?? 500,
         fuelPerNm: model.fuel_per_nm ?? 2,
+        businessPct: passMix.businessPct,
+        leisurePct: passMix.leisurePct,
       }).net
     : 0;
 
@@ -448,7 +485,7 @@ export default function CreateRouteSheet() {
   const paxDay = useMemo(() => {
     if (!origin || !dest || origin.iata === dest.iata) return 0;
     return simulatePaxDay(origin, dest, totalDist);
-  }, [origin?.iata, dest?.iata, totalDist]);
+  }, [origin, dest, totalDist]);
 
   const existingDemand = useMemo(() => {
     if (!origin || !dest) return null;
@@ -461,13 +498,13 @@ export default function CreateRouteSheet() {
           d.status !== "served",
       ) ?? null
     );
-  }, [demands, origin?.iata, dest?.iata]);
+  }, [origin, dest, demands]);
 
   const previewDemand: PassengerFlowDemand = useMemo(
     () => ({
       id: existingDemand?.id ?? "preview-demand",
       hub_iata: origin?.iata ?? "",
-      pax_day: existingDemand?.pax_day ?? paxDay,
+      base_pax_day: existingDemand?.base_pax_day ?? paxDay,
       delivered_pax_today: existingDemand?.delivered_pax_today ?? 0,
       status: existingDemand?.status ?? "preview",
     }),
@@ -496,19 +533,22 @@ export default function CreateRouteSheet() {
 
         const boardedNow = Math.min(waitingNow, plane.plane_model.pax_capacity);
         const previewBoard = Math.min(
-          Math.max(boardedNow, Math.ceil(previewDemand.pax_day * 0.35)),
+          Math.max(boardedNow, Math.ceil(previewDemand.base_pax_day * 0.35)),
           plane.plane_model.pax_capacity,
         );
 
+        const cMix = passengerMixFromDistance(totalDist);
         const revenue = canServe
           ? calcRouteRevenue({
               distNm: totalDist,
               speedKts: plane.plane_model.speed_kts,
               trustPct: originHub?.trust ?? 0,
               deliveredPax: previewBoard,
-              paxDay: previewDemand.pax_day,
+              paxDay: previewDemand.base_pax_day,
               costPerSector: plane.plane_model.cost_per_sector ?? 500,
               fuelPerNm: plane.plane_model.fuel_per_nm ?? 2,
+              businessPct: cMix.businessPct,
+              leisurePct: cMix.leisurePct,
             }).net
           : 0;
 
@@ -520,13 +560,13 @@ export default function CreateRouteSheet() {
         return b.revenue - a.revenue;
       });
   }, [
-    ownedPlanes,
+    origin,
+    dest,
     routes,
-    origin?.iata,
-    dest?.iata,
+    ownedPlanes,
     maxLeg,
     waitingNow,
-    previewDemand.pax_day,
+    previewDemand.base_pax_day,
     totalDist,
     originHub?.trust,
   ]);
@@ -603,7 +643,7 @@ export default function CreateRouteSheet() {
         dest,
         via,
         plane,
-        previewDemand.pax_day,
+        previewDemand.base_pax_day,
         via ? legs[0] : totalDist,
         haul,
         totalDist,
@@ -918,7 +958,7 @@ export default function CreateRouteSheet() {
                   selected={selectedIds.includes(plane.id)}
                   reason={reason}
                   waitingNow={waitingNow}
-                  paxDay={previewDemand.pax_day}
+                  paxDay={previewDemand.base_pax_day}
                   totalDist={totalDist}
                   trustPct={originHub?.trust ?? 0}
                   color={color}
@@ -1164,6 +1204,13 @@ const rush = StyleSheet.create({
     alignItems: "flex-start",
     gap: 6,
   },
+  mixRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    marginBottom: 4,
+  },
+  mixTxt: { fontSize: 10, fontWeight: "700" },
   note: {
     flex: 1,
     fontSize: 10,

@@ -15,6 +15,7 @@ import {
   hubCrowdingLevel,
   hubPurchaseCost,
 } from "@/lib/demands";
+import { congestionPenaltyPct } from "@/lib/hubCongestion";
 import { waitingPaxForDemand } from "@/lib/passengerFlow";
 import { calcRouteRevenue, fmtCash } from "@/lib/revenue";
 import type { Airport, Demand, OwnedHub, Route } from "@/store";
@@ -49,7 +50,7 @@ const TIER_COLORS: Record<string, string> = {
   Domestic: Colors.dim,
 };
 
-const TRUST_BUY_THRESHOLD = 75;
+const TRUST_BUY_THRESHOLD = 40;
 
 function usePreviewDemands(airport: Airport | null, allAirports: Airport[]) {
   return useMemo(() => {
@@ -205,8 +206,8 @@ function DepartureRow({
   const paxToday = demand.delivered_pax_today ?? 0;
   const waitingPax = waitingPaxForDemand(demand, dayProgress);
   const fillPct =
-    demand.pax_day > 0
-      ? Math.min(100, Math.round((paxToday / demand.pax_day) * 100))
+    demand.base_pax_day > 0
+      ? Math.min(100, Math.round((paxToday / demand.base_pax_day) * 100))
       : 0;
 
   const barColor =
@@ -224,10 +225,12 @@ function DepartureRow({
           distNm: dist,
           speedKts: p.speed_kts,
           trustPct: hub.trust,
-          deliveredPax: demand.pax_day,
-          paxDay: demand.pax_day,
+          deliveredPax: demand.delivered_pax_today ?? 0,
+          paxDay: demand.base_pax_day ?? 0,
           costPerSector: p.cost_per_sector ?? 500,
           fuelPerNm: p.fuel_per_nm ?? 2.0,
+          businessPct: demand.business_pct ?? 0.25,
+          leisurePct: demand.leisure_pct ?? 0.75,
         }).net
       );
     }, 0);
@@ -271,7 +274,7 @@ function DepartureRow({
                   {paxToday.toLocaleString()}
                 </Text>
                 <Text style={dep.small}>
-                  /{demand.pax_day.toLocaleString()} pax
+                  /{demand.base_pax_day.toLocaleString()} pax
                 </Text>
               </>
             ) : (
@@ -405,6 +408,7 @@ export default function AirportSheet() {
 
   const isOwned = !!hub;
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const hubDemands = airport
     ? demands.filter((demand) => demand.hub_iata === airport.iata)
     : [];
@@ -438,7 +442,7 @@ export default function AirportSheet() {
             const liveDemand =
               demands.find((demand) => demand.id === route.demand.id) ??
               route.demand;
-            return sum + (liveDemand.pax_day ?? 0);
+            return sum + (liveDemand.base_pax_day ?? 0);
           }, 0);
 
   const aiPax = aiCompetitors.reduce((sum, ai) => {
@@ -516,8 +520,13 @@ export default function AirportSheet() {
   const classification = airportClassification(airport);
   const tierColor = TIER_COLORS[classification.label] ?? Colors.dim;
   const cost = hubPurchaseCost(airport);
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  const day = useGameStore((s) => s.airline?.day ?? 1);
   const trustLocked =
-    aiCompetitors.length > 0 && !isOwned && airportTrust < TRUST_BUY_THRESHOLD;
+    day >= 3 &&
+    aiCompetitors.length > 0 &&
+    !isOwned &&
+    airportTrust < TRUST_BUY_THRESHOLD;
   const canAfford = cash >= cost && !trustLocked;
 
   const crowding = isOwned
@@ -863,6 +872,12 @@ export default function AirportSheet() {
                 <Text style={[s.crowdingNote, { color: cfg.color }]}>
                   {cfg.note}
                 </Text>
+                {congestionPenaltyPct(crowding.level) > 0 && (
+                  <Text style={[s.crowdingNote, { color: cfg.color }]}>
+                    Efficiency penalty: -{congestionPenaltyPct(crowding.level)}%
+                    on all rewards
+                  </Text>
+                )}
               </View>
             </View>
           );

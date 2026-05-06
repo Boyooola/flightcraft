@@ -95,10 +95,12 @@ function estimateDailyNetRevenue(): number {
       distNm: dist,
       speedKts: p.speed_kts,
       trustPct: hub?.trust ?? 0,
-      deliveredPax: demand.pax_day, // assume full delivery while away
-      paxDay: demand.pax_day,
+      deliveredPax: demand.base_pax_day, // assume full delivery while away
+      paxDay: demand.base_pax_day,
       costPerSector: p.cost_per_sector ?? 500,
       fuelPerNm: p.fuel_per_nm ?? 2.0,
+      businessPct: demand.business_pct ?? 0.25,
+      leisurePct: demand.leisure_pct ?? 0.75,
     });
     return total + res.net;
   }, 0);

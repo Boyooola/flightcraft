@@ -1,47 +1,114 @@
 /**
  * lib/revenue.ts
  *
- * WorldWide Rush-style revenue system.
- *
- * CORE IDEA:
- *   - Revenue should feel immediate, readable, and rewarding.
- *   - Do NOT punish the player with heavy airline accounting early.
- *   - Player earns cash when passengers are delivered.
- *   - Completing a full demand gives a bonus.
- *   - Trust boosts payout.
- *   - Crowding slightly reduces payout.
+ * v0.3.0 revenue system:
+ * - Dynamic pricing affects fare and demand.
+ * - Elasticity varies by route distance.
+ * - Aircraft utilization affects final profit.
+ * - Hub congestion affects efficiency.
+ * - Routes can be negative until enough pax are delivered.
  */
 
+import {
+  passengerElasticityMultiplier,
+  passengerFareMultiplier,
+} from "@/lib/passengerTypes";
 import type { HaulClass } from "@/store";
 
-// ─────────────────────────────────────────────────────────────────
-// CONSTANTS
-// ─────────────────────────────────────────────────────────────────
-
 export type PriceStrategy = "low" | "standard" | "premium";
+export type UtilizationBand = "underused" | "healthy" | "overused";
 
-const SHORT_BASE_FARE = 18;
+export interface PriceStrategyConfig {
+  strategy: PriceStrategy;
+  label: string;
+  shortLabel: string;
+  fareMultiplier: number;
+  demandMultiplier: number;
+  popularityBonus: number;
+  description: string;
+}
+
+export interface AircraftUtilization {
+  flightsPerDay: number;
+  utilization: number;
+  band: UtilizationBand;
+  multiplier: number;
+  label: string;
+}
+
+export interface RouteRevenueResult {
+  gross: number;
+  cost: number;
+  net: number;
+  ypp: number;
+  paxRatio: number;
+  completionBonus: number;
+  priceStrategy: PriceStrategy;
+  fareMultiplier: number;
+  demandMultiplier: number;
+  utilization: AircraftUtilization;
+  congestionMultiplier: number;
+}
+
+const SHORT_BASE_FARE = 28;
 const MEDIUM_BASE_FARE = 42;
 const LONG_BASE_FARE = 95;
 
-const MIN_PAYOUT = 25;
+const MIN_PAYOUT = 30;
 const COMPLETION_BONUS = 0.25;
-
-// ─────────────────────────────────────────────────────────────────
-// DAILY FLIGHTS
-// Kept for API compatibility.
-// ─────────────────────────────────────────────────────────────────
+const MIN_DAILY_COST_RATIO = 0.45;
 
 export function dailyFlights(distNm: number, speedKts: number): number {
-  const flightH = distNm / speedKts;
+  const flightH = distNm / Math.max(1, speedKts);
   return Math.max(1, Math.floor(24 / Math.max(1, flightH * 2)));
 }
 
-// ─────────────────────────────────────────────────────────────────
-// HAUL HELPERS
-// ─────────────────────────────────────────────────────────────────
+export function computeAircraftUtilization(params: {
+  distNm: number;
+  speedKts: number;
+  turnaroundHours?: number;
+}): AircraftUtilization {
+  const { distNm, speedKts, turnaroundHours = 1 } = params;
 
-function haulFromDistance(distNm: number): HaulClass {
+  const flightHours = distNm / Math.max(1, speedKts);
+  const roundTripHours = flightHours * 2 + turnaroundHours;
+  const flightsPerDay = Math.max(
+    1,
+    Math.floor(24 / Math.max(1, roundTripHours)),
+  );
+
+  const utilization = Math.min(1.6, flightsPerDay / 4);
+
+  if (utilization < 0.6) {
+    return {
+      flightsPerDay,
+      utilization,
+      band: "underused",
+      multiplier: 0.88,
+      label: "Underused",
+    };
+  }
+
+  if (utilization > 1.15) {
+    return {
+      flightsPerDay,
+      utilization,
+      band: "overused",
+      multiplier: 0.92,
+      label: "Overused",
+    };
+  }
+
+  return {
+    flightsPerDay,
+    utilization,
+    band: "healthy",
+    multiplier: 1.0,
+    label: "Healthy",
+  };
+}
+
+export function haulFromDistance(distNm: number): HaulClass {
   if (distNm < 1_000) return "short";
   if (distNm < 3_500) return "medium";
   return "long";
@@ -63,18 +130,9 @@ function distanceBonus(distNm: number): number {
 
 function trustMultiplier(trustPct: number): number {
   const trust = Math.max(0, Math.min(100, trustPct));
-
-  // 0 trust  = 0.85x
-  // 50 trust = 1.00x
-  // 100 trust = 1.25x
   if (trust < 50) return 0.85 + (trust / 50) * 0.15;
   return 1.0 + ((trust - 50) / 50) * 0.25;
 }
-
-// ─────────────────────────────────────────────────────────────────
-// YIELD PER PAX
-// WorldWide Rush-style fare, not realistic airline yield.
-// ─────────────────────────────────────────────────────────────────
 
 export function yieldPerPax(
   haul: HaulClass,
@@ -92,11 +150,60 @@ export function yieldPerPax(
   return Math.max(MIN_PAYOUT, Math.round(fare));
 }
 
-// ─────────────────────────────────────────────────────────────────
-// ROUTE OPERATING COST
-// Kept for compatibility, but softened heavily.
-// In WorldWide Rush style, costs should not dominate the reward loop.
-// ─────────────────────────────────────────────────────────────────
+export function computePriceElasticity(distNm: number): number {
+  if (distNm < 800) return 1.25;
+  if (distNm < 3_000) return 1.0;
+  return 0.75;
+}
+
+export function normalizePriceStrategy(
+  strategy?: string | null,
+): PriceStrategy {
+  if (strategy === "low" || strategy === "premium") return strategy;
+  return "standard";
+}
+
+export function priceStrategyConfig(
+  strategy?: string | null,
+  elasticity = 1,
+): PriceStrategyConfig {
+  const normalized = normalizePriceStrategy(strategy);
+  const safeElasticity = Math.max(0.5, Math.min(1.5, elasticity));
+
+  if (normalized === "low") {
+    return {
+      strategy: "low",
+      label: "Low Fare",
+      shortLabel: "Low",
+      fareMultiplier: 0.85,
+      demandMultiplier: 1 + 0.25 * safeElasticity,
+      popularityBonus: 1,
+      description: "+Demand, -Profit",
+    };
+  }
+
+  if (normalized === "premium") {
+    return {
+      strategy: "premium",
+      label: "Premium",
+      shortLabel: "Premium",
+      fareMultiplier: 1.28,
+      demandMultiplier: Math.max(0.55, 1 - 0.2 * safeElasticity),
+      popularityBonus: -1,
+      description: "+Profit, -Demand",
+    };
+  }
+
+  return {
+    strategy: "standard",
+    label: "Standard",
+    shortLabel: "Standard",
+    fareMultiplier: 1,
+    demandMultiplier: 1,
+    popularityBonus: 0,
+    description: "Balanced",
+  };
+}
 
 export function routeOperatingCost(
   distNm: number,
@@ -106,22 +213,7 @@ export function routeOperatingCost(
 ): number {
   const flights = dailyFlights(distNm, speedKts);
   const rawCost = flights * (costPerSector + distNm * fuelPerNm);
-
-  // Softened to keep gameplay positive.
-  return Math.round(rawCost * 0.15);
-}
-
-// ─────────────────────────────────────────────────────────────────
-// CORE REVENUE FUNCTION
-// ─────────────────────────────────────────────────────────────────
-
-export interface RouteRevenueResult {
-  gross: number;
-  cost: number;
-  net: number;
-  ypp: number;
-  paxRatio: number;
-  completionBonus?: number;
+  return Math.round(rawCost * 0.22);
 }
 
 export function calcRouteRevenue(params: {
@@ -133,7 +225,11 @@ export function calcRouteRevenue(params: {
   costPerSector: number;
   fuelPerNm: number;
   crowdMultiplier?: number;
-  priceStrategy?: PriceStrategy;
+  priceStrategy?: PriceStrategy | string | null;
+  priceElasticity?: number;
+  congestionMultiplier?: number;
+  businessPct?: number;
+  leisurePct?: number;
 }): RouteRevenueResult {
   const {
     distNm,
@@ -144,22 +240,35 @@ export function calcRouteRevenue(params: {
     costPerSector,
     fuelPerNm,
     crowdMultiplier = 1.0,
-    priceStrategy,
+    priceStrategy = "standard",
+    priceElasticity = computePriceElasticity(distNm),
+    congestionMultiplier = 1.0,
+    businessPct = 0.25,
+    leisurePct = 0.75,
   } = params;
+
+  const mix = { businessPct, leisurePct };
+  const fareMul = passengerFareMultiplier(mix);
+  const elasMul = passengerElasticityMultiplier(mix);
 
   const safeDelivered = Math.max(0, deliveredPax);
   const safePaxDay = Math.max(1, paxDay);
 
+  const pricing = priceStrategyConfig(priceStrategy, priceElasticity);
   const haul = haulFromDistance(distNm);
-  const ypp = yieldPerPax(haul, trustPct, distNm);
+  const ypp = yieldPerPax(haul, trustPct, distNm) * fareMul;
 
   const paxRatio = Math.min(1, safeDelivered / safePaxDay);
   const isCompleted = safeDelivered >= safePaxDay;
 
-  const pricing = priceStrategyConfig(priceStrategy);
   const baseGross = Math.round(
-    safeDelivered * ypp * crowdMultiplier * pricing.fareMultiplier,
+    safeDelivered *
+      ypp *
+      pricing.fareMultiplier *
+      crowdMultiplier *
+      congestionMultiplier,
   );
+
   const completionBonus = isCompleted
     ? Math.round(baseGross * COMPLETION_BONUS)
     : 0;
@@ -171,10 +280,13 @@ export function calcRouteRevenue(params: {
     fuelPerNm,
   );
 
-  const cost = fullCost;
+  const costRatio = Math.max(MIN_DAILY_COST_RATIO, paxRatio);
+  const cost = Math.round(fullCost * costRatio * elasMul);
+
+  const utilization = computeAircraftUtilization({ distNm, speedKts });
 
   const gross = baseGross + completionBonus;
-  const net = gross - cost;
+  const net = Math.round((gross - cost) * utilization.multiplier);
 
   return {
     gross,
@@ -183,104 +295,105 @@ export function calcRouteRevenue(params: {
     ypp,
     paxRatio,
     completionBonus,
+    priceStrategy: pricing.strategy,
+    fareMultiplier: pricing.fareMultiplier,
+    demandMultiplier: pricing.demandMultiplier,
+    utilization,
+    congestionMultiplier,
   };
 }
-
-// ─────────────────────────────────────────────────────────────────
-// INSTANT DELIVERY REWARD
-// Use this for popups like "+$4.2K"
-// ─────────────────────────────────────────────────────────────────
 
 export function calcInstantDeliveryReward(params: {
   distNm: number;
   trustPct: number;
   deliveredPax: number;
   crowdMultiplier?: number;
+  priceStrategy?: PriceStrategy | string | null;
+  priceElasticity?: number;
+  congestionMultiplier?: number;
+  businessPct?: number;
+  leisurePct?: number;
 }): number {
-  const { distNm, trustPct, deliveredPax, crowdMultiplier = 1.0 } = params;
+  const {
+    distNm,
+    trustPct,
+    deliveredPax,
+    crowdMultiplier = 1.0,
+    priceStrategy = "standard",
+    priceElasticity = computePriceElasticity(distNm),
+    congestionMultiplier = 1.0,
+    businessPct = 0.25,
+    leisurePct = 0.75,
+  } = params;
+
+  const mix = { businessPct, leisurePct };
+  const fareMul = passengerFareMultiplier(mix);
 
   const haul = haulFromDistance(distNm);
-  const ypp = yieldPerPax(haul, trustPct, distNm);
+  const ypp = yieldPerPax(haul, trustPct, distNm) * fareMul;
+  const pricing = priceStrategyConfig(priceStrategy, priceElasticity);
 
-  return Math.max(0, Math.round(deliveredPax * ypp * crowdMultiplier));
+  return Math.max(
+    0,
+    Math.round(
+      deliveredPax *
+        ypp *
+        pricing.fareMultiplier *
+        crowdMultiplier *
+        congestionMultiplier,
+    ),
+  );
 }
-
-// ─────────────────────────────────────────────────────────────────
-// DEMAND COMPLETION BONUS
-// Use this when a demand reaches 100% delivered.
-// ─────────────────────────────────────────────────────────────────
 
 export function calcDemandCompletionBonus(params: {
   distNm: number;
   trustPct: number;
   paxDay: number;
+  priceStrategy?: PriceStrategy | string | null;
+  priceElasticity?: number;
 }): number {
-  const { distNm, trustPct, paxDay } = params;
+  const {
+    distNm,
+    trustPct,
+    paxDay,
+    priceStrategy = "standard",
+    priceElasticity = computePriceElasticity(distNm),
+  } = params;
 
   const haul = haulFromDistance(distNm);
   const ypp = yieldPerPax(haul, trustPct, distNm);
-  const base = paxDay * ypp;
+  const pricing = priceStrategyConfig(priceStrategy, priceElasticity);
+  const base = paxDay * ypp * pricing.fareMultiplier;
 
   return Math.round(base * COMPLETION_BONUS);
 }
-
-// ─────────────────────────────────────────────────────────────────
-// DAILY INTEREST
-// ─────────────────────────────────────────────────────────────────
 
 export function dailyInterest(loan: number, annualRatePct: number): number {
   return Math.round((loan * (annualRatePct / 100)) / 365);
 }
 
-// ─────────────────────────────────────────────────────────────────
-// FORMAT CASH
-// ─────────────────────────────────────────────────────────────────
+export function fmtCash(value: number): string {
+  const sign = value < 0 ? "-" : "";
+  const abs = Math.abs(value);
 
-export function fmtCash(v: number): string {
-  if (v >= 1_000_000) return "$" + (v / 1_000_000).toFixed(2) + "M";
-  if (v >= 1_000) return "$" + (v / 1_000).toFixed(0) + "K";
-  return "$" + Math.round(v).toLocaleString();
+  if (abs >= 1_000_000_000)
+    return `${sign}$${(abs / 1_000_000_000).toFixed(1)}B`;
+  if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(1)}M`;
+  if (abs >= 1_000) return `${sign}$${Math.round(abs / 1000)}K`;
+
+  return `${sign}$${Math.round(abs).toLocaleString()}`;
 }
 
-export function fmtCashExact(v: number): string {
-  const abs = Math.abs(v);
-  const sign = v < 0 ? "-$" : "+$";
+export function fmtCashExact(value: number): string {
+  const abs = Math.abs(value);
+  const sign = value < 0 ? "-$" : "+$";
   return sign + Math.round(abs).toLocaleString();
 }
 
-export function fmtCashShort(v: number): string {
-  const abs = Math.abs(v);
-  const sign = v < 0 ? "-$" : "+$";
-
+export function fmtCashShort(value: number): string {
+  const abs = Math.abs(value);
+  const sign = value < 0 ? "-$" : "+$";
   if (abs >= 1_000_000) return sign + (abs / 1_000_000).toFixed(1) + "M";
-  if (abs >= 1_000) return sign + (abs / 1_000).toFixed(0) + "K";
-
+  if (abs >= 1_000) return sign + Math.round(abs / 1000) + "K";
   return sign + Math.round(abs).toLocaleString();
-}
-
-export function priceStrategyConfig(strategy?: PriceStrategy) {
-  if (strategy === "low") {
-    return {
-      label: "Low Fare",
-      fareMultiplier: 0.85,
-      demandMultiplier: 1.18,
-      popularityBonus: 1,
-    };
-  }
-
-  if (strategy === "premium") {
-    return {
-      label: "Premium",
-      fareMultiplier: 1.28,
-      demandMultiplier: 0.82,
-      popularityBonus: -1,
-    };
-  }
-
-  return {
-    label: "Standard",
-    fareMultiplier: 1,
-    demandMultiplier: 1,
-    popularityBonus: 0,
-  };
 }

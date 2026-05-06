@@ -100,7 +100,7 @@ function stealRateFor(
   difficulty: AIPressureDifficulty,
 ): number {
   const cfg = PRESSURE_CONFIG[difficulty];
-  const pressure = Math.min(1, waiting / Math.max(1, demand.pax_day));
+  const pressure = Math.min(1, waiting / Math.max(1, demand.base_pax_day));
   const trustFactor = Math.max(0.5, Math.min(1.2, ai.trust / 80));
   const aggressionFactor =
     difficulty === "aggressive" ? 1.2 : difficulty === "passive" ? 0.75 : 1;
@@ -131,8 +131,8 @@ export function applyAIPressure(params: {
   for (const demand of params.demands) {
     if (demand.status === "no_plane") continue;
 
-    const currentPaxDay = updatedPaxDay.get(demand.id) ?? demand.pax_day;
-    const currentDemand = { ...demand, pax_day: currentPaxDay };
+    const currentPaxDay = updatedPaxDay.get(demand.id) ?? demand.base_pax_day;
+    const currentDemand = { ...demand, base_pax_day: currentPaxDay };
     const waiting = waitingPaxForDemand(currentDemand, params.dayProgress);
 
     if (waiting < cfg.minWaiting) continue;

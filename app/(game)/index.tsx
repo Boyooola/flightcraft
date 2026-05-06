@@ -11,12 +11,14 @@ import TopHUD from "@/components/hud/TopHUD";
 import GameMap from "@/components/map/GameMap";
 import SheetManager from "@/components/sheets/SheetManager";
 import AwayEarningsCard from "@/components/ui/AwayEarningsCard";
+import BankruptScreen from "@/components/ui/BankruptScreen";
 import DailyEventCard from "@/components/ui/DailyEventCard";
 import DaySummaryCard from "@/components/ui/DaySummaryCard";
 import GoalsOverlay from "@/components/ui/GoalsOverlay";
 import LoadingScreen from "@/components/ui/LoadingScreen";
 import MissionsPill from "@/components/ui/MissionsPill";
 import RouteCreationBanner from "@/components/ui/RouteCreationBanner";
+import SurgeIndicator from "@/components/ui/SurgeIndicator";
 import ToastStack from "@/components/ui/ToastStack";
 import { useAICompetition } from "@/hooks/useAICompetition";
 import { useAITick } from "@/hooks/useAITick";
@@ -29,6 +31,7 @@ import { useMissionChecker } from "@/hooks/useMissionChecker";
 import { useNotifications } from "@/hooks/useNotifications";
 import { useRateUs } from "@/hooks/useRateUs";
 import { useRevenueTick } from "@/hooks/useRevenueTick";
+import { useWeeklyChallenge } from "@/hooks/useWeeklyChallenge";
 import { useAirline, useLoadComplete, useLoadSteps, usePhase } from "@/store";
 import { useEffect, useState } from "react";
 import { StyleSheet, View } from "react-native";
@@ -47,6 +50,7 @@ function GameContent() {
   useNotifications();
   useRateUs();
   useLeaderboardPush();
+  useWeeklyChallenge();
   useAITick();
   useAICompetition();
 
@@ -88,10 +92,12 @@ function GameContent() {
       {phase === "playing" && <GoalsOverlay />}
       {phase === "playing" && <AwayEarningsCard />}
       {phase === "playing" && <DailyEventCard />}
+      {phase === "playing" && <SurgeIndicator />}
       {phase === "playing" && <DaySummaryCard />}
       {phase === "playing" && <ToastStack />}
       {(phase === "playing" || phase === "tutorial") && <RouteCreationBanner />}
       {phase === "tutorial" && mapReady && <TutorialScreen />}
+      {phase === "bankrupt" && <BankruptScreen />}
     </View>
   );
 }

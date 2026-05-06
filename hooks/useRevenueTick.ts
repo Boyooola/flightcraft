@@ -21,6 +21,12 @@ import {
 import { computePlayerMarketShare } from "@/lib/AIAirline";
 import { applyAIPressure } from "@/lib/aiPressure";
 import { allDemandsServed, hubCrowdingLevel } from "@/lib/demands";
+import { applyDemandWave, isDemandWaveDay } from "@/lib/demandWaves";
+import {
+  applyGlobalContractDay,
+  createGlobalContract,
+  shouldStartGlobalContracts,
+} from "@/lib/globalContracts";
 import { hubOutboundWaitingPax } from "@/lib/passengerFlow";
 import { calcRouteRevenue, dailyInterest } from "@/lib/revenue";
 import type { Demand, LedgerEntry } from "@/store";
@@ -28,7 +34,7 @@ import { useGameStore } from "@/store";
 import { useEffect, useRef } from "react";
 
 const CASH_WARNING_THRESHOLD = 200_000;
-const BANKRUPT_DAYS = 3;
+const BANKRUPT_DAYS = 5;
 const REP_STREAK_DAYS = 10;
 
 function snapshotDeliveredPax(demands: Demand[]) {
@@ -83,8 +89,11 @@ export function useRevenueTick() {
       updateDemand,
       setGlobalContract,
       completeGlobalContract,
+      updateGlobalContract,
       earnCash,
       resetDailyPax,
+      applyWaveToStore,
+      setActiveDemandWave,
     } = store;
 
     const entries: LedgerEntry[] = [];
@@ -147,7 +156,7 @@ export function useRevenueTick() {
 
       const playerPotentialPax = hubRoutes.reduce((sum, route) => {
         const demand = demands.find((d) => d.id === route.demand.id);
-        return sum + (demand?.pax_day ?? route.demand.pax_day ?? 0);
+        return sum + (demand?.base_pax_day ?? route.demand.base_pax_day ?? 0);
       }, 0);
 
       let aiPax = 0;
@@ -183,7 +192,7 @@ export function useRevenueTick() {
       const demand =
         demandSnapshot.find((d) => d.id === route.demand.id) ?? route.demand;
       const deliveredPax = paxSnapshot.get(demand.id) ?? 0;
-      const remaining = Math.max(0, demand.pax_day - deliveredPax);
+      const remaining = Math.max(0, demand.base_pax_day - deliveredPax);
 
       if (deliveredPax <= 0) stalledRouteCount++;
 
@@ -199,6 +208,7 @@ export function useRevenueTick() {
       const marketShare = computePlayerMarketShare(
         hub?.trust ?? 50,
         aiAirlines,
+        demand.origin.iata,
         demand.dest.iata,
       );
 
@@ -210,12 +220,13 @@ export function useRevenueTick() {
         speedKts: plane.speed_kts,
         trustPct: hub?.trust ?? 0,
         deliveredPax,
-        paxDay: demand.pax_day,
+        paxDay: demand.base_pax_day,
         costPerSector: plane.cost_per_sector ?? 500,
         fuelPerNm: plane.fuel_per_nm ?? 2.0,
         crowdMultiplier: revMultiplier,
+        businessPct: demand.business_pct ?? 0.25,
+        leisurePct: demand.leisure_pct ?? 0.75,
       });
-
       const finalRevenue = res.net;
       totalRev += finalRevenue;
       totalPaxToday += deliveredPax;
@@ -277,8 +288,32 @@ export function useRevenueTick() {
 
     const net = totalRev - interest;
 
-    // Route rewards already happened live. Only interest changes cash here.
+    // Route rewards already happened live. Only interest + maintenance change cash here.
     if (interest > 0) accrueInterest(interest);
+
+    // Idle plane maintenance cost — planes with no active route still cost money
+    const { ownedPlanes: allPlanes } = useGameStore.getState();
+    const activePlaneIds = new Set(routes.map((r) => r.plane.id));
+    const idlePlanes = (allPlanes ?? []).filter(
+      (p) => !activePlaneIds.has(p.id),
+    );
+    const maintenanceCost = idlePlanes.reduce((sum, p) => {
+      const dailyOps =
+        (p.plane_model.cost_per_sector ?? 500) * 2 +
+        (p.plane_model.fuel_per_nm ?? 2) * 500;
+      return sum + Math.round(dailyOps * 0.15);
+    }, 0);
+    if (maintenanceCost > 0) {
+      earnCash(-maintenanceCost);
+      entries.push({
+        id: `maint-${airline.day}`,
+        day: airline.day,
+        type: "interest" as const,
+        label: `Idle maintenance (${idlePlanes.length} plane${idlePlanes.length !== 1 ? "s" : ""})`,
+        amount: -maintenanceCost,
+        route_id: null,
+      });
+    }
     if (entries.length) addLedgerEntries(entries);
 
     // Weekly progress accumulation.
@@ -331,9 +366,13 @@ export function useRevenueTick() {
               speedKts: plane.speed_kts,
               trustPct: hub?.trust ?? 0,
               deliveredPax,
-              paxDay: demand.pax_day,
+              paxDay: demand.base_pax_day,
               costPerSector: plane.cost_per_sector ?? 500,
               fuelPerNm: plane.fuel_per_nm ?? 2.0,
+              priceStrategy: (route as any).price_strategy ?? "standard",
+              priceElasticity: demand.price_elasticity ?? 1,
+              businessPct: demand.business_pct ?? 0.25,
+              leisurePct: demand.leisure_pct ?? 0.75,
             }).net >= 0
           );
         });
@@ -370,6 +409,17 @@ export function useRevenueTick() {
       );
     }, 0);
 
+    // Hub crowding counts — used in DaySummaryCard and global contracts
+    let busyCount = 0,
+      overcrowdedCount = 0,
+      crisisHubs = 0;
+    hubs.forEach((hub) => {
+      const level = crowdingByHub.get(hub.airport.iata)?.level;
+      if (level === "busy") busyCount++;
+      else if (level === "overcrowded") overcrowdedCount++;
+      else if (level === "crisis") crisisHubs++;
+    });
+
     emitDaySummaryToast({
       id: `day-summary-${airline.day}`,
       day: airline.day,
@@ -384,6 +434,9 @@ export function useRevenueTick() {
       waitingPax: totalWaitingPax,
       stalledRoutes: stalledRouteCount,
       aiStolenPax: aiPressure.totalStolenPax,
+      busyHubs: busyCount,
+      overcrowdedHubs: overcrowdedCount,
+      crisisHubs: crisisHubs,
     });
 
     hubs.forEach((hub) => {
@@ -494,8 +547,99 @@ export function useRevenueTick() {
     });
 
     aiPressure.demandUpdates.forEach((update) => {
-      updateDemand(update.demandId, { pax_day: update.pax_day });
+      updateDemand(update.demandId, { base_pax_day: update.pax_day });
     });
+
+    // ── Demand waves ─────────────────────────────────────────────
+    // Clear previous wave first (it only lasts one day)
+    setActiveDemandWave(null);
+
+    if (isDemandWaveDay(airline.day)) {
+      const {
+        demands: latestDemands,
+        hubs: latestHubsForWave,
+        airline: latestAirline,
+      } = useGameStore.getState();
+      const gameSeed = latestAirline?.seed ?? "DEFAULT";
+
+      const wave = applyDemandWave({
+        day: airline.day,
+        gameSeed,
+        demands: latestDemands,
+        hubs: latestHubsForWave,
+      });
+
+      if (wave) {
+        // Apply pax_day boosts to store + set active wave for UI
+        applyWaveToStore(wave);
+
+        // Notify player
+        try {
+          const Notifications = require("expo-notifications");
+          Notifications.scheduleNotificationAsync({
+            content: {
+              title: `${wave.wave.title}!`,
+              body: `${wave.wave.desc} ${wave.wave.effect}.`,
+              data: { type: "demand_wave", waveKind: wave.wave.kind },
+            },
+            trigger: null,
+          }).catch(() => {});
+        } catch {}
+      }
+    }
+
+    // ── Global contracts ─────────────────────────────────────
+    {
+      const {
+        globalContract,
+        completedGlobalContracts,
+        airline: latestAirline,
+        hubs: latestHubs,
+      } = useGameStore.getState();
+
+      const gameSeed = latestAirline?.seed ?? "DEFAULT";
+      const day = latestAirline?.day ?? 1;
+
+      // Start a new contract if conditions met
+      if (!globalContract && shouldStartGlobalContracts(day)) {
+        const contract = createGlobalContract({
+          day,
+          seed: gameSeed,
+          completedContracts: completedGlobalContracts,
+        });
+        setGlobalContract(contract);
+      }
+
+      // Advance active contract
+      if (globalContract?.status === "active") {
+        const crisisCount = crisisHubs;
+
+        const updated = applyGlobalContractDay(globalContract, {
+          day,
+          movedPax: totalPaxToday,
+          clearedSlots: activeRouteCount,
+          net: totalRev - interest,
+          crisisHubs: crisisCount,
+          rivalCapturedPax: aiPressure.totalStolenPax,
+        });
+
+        if (updated.status === "completed") {
+          updateGlobalContract(updated);
+          completeGlobalContract();
+          emitWarningToast({
+            id: `contract-done-${airline.day}`,
+            level: "low",
+            cash: useGameStore.getState().airline?.cash ?? 0,
+            message: `Contract Complete — ${updated.title}. Reward: +$${(updated.rewardCash ?? 0).toLocaleString()}`,
+          });
+          if (updated.rewardCash) earnCash(updated.rewardCash);
+        } else if (updated.status === "failed") {
+          updateGlobalContract(updated);
+        } else {
+          updateGlobalContract(updated);
+        }
+      }
+    }
 
     resetDailyPax();
     saveDay();

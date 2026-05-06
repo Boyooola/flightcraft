@@ -264,7 +264,7 @@ function buildDemandWaveEvent(day: number): DailyEvent | null {
 
   applied.updates.forEach((update) => {
     store.updateDemand(update.demandId, {
-      pax_day: update.newPaxDay,
+      base_pax_day: update.newPaxDay,
     });
   });
 
@@ -301,6 +301,9 @@ export function useDailyEvents() {
         const store = useGameStore.getState();
         const gameSeed = store.airline?.seed ?? "DEFAULT";
         const aiAirlines = store.aiAirlines;
+
+        // Clear previous day's event first
+        store.setDailyEvent(null);
 
         let event: DailyEvent | null = buildDemandWaveEvent(day);
 

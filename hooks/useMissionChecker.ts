@@ -104,7 +104,7 @@ export function useMissionChecker() {
           dest: d.dest,
           haul: d.haul,
           delivered_pax_today: d.delivered_pax_today ?? 0,
-          pax_day: d.pax_day,
+          pax_day: d.base_pax_day,
         })),
         loanRepaidToday: loanRepaidRef.current,
         anyOvercrowded,
@@ -153,7 +153,7 @@ export function useMissionChecker() {
         dest: d.dest,
         haul: d.haul,
         status: d.status,
-        pax_day: d.pax_day,
+        pax_day: d.base_pax_day,
       })),
       pendingDemands: pendingDemands.map((d) => ({
         hub_iata: d.hub_iata,

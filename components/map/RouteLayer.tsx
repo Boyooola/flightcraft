@@ -158,8 +158,21 @@ export default function RouteLayer({
       const now = Date.now();
       const scaledMs = LEG_DURATION_MS / Math.max(1, speed);
 
-      const { demands, hubs, addPaxDelivered, earnCash } =
-        useGameStore.getState();
+      // Read event/wave multipliers from store directly — hooks can't be
+      // called inside setInterval callbacks, only at component render time.
+      const {
+        dailyEvent,
+        activeDemandWave,
+        demands,
+        hubs,
+        addPaxDelivered,
+        earnCash,
+      } = useGameStore.getState();
+
+      // Combined revenue multiplier from daily event + active demand wave
+      const globalRevMul =
+        (dailyEvent?.revenueMultiplier ?? 1.0) *
+        (activeDemandWave?.wave.revenueMultiplier ?? 1.0);
 
       const newPlanes: PlaneState[] = active.map((route) => {
         const pts = routePoints[route.id];
@@ -218,6 +231,7 @@ export default function RouteLayer({
               const share = computePlayerMarketShare(
                 hub?.trust ?? 0,
                 aiAirlines,
+                liveDemand.origin.iata,
                 liveDemand.dest.iata,
               );
 
@@ -238,6 +252,11 @@ export default function RouteLayer({
                 distNm: route.total_dist_nm ?? liveDemand.dist_nm,
                 trustPct: hub?.trust ?? 0,
                 deliveredPax: effective,
+                priceStrategy: (route as any).price_strategy ?? "standard",
+                priceElasticity: liveDemand.price_elasticity ?? 1,
+                crowdMultiplier: globalRevMul, // event + wave multiplier
+                businessPct: liveDemand.business_pct ?? 0.25,
+                leisurePct: liveDemand.leisure_pct ?? 0.75,
               });
 
               earnCash(reward);
