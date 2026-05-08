@@ -120,11 +120,11 @@ export function useRevenueTick() {
 
     if (aiPressure.demandUpdates.length > 0) {
       const updateMap = new Map(
-        aiPressure.demandUpdates.map((u) => [u.demandId, u.pax_day]),
+        aiPressure.demandUpdates.map((u) => [u.demandId, u.base_pax_day]),
       );
       demandSnapshot = demandSnapshot.map((demand) =>
         updateMap.has(demand.id)
-          ? { ...demand, pax_day: updateMap.get(demand.id)! }
+          ? { ...demand, base_pax_day: updateMap.get(demand.id)! }
           : demand,
       );
     }
@@ -547,7 +547,7 @@ export function useRevenueTick() {
     });
 
     aiPressure.demandUpdates.forEach((update) => {
-      updateDemand(update.demandId, { base_pax_day: update.pax_day });
+      updateDemand(update.demandId, { base_pax_day: update.base_pax_day });
     });
 
     // ── Demand waves ─────────────────────────────────────────────

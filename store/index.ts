@@ -431,7 +431,7 @@ export const useGameStore = create<GameStore>()(
             demands: s.demands.map((d) => {
               const update = wave.updates.find((u) => u.demandId === d.id);
               if (!update) return d;
-              return { ...d, pax_day: update.newPaxDay };
+              return { ...d, base_pax_day: update.newPaxDay };
             }),
           }),
           false,
@@ -598,7 +598,6 @@ export const useGameStore = create<GameStore>()(
             return {
               ...d,
               popularity,
-              pax_day: newPax,
               base_pax_day: newPax,
               delivered_pax_today: 0,
               ai_stolen_pax: 0,
@@ -611,7 +610,7 @@ export const useGameStore = create<GameStore>()(
 
             return {
               ...d,
-              pax_day: recovered,
+              base_pax_day: recovered,
               delivered_pax_today: 0,
               ai_stolen_pax: 0,
               price_elasticity: d.price_elasticity ?? 1,

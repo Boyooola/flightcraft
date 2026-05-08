@@ -4,7 +4,7 @@ export default {
   expo: {
     name: "Flightcraft",
     slug: "flightcraft",
-    version: "0.3.0",
+    version: "0.4.0",
     orientation: "portrait",
     icon: "./assets/images/icon.png",
     scheme: "flightcraft",

@@ -59,7 +59,7 @@ export interface MissionContext {
     dest: Airport;
     haul: string;
     status: string;
-    pax_day: number;
+    base_pax_day: number;
   }[];
   pendingDemands: {
     hub_iata: string;
@@ -85,7 +85,7 @@ export interface MissionProgress {
     dest: Airport;
     haul: string;
     delivered_pax_today: number;
-    pax_day: number;
+    base_pax_day: number;
   }[];
   loanRepaidToday: number;
   anyOvercrowded: boolean;
@@ -188,7 +188,7 @@ function serveAnyDemandMission(
 function paxCarryMission(ctx: MissionContext, day: number): Mission {
   const active = activeDemandList(ctx);
 
-  const visibleDemandPax = active.reduce((sum, d) => sum + d.pax_day, 0);
+  const visibleDemandPax = active.reduce((sum, d) => sum + d.base_pax_day, 0);
 
   const target =
     ctx.totalPaxToday > 0
@@ -410,8 +410,10 @@ export function checkMissionComplete(
 
     case "fill_rate":
       return prog.demands.some((d) => {
-        if (d.pax_day <= 0) return false;
-        return (d.delivered_pax_today / d.pax_day) * 100 >= (t.fillTarget ?? 0);
+        if (d.base_pax_day <= 0) return false;
+        return (
+          (d.delivered_pax_today / d.base_pax_day) * 100 >= (t.fillTarget ?? 0)
+        );
       });
 
     case "clear_crowding":

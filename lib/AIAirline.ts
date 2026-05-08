@@ -407,7 +407,7 @@ export interface AIPressureSteal {
 export interface AIPressureResult {
   totalStolenPax: number;
   steals: AIPressureSteal[];
-  demandUpdates: { demandId: string; pax_day: number }[];
+  demandUpdates: { demandId: string; base_pax_day: number }[];
 }
 
 const AI_PRESSURE_CONFIG = {
@@ -563,7 +563,7 @@ export function applyAIPressure(params: {
     totalStolenPax: steals.reduce((sum, s) => sum + s.stolenPax, 0),
     steals,
     demandUpdates: Array.from(nextPaxDayByDemand.entries()).map(
-      ([demandId, pax_day]) => ({ demandId, pax_day }),
+      ([demandId, base_pax_day]) => ({ demandId, base_pax_day }),
     ),
   };
 }

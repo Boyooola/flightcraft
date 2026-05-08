@@ -31,7 +31,7 @@ export interface AIPressureResult {
   steals: AIDemandSteal[];
   demandUpdates: {
     demandId: string;
-    pax_day: number;
+    base_pax_day: number;
   }[];
 }
 
@@ -176,7 +176,7 @@ export function applyAIPressure(params: {
   }
 
   const demandUpdates = Array.from(updatedPaxDay.entries()).map(
-    ([demandId, pax_day]) => ({ demandId, pax_day }),
+    ([demandId, base_pax_day]) => ({ demandId, base_pax_day }),
   );
 
   return {

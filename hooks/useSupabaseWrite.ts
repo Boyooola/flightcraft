@@ -130,11 +130,10 @@ export function useBuyHub() {
             dest: airportMap.get(row.dest_iata)!,
             dist_nm: row.dist_nm,
             haul: row.haul as Demand["haul"],
-            pax_day: row.pax_day,
             status: row.status as Demand["status"],
             delivered_pax_today: 0,
             popularity: row.popularity,
-            base_pax_day: row.base_pax_day ?? row.pax_day,
+            base_pax_day: row.base_pax_day ?? 0,
           }));
 
           addDemands(fullDemands);
@@ -985,7 +984,7 @@ export function useCreateCustomRoute() {
               dest_iata: dest.iata,
               dist_nm: distNm,
               haul,
-              pax_day: paxDay,
+              base_pax_day: paxDay,
               status: "pending",
               source: "custom",
             })

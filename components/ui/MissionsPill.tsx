@@ -85,9 +85,9 @@ function computeLiveComplete(
 
     case "fill_rate":
       return ctx.demands.some((d) => {
-        if (d.pax_day <= 0) return false;
+        if (d.base_pax_day <= 0) return false;
         return (
-          ((d.delivered_pax_today ?? 0) / d.pax_day) * 100 >=
+          ((d.delivered_pax_today ?? 0) / d.base_pax_day) * 100 >=
           (t.fillTarget ?? 0)
         );
       });

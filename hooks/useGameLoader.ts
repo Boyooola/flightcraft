@@ -289,7 +289,6 @@ export function useGameLoader() {
               dest_iata: string;
               dist_nm: number;
               haul: string;
-              pax_day: number;
               status: string;
               base_pax_day: number;
               popularity: number;
@@ -308,8 +307,7 @@ export function useGameLoader() {
                 dist_nm: d.dist_nm,
                 haul: d.haul as HaulClass,
 
-                pax_day: d.pax_day,
-                base_pax_day: d.base_pax_day ?? d.pax_day,
+                base_pax_day: d.base_pax_day ?? 0,
                 popularity: d.popularity ?? 0,
                 price_elasticity: Number(d.price_elasticity ?? 1),
                 delivered_pax_today: d.delivered_pax_today ?? 0,
