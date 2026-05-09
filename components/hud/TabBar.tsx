@@ -37,7 +37,7 @@ interface TabDef {
 const LEFT_TABS: TabDef[] = [
   {
     id: "routes",
-    label: "Flow",
+    label: "Routes",
     Icon: ({ color, size }) => (
       <MaterialCommunityIcons name="routes" size={size} color={color} />
     ),
@@ -61,7 +61,7 @@ const RIGHT_TABS: TabDef[] = [
   },
   {
     id: "settings",
-    label: "More",
+    label: "Menu",
     Icon: ({ color, size }) => (
       <Ionicons name="grid-outline" size={size} color={color} />
     ),

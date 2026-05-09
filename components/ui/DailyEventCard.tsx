@@ -146,7 +146,14 @@ export default function DailyEventCard() {
       ]}
     >
       <TouchableOpacity
-        style={[s.card, { borderColor: color + "55" }]}
+        style={[
+          s.card,
+          {
+            borderColor: color + "33",
+            borderLeftColor: color,
+            borderLeftWidth: 3,
+          },
+        ]}
         onPress={dismiss}
         activeOpacity={0.94}
       >

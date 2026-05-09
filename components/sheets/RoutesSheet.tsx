@@ -15,7 +15,7 @@ import { passengerTypeBreakdown } from "@/lib/passengerTypes";
 import {
   calcRouteRevenue,
   computePriceElasticity,
-  fmtCash,
+  fmtCash
 } from "@/lib/revenue";
 import { supabase } from "@/lib/supabase";
 import type { Demand, Route } from "@/store";
@@ -1310,5 +1310,29 @@ const s = StyleSheet.create({
   emptyBtnText: {
     fontSize: 13,
     fontWeight: "800",
+  },
+});
+
+const es = StyleSheet.create({
+  wrap: { flex: 1, padding: Spacing.lg },
+  empty: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: Spacing.md,
+    paddingVertical: 60,
+  },
+  emptyTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: Colors.text,
+    textAlign: "center",
+  },
+  emptySub: {
+    fontSize: 13,
+    color: Colors.muted,
+    textAlign: "center",
+    lineHeight: 20,
+    maxWidth: 280,
   },
 });

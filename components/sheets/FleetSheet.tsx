@@ -470,6 +470,20 @@ export default function FleetSheet() {
     setTimeout(() => startCreation(), 120);
   };
 
+  if (ownedPlanes.length === 0)
+    return (
+      <BottomSheetScrollView contentContainerStyle={[es.wrap]}>
+        <View style={es.empty}>
+          <Ionicons name="airplane-outline" size={48} color={Colors.dim} />
+          <Text style={es.emptyTitle}>No planes yet</Text>
+          <Text style={es.emptySub}>
+            Buy your first aircraft to start moving passengers and earning
+            revenue.
+          </Text>
+        </View>
+      </BottomSheetScrollView>
+    );
+
   return (
     <BottomSheetScrollView
       style={s.root}
@@ -967,5 +981,29 @@ const s = StyleSheet.create({
     color: Colors.dim,
     marginTop: 2,
     fontWeight: "600",
+  },
+});
+
+const es = StyleSheet.create({
+  wrap: { flex: 1, padding: Spacing.lg },
+  empty: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: Spacing.md,
+    paddingVertical: 60,
+  },
+  emptyTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: Colors.text,
+    textAlign: "center",
+  },
+  emptySub: {
+    fontSize: 13,
+    color: Colors.muted,
+    textAlign: "center",
+    lineHeight: 20,
+    maxWidth: 280,
   },
 });

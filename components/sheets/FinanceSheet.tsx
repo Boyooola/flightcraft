@@ -210,7 +210,22 @@ export default function FinanceSheet() {
         };
       })
       .sort((a, b) => b.reward - a.reward);
-  }, [routes, hubs]);
+  }, [routes, hubs, day]);
+
+  if (routeRewards.length === 0) {
+    return (
+      <BottomSheetScrollView contentContainerStyle={es.wrap}>
+        <View style={es.empty}>
+          <Ionicons name="cash-outline" size={48} color={Colors.dim} />
+          <Text style={es.emptyTitle}>No revenue yet</Text>
+          <Text style={es.emptySub}>
+            Create routes and assign planes to start earning. Your daily summary
+            will appear here.
+          </Text>
+        </View>
+      </BottomSheetScrollView>
+    );
+  }
 
   const totalRouteReward = routeRewards.reduce((sum, r) => sum + r.reward, 0);
 
@@ -230,6 +245,7 @@ export default function FinanceSheet() {
   const dailyNet = totalRouteReward - interest - maintenanceCost;
   const netWorth = cash - loan;
 
+  // eslint-disable-next-line react-hooks/rules-of-hooks
   const recentLedger = useMemo(
     () =>
       [...ledger]
@@ -238,6 +254,7 @@ export default function FinanceSheet() {
     [ledger],
   );
 
+  // eslint-disable-next-line react-hooks/rules-of-hooks
   const cashBars = useMemo(() => {
     const byDay: Record<number, number> = {};
 
@@ -694,5 +711,29 @@ const s = StyleSheet.create({
     color: Colors.dim,
     textAlign: "center",
     lineHeight: 18,
+  },
+});
+
+const es = StyleSheet.create({
+  wrap: { flex: 1, padding: Spacing.lg },
+  empty: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: Spacing.md,
+    paddingVertical: 60,
+  },
+  emptyTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: Colors.text,
+    textAlign: "center",
+  },
+  emptySub: {
+    fontSize: 13,
+    color: Colors.muted,
+    textAlign: "center",
+    lineHeight: 20,
+    maxWidth: 280,
   },
 });

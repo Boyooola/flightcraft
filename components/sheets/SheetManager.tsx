@@ -8,10 +8,11 @@
 import { Colors } from "@/constants/theme";
 import { useAvailableSheetHeight, useHudHeight } from "@/hooks/useSheetLayout";
 import { useActiveSheet, useGameStore } from "@/store";
+import { Ionicons } from "@expo/vector-icons";
 import type { BottomSheetBackdropProps } from "@gorhom/bottom-sheet";
 import BottomSheet, { BottomSheetBackdrop } from "@gorhom/bottom-sheet";
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { StyleSheet } from "react-native";
+import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import AchievementsSheet from "./AchievementsSheet";
 import AirportSheet from "./AirportSheet";
 import BankSheet from "./BankSheet";
@@ -95,6 +96,41 @@ export default function SheetManager() {
       style={s.sheet}
       containerStyle={{ zIndex: 200 }}
     >
+      {/* Close button row — always visible at top of every sheet */}
+      <View style={s.closeRow}>
+        <Text style={s.sheetTitle}>
+          {activeSheet === "airport"
+            ? "Airport"
+            : activeSheet === "routes"
+              ? "Routes"
+              : activeSheet === "fleet"
+                ? "Fleet"
+                : activeSheet === "finance"
+                  ? "Finance"
+                  : activeSheet === "settings"
+                    ? "Settings"
+                    : activeSheet === "leaderboard"
+                      ? "Leaderboard"
+                      : activeSheet === "bank"
+                        ? "Bank"
+                        : activeSheet === "create-route"
+                          ? "New Route"
+                          : activeSheet === "achievements"
+                            ? "Achievements"
+                            : activeSheet === "missions"
+                              ? "Missions"
+                              : ""}
+        </Text>
+        <TouchableOpacity
+          style={s.closeBtn}
+          onPress={() => useGameStore.getState().closeSheet()}
+          hitSlop={12}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="close" size={16} color={Colors.dim} />
+        </TouchableOpacity>
+      </View>
+
       {activeSheet === "airport" && <AirportSheet />}
       {activeSheet === "routes" && <RoutesSheet />}
       {activeSheet === "fleet" && <FleetSheet />}
@@ -118,12 +154,38 @@ const s = StyleSheet.create({
     elevation: 200,
   },
   bg: {
-    backgroundColor: "#080f1c",
+    backgroundColor: "#0d1526",
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     borderTopWidth: 1,
     borderTopColor: Colors.border,
   },
   handleWrap: { paddingTop: 10, paddingBottom: 0 },
-  handle: { backgroundColor: "rgba(255,255,255,.18)", width: 36, height: 4 },
+  handle: { backgroundColor: "rgba(255,255,255,.45)", width: 40, height: 5 },
+  closeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 20,
+    paddingTop: 4,
+    paddingBottom: 10,
+    borderBottomWidth: 0.5,
+    borderBottomColor: Colors.border,
+  },
+  sheetTitle: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: Colors.muted,
+    letterSpacing: 0.3,
+  },
+  closeBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderWidth: 0.5,
+    borderColor: Colors.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
 });

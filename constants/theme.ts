@@ -5,7 +5,8 @@ export const Colors = {
   panel: "#0a1525",
 
   // Borders
-  border: "rgba(255,255,255,0.07)",
+  border: "rgba(255,255,255,0.10)",
+  borderSection: "rgba(255,255,255,0.14)",
   borderHi: "rgba(56,189,248,0.4)",
 
   // Brand accents
@@ -19,8 +20,8 @@ export const Colors = {
 
   // Text
   text: "#dde6f0",
-  muted: "rgba(148,163,184,0.55)",
-  dim: "rgba(148,163,184,0.28)",
+  muted: "rgba(148,163,184,0.75)",
+  dim: "rgba(148,163,184,0.50)",
 
   // Families
   embraer: "#4ade80",

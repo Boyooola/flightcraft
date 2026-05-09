@@ -987,7 +987,12 @@ export default function AirportSheet() {
             <View
               style={[
                 s.crowdingBanner,
-                { backgroundColor: cfg.bg, borderColor: cfg.border },
+                {
+                  backgroundColor: cfg.bg,
+                  borderColor: cfg.border,
+                  borderLeftColor: cfg.color,
+                  borderLeftWidth: 3,
+                },
               ]}
             >
               <Ionicons name={cfg.icon} size={17} color={cfg.color} />
