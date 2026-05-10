@@ -7,6 +7,11 @@
  * the continent field directly.
  */
 
+import { type AchievementId } from "@/constants/playGames";
+import {
+  setAchievementSteps as pgSetSteps,
+  unlockAchievement as pgUnlock,
+} from "@/hooks/usePlayGames";
 import { emitAchievementToast } from "@/hooks/useToast";
 import { ACHIEVEMENTS, type AchievementState } from "@/lib/achievements";
 import {
@@ -186,6 +191,10 @@ export function useAchievementChecker() {
       if (!achievement.check(state)) return;
 
       earnAchievement(achievement.id, airline.day);
+
+      // Unlock on Google Play Games
+      pgUnlock(achievement.id as AchievementId);
+
       // Accumulate for weekly challenge tracking
       const wp = useGameStore.getState().weeklyProgress;
       useGameStore
@@ -200,6 +209,31 @@ export function useAchievementChecker() {
         points: achievement.points,
         category: achievement.category,
       });
+    });
+
+    // Sync incremental achievements progress to Play Games
+    const incrementalUpdates: [AchievementId, number][] = [
+      ["pax_10k_all_time", Math.min(10000, totalPaxRef.current)],
+      [
+        "pax_100k_all_time",
+        Math.min(10000, Math.floor(totalPaxRef.current / 10)),
+      ],
+      ["routes_5", Math.min(5, activeRoutes.length)],
+      ["routes_10", Math.min(10, activeRoutes.length)],
+      ["routes_20", Math.min(20, activeRoutes.length)],
+      ["routes_35", Math.min(35, activeRoutes.length)],
+      ["hubs_5", Math.min(5, hubs.length)],
+      ["hubs_10", Math.min(10, hubs.length)],
+      ["planes_3", Math.min(3, ownedPlanes.length)],
+      ["planes_10", Math.min(10, ownedPlanes.length)],
+      ["planes_25", Math.min(25, ownedPlanes.length)],
+      ["missions_10", Math.min(10, missionsCompleted)],
+      ["missions_30", Math.min(30, missionsCompleted)],
+      ["countries_5", Math.min(5, countries.size)],
+      ["countries_15", Math.min(15, countries.size)],
+    ];
+    incrementalUpdates.forEach(([id, steps]) => {
+      if (steps > 0) pgSetSteps(id, steps);
     });
   }, [airline?.day]);
 }

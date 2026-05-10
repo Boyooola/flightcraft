@@ -20,7 +20,7 @@ export default {
 
     ios: {
       supportsTablet: false,
-      bundleIdentifier: "com.flightcraft.app",
+      bundleIdentifier: "com.stratoslabs.flightcraft",
       buildNumber: "1",
       infoPlist: {
         NSLocationWhenInUseUsageDescription:
@@ -36,8 +36,12 @@ export default {
         foregroundImage: "./assets/images/adaptive-icon.png",
         backgroundColor: "#04090f",
       },
+      googleServicesFile: "./google-services.json",
       permissions: ["com.android.vending.BILLING"],
       blockedPermissions: ["android.permission.RECORD_AUDIO"],
+      config: {
+        googleMobileAdsAppId: "ca-app-pub-3374708302627509~3697789196",
+      },
     },
 
     web: {
@@ -61,6 +65,7 @@ export default {
         },
       ],
       "@react-native-google-signin/google-signin",
+      "react-native-game-services",
       "@sentry/react-native",
       [
         "expo-notifications",
@@ -68,6 +73,12 @@ export default {
           icon: "./assets/images/notification-icon.png",
           color: "#0ea5e9",
           androidMode: "default",
+        },
+      ],
+      [
+        "react-native-google-mobile-ads",
+        {
+          androidAppId: "ca-app-pub-3374708302627509~3697789196",
         },
       ],
     ],

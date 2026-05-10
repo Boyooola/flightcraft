@@ -1,307 +1,211 @@
-// app/(auth)/index.tsx
+/**
+ * components/auth/AuthScreen.tsx
+ *
+ * First screen the player sees.
+ * Requires Google Play Games sign-in — no other auth option.
+ */
 
-import { Colors, MIN_TOUCH, Radius, Spacing } from "@/constants/theme";
-import { isGoogleSignInAvailable, useAuth } from "@/hooks/useAuth";
-import { supabase } from "@/lib/supabase";
+import { Colors, Radius, Spacing } from "@/constants/theme";
+import { useAuth } from "@/hooks/useAuth";
 import { Ionicons } from "@expo/vector-icons";
-import * as Haptics from "expo-haptics";
-import { router } from "expo-router";
-import { useState } from "react";
+import { useEffect, useRef } from "react";
 import {
-  ActivityIndicator,
-  SafeAreaView,
+  Animated,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
-
-const GOOGLE_BLUE = "#4285F4";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 export default function AuthScreen() {
-  const [loading, setLoading] = useState(false);
-  const [googleLoading, setGoogleLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const insets = useSafeAreaInsets();
+  const { signIn, isLoading } = useAuth();
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(30)).current;
 
-  const { signInWithGoogle } = useAuth();
-
-  const handleGuest = async () => {
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    setLoading(true);
-    setError(null);
-
-    const { error: err } = await supabase.auth.signInAnonymously();
-
-    if (err) {
-      setLoading(false);
-      setError(err.message);
-      return;
-    }
-
-    router.replace("/(game)");
-  };
-
-  const handleGoogle = async () => {
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    setGoogleLoading(true);
-    setError(null);
-
-    try {
-      await signInWithGoogle();
-      router.replace("/(game)");
-    } catch (err: any) {
-      setError(err.message ?? "Google Sign-In failed.");
-    } finally {
-      setGoogleLoading(false);
-    }
-  };
-
-  const googleAvailable = isGoogleSignInAvailable;
-  const anyLoading = loading || googleLoading;
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 700,
+        useNativeDriver: true,
+      }),
+      Animated.timing(slideAnim, {
+        toValue: 0,
+        duration: 600,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, []);
 
   return (
-    <SafeAreaView style={s.root}>
-      <View style={s.inner}>
-        <View style={s.logoBox}>
-          <Ionicons name="flash-outline" size={34} color={Colors.sky} />
-        </View>
+    <View style={[s.container, { paddingBottom: insets.bottom + 24 }]}>
+      {/* Background gradient feel */}
+      <View style={s.bgGlow} />
 
-        <Text style={s.wordmark}>FLIGHTCRAFT</Text>
-        <Text style={s.tagline}>PASSENGER RUSH TYCOON</Text>
-
-        <View style={s.heroCard}>
-          <Text style={s.heroLabel}>BUILD ROUTES</Text>
-          <Text style={s.heroTitle}>
-            Move passengers. Clear demand. Grow fast.
-          </Text>
-
-          <View style={s.statRow}>
-            <View style={s.stat}>
-              <Ionicons name="airplane-outline" size={14} color={Colors.sky} />
-              <Text style={s.statText}>Routes</Text>
-            </View>
-            <View style={s.stat}>
-              <Ionicons name="people-outline" size={14} color={Colors.green} />
-              <Text style={s.statText}>Pax Flow</Text>
-            </View>
-            <View style={s.stat}>
-              <Ionicons name="cash-outline" size={14} color={Colors.amber} />
-              <Text style={s.statText}>Rewards</Text>
-            </View>
+      <Animated.View
+        style={[
+          s.content,
+          { opacity: fadeAnim, transform: [{ translateY: slideAnim }] },
+        ]}
+      >
+        {/* Logo / hero */}
+        <View style={s.hero}>
+          <View style={s.logoWrap}>
+            <Ionicons name="airplane" size={52} color={Colors.sky} />
           </View>
+          <Text style={s.appName}>Flightcraft</Text>
+          <Text style={s.tagline}>Build your global airline empire</Text>
         </View>
 
-        <TouchableOpacity
-          style={[
-            s.primaryBtn,
-            anyLoading && s.btnDisabled,
-            !googleAvailable && s.btnDisabled,
-          ]}
-          onPress={handleGoogle}
-          disabled={anyLoading || !googleAvailable}
-          activeOpacity={0.88}
-        >
-          {googleLoading ? (
-            <ActivityIndicator color="#fff" size="small" />
-          ) : (
-            <>
-              <View style={s.googleIconWrap}>
-                <Text style={s.googleG}>G</Text>
+        {/* Feature pills */}
+        <View style={s.pills}>
+          {[
+            { icon: "globe-outline", label: "Real airports worldwide" },
+            { icon: "people-outline", label: "Compete with AI rivals" },
+            { icon: "trophy-outline", label: "Google Play achievements" },
+          ].map((f) => (
+            <View key={f.label} style={s.pill}>
+              <Ionicons name={f.icon as any} size={14} color={Colors.sky} />
+              <Text style={s.pillTxt}>{f.label}</Text>
+            </View>
+          ))}
+        </View>
+
+        {/* Sign in button */}
+        <View style={s.footer}>
+          <TouchableOpacity
+            style={[s.signInBtn, isLoading && { opacity: 0.7 }]}
+            onPress={signIn}
+            disabled={isLoading}
+            activeOpacity={0.85}
+          >
+            {isLoading ? (
+              <Animated.View style={s.btnInner}>
+                <Ionicons name="hourglass-outline" size={20} color="#fff" />
+                <Text style={s.btnTxt}>Signing in...</Text>
+              </Animated.View>
+            ) : (
+              <View style={s.btnInner}>
+                {/* Google Play Games logo color */}
+                <View style={s.gpgIcon}>
+                  <Ionicons name="game-controller" size={20} color="#fff" />
+                </View>
+                <Text style={s.btnTxt}>Sign in with Play Games</Text>
               </View>
-              <Text style={s.primaryText}>
-                {googleAvailable
-                  ? "SYNC WITH GOOGLE"
-                  : "GOOGLE REQUIRES UPDATE"}
-              </Text>
-            </>
-          )}
-        </TouchableOpacity>
+            )}
+          </TouchableOpacity>
 
-        <TouchableOpacity
-          style={[s.rushBtn, anyLoading && s.btnDisabled]}
-          onPress={handleGuest}
-          disabled={anyLoading}
-          activeOpacity={0.88}
-        >
-          {loading ? (
-            <ActivityIndicator color={Colors.bg} size="small" />
-          ) : (
-            <>
-              <Ionicons name="flash-outline" size={16} color={Colors.bg} />
-              <Text style={s.rushText}>START AS GUEST</Text>
-            </>
-          )}
-        </TouchableOpacity>
-
-        <Text style={s.note}>
-          Guest progress stays on this device · Google sync can be linked later
-        </Text>
-
-        {error && (
-          <View style={s.errorBox}>
-            <Ionicons name="warning-outline" size={14} color={Colors.red} />
-            <Text style={s.errorText}>{error}</Text>
-          </View>
-        )}
-      </View>
-    </SafeAreaView>
+          <Text style={s.legal}>
+            By playing you agree to Google Play Games Services.{"\n"}
+            Your game data is saved to your Play account.
+          </Text>
+        </View>
+      </Animated.View>
+    </View>
   );
 }
 
 const s = StyleSheet.create({
-  root: {
+  container: {
     flex: 1,
-    backgroundColor: Colors.bg,
+    backgroundColor: "#04090f",
+    justifyContent: "space-between",
+    paddingHorizontal: Spacing.xl,
   },
-  inner: {
+  bgGlow: {
+    position: "absolute",
+    top: -100,
+    left: -100,
+    width: 400,
+    height: 400,
+    borderRadius: 200,
+    backgroundColor: Colors.sky,
+    opacity: 0.04,
+  },
+  content: {
     flex: 1,
+    justifyContent: "space-between",
+    paddingTop: 80,
+  },
+  hero: {
     alignItems: "center",
-    justifyContent: "center",
-    padding: Spacing.xl,
+    gap: Spacing.md,
   },
-  logoBox: {
-    width: 78,
-    height: 78,
+  logoWrap: {
+    width: 96,
+    height: 96,
     borderRadius: 24,
-    backgroundColor: "rgba(56,189,248,0.08)",
+    backgroundColor: "rgba(56,189,248,0.1)",
     borderWidth: 1,
-    borderColor: "rgba(56,189,248,.32)",
+    borderColor: Colors.sky + "33",
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: Spacing.lg,
-  },
-  wordmark: {
-    fontSize: 34,
-    color: Colors.text,
-    letterSpacing: 7,
-    fontWeight: "900",
-  },
-  tagline: {
-    fontSize: 9,
-    color: Colors.sky,
-    letterSpacing: 3.5,
-    fontWeight: "800",
-    marginTop: 5,
-    marginBottom: Spacing.xl,
-    opacity: 0.75,
-  },
-  heroCard: {
-    width: "100%",
-    maxWidth: 340,
-    borderRadius: Radius.xl,
-    borderWidth: 1,
-    borderColor: Colors.sky + "25",
-    backgroundColor: "rgba(255,255,255,.03)",
-    padding: Spacing.md,
-    marginBottom: Spacing.lg,
-  },
-  heroLabel: {
-    fontSize: 8,
-    color: Colors.sky,
-    letterSpacing: 2,
-    fontWeight: "900",
-    marginBottom: 5,
-  },
-  heroTitle: {
-    fontSize: 15,
-    color: Colors.text,
-    fontWeight: "900",
-    lineHeight: 20,
-    marginBottom: Spacing.md,
-  },
-  statRow: {
-    flexDirection: "row",
-    gap: Spacing.sm,
-  },
-  stat: {
-    flex: 1,
-    alignItems: "center",
-    gap: 4,
-    borderRadius: Radius.md,
-    backgroundColor: "rgba(255,255,255,.035)",
-    paddingVertical: Spacing.sm,
-  },
-  statText: {
-    fontSize: 9,
-    color: Colors.dim,
-    fontWeight: "800",
-  },
-  primaryBtn: {
-    width: "100%",
-    maxWidth: 340,
-    minHeight: MIN_TOUCH,
-    borderRadius: Radius.lg,
-    backgroundColor: GOOGLE_BLUE,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 10,
     marginBottom: Spacing.sm,
   },
-  googleIconWrap: {
-    width: 22,
-    height: 22,
-    borderRadius: 999,
-    backgroundColor: "#fff",
+  appName: {
+    fontSize: 36,
+    fontWeight: "900",
+    color: Colors.text,
+    letterSpacing: -0.5,
+  },
+  tagline: {
+    fontSize: 15,
+    color: Colors.muted,
+    textAlign: "center",
+  },
+  pills: {
+    gap: Spacing.sm,
+  },
+  pill: {
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-  },
-  googleG: {
-    fontSize: 13,
-    fontWeight: "900",
-    color: GOOGLE_BLUE,
-  },
-  primaryText: {
-    fontSize: 12,
-    color: "#fff",
-    letterSpacing: 1.5,
-    fontWeight: "900",
-  },
-  rushBtn: {
-    width: "100%",
-    maxWidth: 340,
-    minHeight: MIN_TOUCH,
+    gap: Spacing.sm,
+    backgroundColor: "rgba(255,255,255,0.04)",
     borderRadius: Radius.lg,
-    backgroundColor: Colors.sky,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm + 2,
+  },
+  pillTxt: {
+    fontSize: 13,
+    color: Colors.text,
+    fontWeight: "500",
+  },
+  footer: {
+    gap: Spacing.md,
+  },
+  signInBtn: {
+    backgroundColor: "#1a73e8", // Google blue
+    borderRadius: Radius.xl,
+    paddingVertical: 16,
+    paddingHorizontal: Spacing.xl,
+  },
+  btnInner: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 8,
-    marginBottom: Spacing.md,
+    gap: Spacing.sm,
   },
-  rushText: {
-    color: Colors.bg,
-    fontSize: 12,
-    letterSpacing: 1.8,
-    fontWeight: "900",
+  gpgIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 6,
+    backgroundColor: "rgba(255,255,255,0.15)",
+    alignItems: "center",
+    justifyContent: "center",
   },
-  btnDisabled: {
-    opacity: 0.55,
+  btnTxt: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#fff",
   },
-  note: {
-    maxWidth: 320,
-    fontSize: 10,
+  legal: {
+    fontSize: 11,
     color: Colors.dim,
     textAlign: "center",
-    lineHeight: 15,
-    marginBottom: Spacing.lg,
-  },
-  errorBox: {
-    width: "100%",
-    maxWidth: 340,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 7,
-    padding: Spacing.md,
-    borderRadius: Radius.md,
-    backgroundColor: "rgba(248,113,113,.08)",
-    borderWidth: 1,
-    borderColor: "rgba(248,113,113,.2)",
-  },
-  errorText: {
-    flex: 1,
-    fontSize: 11,
-    color: Colors.red,
-    lineHeight: 16,
+    lineHeight: 17,
   },
 });

@@ -6,6 +6,8 @@
  * Column mapping adapts to common schema variants.
  */
 
+import { getPlayerId, setPlayerId } from "@/hooks/useAuth";
+import { initPlayGames, signInWithPlayGames } from "@/hooks/usePlayGames";
 import { setDemandSeed } from "@/lib/demands";
 import { supabase } from "@/lib/supabase";
 import type {
@@ -91,14 +93,23 @@ export function useGameLoader() {
   }, []);
 
   async function runLoad() {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    if (!session) {
-      setPhase("auth");
-      return;
+    // ── Play Games sign-in (required) ─────────────────────────
+    initPlayGames();
+    let playerId = getPlayerId();
+
+    if (!playerId) {
+      const player = await signInWithPlayGames();
+      if (!player?.playerId) {
+        // Sign-in failed or cancelled — show auth screen
+        setPhase("auth");
+        return;
+      }
+      playerId = player.playerId;
+      setPlayerId(playerId);
     }
-    const userId = session.user.id;
+
+    // ── RevenueCat — link to Play Games ID ─────────────────────
+    // initRevenueCat(playerId);
 
     // ── 1. airports ────────────────────────────────────────────
     try {
@@ -161,14 +172,14 @@ export function useGameLoader() {
       const { data, error } = await supabase
         .from("airlines")
         .select("*")
-        .eq("user_id", userId)
+        .eq("player_id", playerId)
         .maybeSingle();
 
       if (error) throw error;
       if (data) {
         const airline: AirlineConfig = {
           id: data.id,
-          user_id: data.user_id,
+          player_id: data.player_id,
           name: data.name,
           color: data.color ?? "#38BDF8",
           icon: data.icon ?? "plane",
@@ -184,9 +195,6 @@ export function useGameLoader() {
           ai_count: Number(data.ai_count ?? 0),
           ai_difficulty: data.ai_difficulty ?? "balanced",
         };
-        // Store whether this is a guest/anonymous session
-        const isAnon = session.user.is_anonymous ?? false;
-        useGameStore.setState({ isAnonymous: isAnon });
         setAirline(airline);
         // Wire seed so demand generation uses correct game seed
         setDemandSeed(airline.seed ?? "DEFAULT");
@@ -294,6 +302,9 @@ export function useGameLoader() {
               popularity: number;
               delivered_pax_today: number;
               price_elasticity: number;
+              ai_stolen_pax?: number;
+              business_pct?: number;
+              leisure_pct?: number;
             }) => {
               const origin = airportMap.get(d.origin_iata);
               const dest = airportMap.get(d.dest_iata);
@@ -311,6 +322,9 @@ export function useGameLoader() {
                 popularity: d.popularity ?? 0,
                 price_elasticity: Number(d.price_elasticity ?? 1),
                 delivered_pax_today: d.delivered_pax_today ?? 0,
+                ai_stolen_pax: d.ai_stolen_pax ?? 0,
+                business_pct: d.business_pct ?? 0.25,
+                leisure_pct: d.leisure_pct ?? 0.75,
 
                 status: d.status as "pending" | "served" | "no_plane",
               };

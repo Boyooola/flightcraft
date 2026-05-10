@@ -8,6 +8,11 @@
  */
 
 import { Colors, Radius, Spacing } from "@/constants/theme";
+import {
+  showAchievements,
+  showLeaderboard,
+  usePlayGames,
+} from "@/hooks/usePlayGames";
 import { useTabBarHeight } from "@/hooks/useSheetLayout";
 import { ACHIEVEMENTS } from "@/lib/achievements";
 import { fmtCash } from "@/lib/revenue";
@@ -16,13 +21,9 @@ import { useAIAirlines, useAirline, useGameStore } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
 import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  ActivityIndicator,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from "react-native";
+import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+
+
 
 type BoardTab = "global" | "rivals";
 type RowKind = "player" | "real" | "ai";
@@ -183,6 +184,59 @@ function LeaderRowCard({
   );
 }
 
+function PlayGamesButtons() {
+  const { isSignedIn, signIn } = usePlayGames();
+  return (
+    <View
+      style={{
+        flexDirection: "row",
+        gap: 8,
+        marginBottom: 12,
+        paddingHorizontal: 16,
+      }}
+    >
+      {isSignedIn ? (
+        <>
+          <TouchableOpacity
+            style={pgBtn.btn}
+            onPress={showLeaderboard}
+            activeOpacity={0.8}
+          >
+            <Text style={pgBtn.txt}>🏆 Global Leaderboard</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={pgBtn.btn}
+            onPress={showAchievements}
+            activeOpacity={0.8}
+          >
+            <Text style={pgBtn.txt}>⭐ Achievements</Text>
+          </TouchableOpacity>
+        </>
+      ) : (
+        <TouchableOpacity
+          style={[pgBtn.btn, { flex: 1 }]}
+          onPress={signIn}
+          activeOpacity={0.8}
+        >
+          <Text style={pgBtn.txt}>Sign in with Google Play Games</Text>
+        </TouchableOpacity>
+      )}
+    </View>
+  );
+}
+const pgBtn = {
+  btn: {
+    flex: 1,
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.10)",
+    paddingVertical: 10,
+    alignItems: "center" as const,
+  },
+  txt: { fontSize: 12, fontWeight: "600" as const, color: "#f1f5f9" },
+};
+
 export default function LeaderboardSheet() {
   const airline = useAirline();
   const closeSheet = useGameStore((s) => s.closeSheet);
@@ -318,150 +372,157 @@ export default function LeaderboardSheet() {
   const topDisplay = tab === "global" ? topGlobal : topRival;
 
   return (
-    <BottomSheetScrollView
-      style={s.root}
-      contentContainerStyle={[
-        s.content,
-        { paddingBottom: tabBarH + Spacing.xxl },
-      ]}
-      showsVerticalScrollIndicator={false}
-    >
-      <View style={s.header}>
-        <View style={s.hdrL}>
-          <Ionicons name="flash-outline" size={21} color={color} />
-          <View>
-            <Text style={s.title}>Rank Rush</Text>
-            <Text style={s.subtitle}>
-              {tab === "global" ? "Global airlines only" : "AI rivals only"}
-            </Text>
-          </View>
-        </View>
-
-        <View style={s.hdrR}>
-          <TouchableOpacity
-            style={[s.refreshBtn, { borderColor: color + "44" }]}
-            onPress={fetchLeaderboard}
-            disabled={loading}
-            activeOpacity={0.75}
-          >
-            {loading ? (
-              <ActivityIndicator size="small" color={color} />
-            ) : (
-              <Ionicons name="refresh-outline" size={16} color={color} />
-            )}
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            onPress={closeSheet}
-            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-          >
-            <Ionicons name="close" size={22} color={Colors.dim} />
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      <View style={s.tabs}>
-        {(["global", "rivals"] as const).map((value) => {
-          const active = tab === value;
-
-          return (
-            <TouchableOpacity
-              key={value}
-              style={[
-                s.tab,
-                active && {
-                  borderColor: color + "44",
-                  backgroundColor: color + "0c",
-                },
-              ]}
-              onPress={() => setTab(value)}
-              activeOpacity={0.82}
-            >
-              <Text style={[s.tabText, { color: active ? color : Colors.dim }]}>
-                {value === "global"
-                  ? `Global ${globalRows.length}`
-                  : `Rivals ${rivalRows.length}`}
+    <>
+      <PlayGamesButtons />
+      <BottomSheetScrollView
+        style={s.root}
+        contentContainerStyle={[
+          s.content,
+          { paddingBottom: tabBarH + Spacing.xxl },
+        ]}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={s.header}>
+          <View style={s.hdrL}>
+            <Ionicons name="flash-outline" size={21} color={color} />
+            <View>
+              <Text style={s.title}>Rank Rush</Text>
+              <Text style={s.subtitle}>
+                {tab === "global" ? "Global airlines only" : "AI rivals only"}
               </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
+            </View>
+          </View>
 
-      <View style={[s.hero, { borderColor: heroColor + "44" }]}>
-        <View>
-          <Text style={s.heroLabel}>{heroLabel}</Text>
-          <Text style={[s.heroValue, { color: heroColor }]}>{heroValue}</Text>
-          <Text style={s.heroSub}>{heroSub}</Text>
+          <View style={s.hdrR}>
+            <TouchableOpacity
+              style={[s.refreshBtn, { borderColor: color + "44" }]}
+              onPress={fetchLeaderboard}
+              disabled={loading}
+              activeOpacity={0.75}
+            >
+              {loading ? (
+                <ActivityIndicator size="small" color={color} />
+              ) : (
+                <Ionicons name="refresh-outline" size={16} color={color} />
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={closeSheet}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            >
+              <Ionicons name="close" size={22} color={Colors.dim} />
+            </TouchableOpacity>
+          </View>
         </View>
 
-        {topDisplay && (
-          <View style={s.topBox}>
-            <Text style={s.topLabel}>{topLabel}</Text>
-            <Text style={s.topName} numberOfLines={1}>
-              {topDisplay.name}
-            </Text>
-            <Text style={s.topScore}>{shortScore(topDisplay.score)} score</Text>
+        <View style={s.tabs}>
+          {(["global", "rivals"] as const).map((value) => {
+            const active = tab === value;
+
+            return (
+              <TouchableOpacity
+                key={value}
+                style={[
+                  s.tab,
+                  active && {
+                    borderColor: color + "44",
+                    backgroundColor: color + "0c",
+                  },
+                ]}
+                onPress={() => setTab(value)}
+                activeOpacity={0.82}
+              >
+                <Text
+                  style={[s.tabText, { color: active ? color : Colors.dim }]}
+                >
+                  {value === "global"
+                    ? `Global ${globalRows.length}`
+                    : `Rivals ${rivalRows.length}`}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        <View style={[s.hero, { borderColor: heroColor + "44" }]}>
+          <View>
+            <Text style={s.heroLabel}>{heroLabel}</Text>
+            <Text style={[s.heroValue, { color: heroColor }]}>{heroValue}</Text>
+            <Text style={s.heroSub}>{heroSub}</Text>
           </View>
-        )}
-      </View>
 
-      <View style={s.section}>
-        {error && tab === "global" && (
-          <View style={s.errorBox}>
-            <Ionicons name="warning-outline" size={14} color={Colors.red} />
-            <Text style={s.errorText}>{error}</Text>
-            <TouchableOpacity onPress={fetchLeaderboard}>
-              <Text style={s.retryText}>Retry</Text>
-            </TouchableOpacity>
-          </View>
-        )}
+          {topDisplay && (
+            <View style={s.topBox}>
+              <Text style={s.topLabel}>{topLabel}</Text>
+              <Text style={s.topName} numberOfLines={1}>
+                {topDisplay.name}
+              </Text>
+              <Text style={s.topScore}>
+                {shortScore(topDisplay.score)} score
+              </Text>
+            </View>
+          )}
+        </View>
 
-        {loading && displayRows.length === 0 && (
-          <View style={s.loading}>
-            <ActivityIndicator color={color} size="large" />
-            <Text style={s.loadingText}>Fetching rankings...</Text>
-          </View>
-        )}
+        <View style={s.section}>
+          {error && tab === "global" && (
+            <View style={s.errorBox}>
+              <Ionicons name="warning-outline" size={14} color={Colors.red} />
+              <Text style={s.errorText}>{error}</Text>
+              <TouchableOpacity onPress={fetchLeaderboard}>
+                <Text style={s.retryText}>Retry</Text>
+              </TouchableOpacity>
+            </View>
+          )}
 
-        {!loading && displayRows.length === 0 && (
-          <View style={s.empty}>
-            <Ionicons name="trophy-outline" size={40} color={Colors.dim} />
-            <Text style={s.emptyTitle}>
-              {tab === "global" ? "No global rankings yet" : "No rivals yet"}
-            </Text>
-            <Text style={s.emptySub}>
-              {tab === "global"
-                ? "Run the public leaderboard SQL view and play more."
-                : "Add AI rivals during setup."}
-            </Text>
-          </View>
-        )}
+          {loading && displayRows.length === 0 && (
+            <View style={s.loading}>
+              <ActivityIndicator color={color} size="large" />
+              <Text style={s.loadingText}>Fetching rankings...</Text>
+            </View>
+          )}
 
-        {displayRows.map((row, index) => (
-          <LeaderRowCard
-            key={row.id}
-            row={row}
-            rank={index + 1}
-            isMe={tab === "global" && row.id === airline?.id}
-          />
-        ))}
+          {!loading && displayRows.length === 0 && (
+            <View style={s.empty}>
+              <Ionicons name="trophy-outline" size={40} color={Colors.dim} />
+              <Text style={s.emptyTitle}>
+                {tab === "global" ? "No global rankings yet" : "No rivals yet"}
+              </Text>
+              <Text style={s.emptySub}>
+                {tab === "global"
+                  ? "Run the public leaderboard SQL view and play more."
+                  : "Add AI rivals during setup."}
+              </Text>
+            </View>
+          )}
 
-        {displayRows.length > 0 && (
-          <View style={s.note}>
-            <Ionicons
-              name="information-circle-outline"
-              size={13}
-              color={Colors.dim}
+          {displayRows.map((row, index) => (
+            <LeaderRowCard
+              key={row.id}
+              row={row}
+              rank={index + 1}
+              isMe={tab === "global" && row.id === airline?.id}
             />
-            <Text style={s.noteText}>
-              {tab === "global"
-                ? "Global shows real/public airlines only. AI rivals are not mixed into this ranking."
-                : "Rivals shows AI airlines only, ranked by their simulated score."}
-            </Text>
-          </View>
-        )}
-      </View>
-    </BottomSheetScrollView>
+          ))}
+
+          {displayRows.length > 0 && (
+            <View style={s.note}>
+              <Ionicons
+                name="information-circle-outline"
+                size={13}
+                color={Colors.dim}
+              />
+              <Text style={s.noteText}>
+                {tab === "global"
+                  ? "Global shows real/public airlines only. AI rivals are not mixed into this ranking."
+                  : "Rivals shows AI airlines only, ranked by their simulated score."}
+              </Text>
+            </View>
+          )}
+        </View>
+      </BottomSheetScrollView>
+    </>
   );
 }
 

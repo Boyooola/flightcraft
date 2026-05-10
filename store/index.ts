@@ -80,7 +80,7 @@ export interface PlaneModel {
 
 export interface AirlineConfig {
   id: string;
-  user_id: string;
+  player_id: string;
   name: string;
   color: string;
   icon: string;
@@ -163,9 +163,7 @@ export interface LoadStep {
 
 export interface GameStore {
   // Auth
-  isAnonymous: boolean;
   boughtPlaneToday: boolean;
-  setIsAnonymous: (v: boolean) => void;
   dailyEvent: DailyEvent | null;
   globalContract: GlobalContractState | null;
   completedGlobalContracts: number;
@@ -326,7 +324,6 @@ export const useGameStore = create<GameStore>()(
   devtools(
     subscribeWithSelector((set, get) => ({
       // ── Initial state ────────────────────────────────────────────
-      isAnonymous: false,
       aiAirlines: [],
       boughtPlaneToday: false,
       dailyEvent: null,
@@ -396,7 +393,6 @@ export const useGameStore = create<GameStore>()(
       setPhase: (phase) => set({ phase }, false, "setPhase"),
       setBoughtPlaneToday: (val) =>
         set({ boughtPlaneToday: val }, false, "setBoughtPlaneToday"),
-      setIsAnonymous: (v) => set({ isAnonymous: v }, false, "setIsAnonymous"),
       setAIAirlines: (a) => set({ aiAirlines: a }, false, "setAIAirlines"),
       setDailyEvent: (event) =>
         set({ dailyEvent: event }, false, "setDailyEvent"),
@@ -886,7 +882,6 @@ export const useOwnedPlanes = () => useGameStore((s) => s.ownedPlanes);
 export const useRoutes = () => useGameStore((s) => s.routes);
 export const useLedger = () => useGameStore((s) => s.ledger);
 export const usePhase = () => useGameStore((s) => s.phase);
-export const useIsAnonymous = () => useGameStore((s) => s.isAnonymous);
 export const useBoughtPlaneToday = () =>
   useGameStore((s) => s.boughtPlaneToday);
 export const useDailyEvent = () => useGameStore((s) => s.dailyEvent);

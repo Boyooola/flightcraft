@@ -10,7 +10,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
-const LAST_UPDATED = "April 2026";
+const LAST_UPDATED = "May 2026";
 
 function Section({
   icon,
@@ -86,18 +86,18 @@ export default function PrivacyPolicySheet() {
         We collect game-related data needed to operate the game, including your
         airline name, cash, routes, hubs, fleet, game day, achievements,
         leaderboard score, and saved progress.{"\n\n"}
-        We may also collect an anonymous user identifier, device type, operating
-        system version, and basic crash or diagnostic information.{"\n\n"}
-        We do not collect your name, phone number, precise location, or contact
-        list. If you choose to link an account through Google Sign-In, Google
-        may provide basic account information needed for sign-in.
+        We also collect your Google Play Games player ID and display name to
+        identify your account, save progress, and operate leaderboard features.
+        We may collect device type, OS version, and basic crash or diagnostic
+        information.{"\n\n"}
+        We do not collect your email address, phone number, or precise location.
       </Section>
 
       <Section icon="game-controller-outline" title="How We Use Data">
         We use your data to save and restore game progress, operate leaderboard
-        features, prevent abuse, improve gameplay balance, fix bugs, and
-        maintain app stability.{"\n\n"}
-        We do not sell your personal data.
+        features, process in-app purchases, deliver rewarded ads, and maintain
+        app stability.{"\n\n"}
+        We do not sell your personal data to third parties.
       </Section>
 
       <Section icon="trophy-outline" title="Leaderboard">
@@ -107,11 +107,20 @@ export default function PrivacyPolicySheet() {
       </Section>
 
       <Section icon="cloud-outline" title="Storage and Security">
-        Game data may be stored locally on your device and in cloud services
-        such as Supabase. We use reasonable technical and organizational
-        measures to protect stored data.{"\n\n"}
-        No system is completely secure, but we work to protect your information
-        against unauthorized access, loss, misuse, or alteration.
+        Game data is stored on your device and in Supabase. Your account is
+        identified by your Google Play Games player ID — no password is stored
+        by Flightcraft.{"\n\n"}
+        We use reasonable technical measures to protect your data.
+      </Section>
+
+      <Section icon="videocam-outline" title="Advertising">
+        Flightcraft includes optional rewarded video ads powered by Google
+        AdMob. These ads are shown only when you choose to watch them in
+        exchange for in-game rewards. You are never shown ads without opting in.
+        {"\n\n"}
+        AdMob may use your advertising ID to serve relevant ads. You can reset
+        or opt out of ad personalisation in your device settings under Privacy →
+        Ads.
       </Section>
 
       <Section icon="notifications-outline" title="Notifications">
@@ -123,11 +132,12 @@ export default function PrivacyPolicySheet() {
       <Section icon="link-outline" title="Third-Party Services">
         Flightcraft may use third-party services for authentication, database
         storage, crash reporting, app distribution, and app functionality. These
-        may include Supabase, Google Sign-In, Expo, EAS, and related platform
-        services.{"\n\n"}
-        Future versions may include ads or in-app purchases. If those features
-        are added, this policy will be updated before or when they become
-        active.
+        include:{"\n"}• Google Play Games Services — authentication and
+        leaderboards{"\n"}• Supabase — encrypted cloud storage{"\n"}• Google
+        AdMob — opt-in rewarded video ads{"\n"}• RevenueCat — in-app purchases
+        {"\n"}• Sentry — anonymous crash reporting{"\n"}• Expo / EAS — app
+        distribution{"\n\n"}
+        Each service operates under its own privacy policy.
       </Section>
 
       <Section icon="people-outline" title="Children">
@@ -138,11 +148,11 @@ export default function PrivacyPolicySheet() {
       </Section>
 
       <Section icon="person-circle-outline" title="Your Choices and Rights">
-        You may request access to, correction of, or deletion of your game data.
-        You can also play as a guest, disable notifications in your device
-        settings, or delete local app data by uninstalling the app.{"\n\n"}
-        If the app includes a Delete Account option, you may use it to request
-        removal of your saved account data.
+        You may delete your game data at any time using Delete Account in
+        Settings. This permanently removes your airline and all progress from
+        our servers.{"\n\n"}
+        You can opt out of personalised ads through your Google account settings
+        or device advertising preferences.
       </Section>
 
       <Section icon="refresh-outline" title="Policy Updates">

@@ -5,6 +5,7 @@
  * Stores seed, AI config, and difficulty alongside core airline data.
  */
 
+import { getPlayerId } from "@/hooks/useAuth";
 import { setDemandSeed } from "@/lib/demands";
 import { supabase } from "@/lib/supabase";
 import { useGameStore } from "@/store";
@@ -52,7 +53,7 @@ export function useCreateAirline() {
         const { data, error } = await supabase
           .from("airlines")
           .insert({
-            user_id: user.id,
+            player_id: getPlayerId(),
             name: name.trim(),
             color,
             difficulty,
@@ -77,7 +78,7 @@ export function useCreateAirline() {
 
         setAirline({
           id: data.id,
-          user_id: user.id,
+          player_id: getPlayerId()!,
           name: name.trim(),
           color,
           icon: "airplane",

@@ -9,6 +9,7 @@
  * spawns new demand, resets daily pax, and persists.
  */
 
+import { submitNetWorth } from "@/hooks/usePlayGames";
 import {
   useSaveAirlineDay,
   useSpawnDailyDemand,
@@ -639,6 +640,12 @@ export function useRevenueTick() {
           updateGlobalContract(updated);
         }
       }
+    }
+
+    // Submit net worth to Play Games leaderboard daily
+    {
+      const { airline: a } = useGameStore.getState();
+      if (a) submitNetWorth(Math.max(0, a.cash - a.loan));
     }
 
     resetDailyPax();

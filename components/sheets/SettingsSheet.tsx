@@ -6,22 +6,22 @@
 
 import { GameAlert, useGameAlert } from "@/components/ui/GameAlert";
 import { Colors, Radius, Spacing } from "@/constants/theme";
-import { getCurrentUser, useAuth } from "@/hooks/useAuth";
+import { useAuth } from "@/hooks/useAuth";
 import { useGameSounds } from "@/hooks/useGameSounds";
+import {
+  showAchievements,
+  showLeaderboard,
+  signOutPlayGames,
+  usePlayGames,
+} from "@/hooks/usePlayGames";
 import { openPlayStorePage } from "@/hooks/useRateUs";
 import { useTabBarHeight } from "@/hooks/useSheetLayout";
 import { fmtCash } from "@/lib/revenue";
-import { supabase } from "@/lib/supabase";
-import {
-  useAirline,
-  useDay,
-  useGameStore,
-  useIsAnonymous,
-  useLoadComplete,
-} from "@/store";
+
+import { useAirline, useDay, useGameStore, useLoadComplete } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
 import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   ActivityIndicator,
   StyleSheet,
@@ -90,82 +90,21 @@ export default function SettingsSheet() {
   const tabBarH = useTabBarHeight();
 
   const [deleting, setDeleting] = useState(false);
-  const [linking, setLinking] = useState(false);
-  const [linkError, setLinkError] = useState<string | null>(null);
-  const [userEmail, setUserEmail] = useState<string | null>(null);
-
-  const isAnonymous = useIsAnonymous();
   const loadComplete = useLoadComplete();
-  const { linkGoogleAccount } = useAuth();
+  const { signOut } = useAuth();
+  const { player, isSignedIn } = usePlayGames();
   const sounds = useGameSounds();
   const color = airline?.color ?? Colors.sky;
   const [sfxOn, setSfxOn] = useState(sounds.isSfxEnabled());
   const [musicOn, setMusicOn] = useState(sounds.isMusicEnabled());
   const gameAlert = useGameAlert();
 
-  useEffect(() => {
-    getCurrentUser().then((user) => setUserEmail(user?.email ?? null));
-  }, []);
-
-  const handleLinkGoogle = async () => {
-    setLinking(true);
-    setLinkError(null);
-
-    const result = await linkGoogleAccount();
-
-    setLinking(false);
-
-    if (result.error) {
-      setLinkError(result.error);
-      return;
-    }
-
-    if (result.conflict && result.onOverwrite && result.onKeepGuest) {
-      gameAlert.show({
-        icon: "warning-outline",
-        title: "Account Conflict",
-        message:
-          "Your Google account already has saved progress.\n\nKeep this current airline, or cancel to keep the Google account progress.",
-        buttons: [
-          {
-            label: "Keep Current",
-            style: "destructive",
-            onPress: async () => {
-              setLinking(true);
-              const { error } = await result.onOverwrite!();
-              setLinking(false);
-
-              if (error) {
-                setLinkError(error);
-                return;
-              }
-
-              useGameStore.getState().setIsAnonymous(false);
-              const user = await getCurrentUser();
-              setUserEmail(user?.email ?? null);
-            },
-          },
-          {
-            label: "Cancel",
-            style: "cancel",
-            onPress: result.onKeepGuest,
-          },
-        ],
-      });
-      return;
-    }
-
-    useGameStore.getState().setIsAnonymous(false);
-    const user = await getCurrentUser();
-    setUserEmail(user?.email ?? null);
-  };
-
   const handleDeleteAccount = () => {
     gameAlert.show({
       icon: "trash-outline",
       title: "Delete Account",
       message:
-        "This permanently deletes your airline, progress, routes, hubs, planes, missions, and achievements. This cannot be undone.",
+        "This permanently deletes your airline, all progress, routes, hubs, planes, and achievements. This cannot be undone.",
       buttons: [
         { label: "Cancel", style: "cancel" },
         {
@@ -173,41 +112,34 @@ export default function SettingsSheet() {
           style: "destructive",
           onPress: async () => {
             setDeleting(true);
-
             try {
-              const { error: rpcError } = await supabase.rpc(
-                "delete_user_account",
-              );
+              const { supabase } = await import("@/lib/supabase");
+              const playerId = player?.playerId;
+              if (playerId) {
+                // Delete all data associated with this player
+                const { data: airlineData } = await supabase
+                  .from("airlines")
+                  .select("id")
+                  .eq("player_id", playerId)
+                  .maybeSingle();
 
-              if (rpcError) {
-                console.warn(
-                  "delete_user_account RPC error:",
-                  rpcError.message,
-                );
+                if (airlineData?.id) {
+                  const id = airlineData.id;
+                  await Promise.all([
+                    supabase.from("routes").delete().eq("airline_id", id),
+                    supabase.from("demands").delete().eq("airline_id", id),
+                    supabase.from("owned_planes").delete().eq("airline_id", id),
+                    supabase.from("hubs").delete().eq("airline_id", id),
+                    supabase.from("ledger").delete().eq("airline_id", id),
+                  ]);
+                  await supabase.from("airlines").delete().eq("id", id);
+                }
               }
 
-              await supabase.auth.signOut();
-
-              useGameStore.setState({
-                phase: "auth",
-                airline: null,
-                hubs: [],
-                demands: [],
-                ownedPlanes: [],
-                routes: [],
-                ledger: [],
-                earnedAchievements: {},
-                dailyMissions: [],
-                missionsCompleted: 0,
-                activeSheet: null,
-                selectedAirport: null,
-                pendingDemand: null,
-                routeCreationMode: false,
-                creationWaypoints: [],
-                loadComplete: false,
-              });
-            } catch (error) {
-              console.error("Delete account error:", error);
+              await signOutPlayGames();
+              useGameStore.getState().resetGame?.();
+              useGameStore.getState().setPhase("auth");
+            } catch (err) {
               gameAlert.show({
                 title: "Error",
                 message: "Failed to delete account. Please try again.",
@@ -304,60 +236,42 @@ export default function SettingsSheet() {
       <SectionHeader label="ACCOUNT" />
 
       <View style={s.card}>
-        {!loadComplete && (
+        {/* Play Games player info */}
+        {isSignedIn && player ? (
           <SettingRow
-            icon="person-circle-outline"
-            label="Loading account..."
-            sublabel="Checking saved progress"
-            color={Colors.dim}
-          />
-        )}
-
-        {loadComplete && isAnonymous && (
-          <>
-            <SettingRow
-              icon="person-outline"
-              label="Guest Airline"
-              sublabel="Progress is saved on this device"
-              color={Colors.amber}
-            />
-            <Divider />
-            <SettingRow
-              icon="logo-google"
-              label={linking ? "Connecting..." : "Sync with Google"}
-              sublabel="Save progress across devices"
-              onPress={linking ? undefined : handleLinkGoogle}
-              color={Colors.sky}
-              right={
-                linking ? (
-                  <ActivityIndicator size="small" color={Colors.sky} />
-                ) : (
-                  <Ionicons
-                    name="chevron-forward"
-                    size={15}
-                    color={Colors.dim}
-                  />
-                )
-              }
-            />
-          </>
-        )}
-
-        {loadComplete && !isAnonymous && (
-          <SettingRow
-            icon="logo-google"
-            label="Google Sync Active"
-            sublabel={userEmail ?? "Progress synced across devices"}
+            icon="game-controller-outline"
+            label={player.displayName}
+            sublabel="Signed in with Google Play Games"
             color={GREEN}
             right={<Ionicons name="checkmark-circle" size={17} color={GREEN} />}
           />
+        ) : (
+          <SettingRow
+            icon="game-controller-outline"
+            label="Not signed in"
+            sublabel="Play Games sign-in required"
+            color={Colors.amber}
+          />
         )}
 
-        {!!linkError && (
-          <View style={s.inlineError}>
-            <Text style={s.inlineErrorText}>{linkError}</Text>
-          </View>
-        )}
+        <Divider />
+
+        {/* Play Games native screens */}
+        <SettingRow
+          icon="trophy-outline"
+          label="Play Games Achievements"
+          sublabel="View progress in Google Play Games"
+          onPress={showAchievements}
+          color="#a78bfa"
+        />
+        <Divider />
+        <SettingRow
+          icon="podium-outline"
+          label="Play Games Leaderboard"
+          sublabel="Global net worth rankings"
+          onPress={showLeaderboard}
+          color={Colors.amber}
+        />
 
         <Divider />
 
