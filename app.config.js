@@ -99,4 +99,10 @@ export default {
     },
     owner: "stratoslabs",
   },
+  "react-native-game-services": {
+    android_app_id: "482109260344",
+  },
+  "react-native-google-mobile-ads": {
+    android_app_id: "ca-app-pub-3374708302627509~3697789196",
+  },
 };
