@@ -70,6 +70,7 @@ export function spawnedPaxForDay(
   // 20% front-load, 80% rolling. Use Math.round (not floor) so the
   // last pax spawns before dayProgress hits 1.0 exactly.
   const total = demand.base_pax_day * 0.2 + demand.base_pax_day * 0.8 * eased;
+
   return Math.min(demand.base_pax_day, Math.round(total));
 }
 
@@ -88,10 +89,14 @@ export function waitingPaxForDemand(
   const delivered = demand.delivered_pax_today ?? 0;
   const remaining = remainingPax(demand);
 
-  // waiting = spawned pax minus already-delivered, capped at remaining
-  // spawned - delivered = pax at gate not yet boarded
-  // remaining = pax_day - delivered = total still to move today
-  return Math.max(0, Math.min(remaining, spawned - delivered));
+  const waiting = spawned - delivered;
+
+  // If negative, respawn from remaining pool
+  if (waiting < 0) {
+    return remaining;
+  }
+
+  return Math.max(0, Math.min(remaining, waiting));
 }
 
 function randomLoadFactor(min = 0.65, max = 1): number {

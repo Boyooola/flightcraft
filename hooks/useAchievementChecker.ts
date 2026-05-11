@@ -12,7 +12,6 @@ import {
   setAchievementSteps as pgSetSteps,
   unlockAchievement as pgUnlock,
 } from "@/hooks/usePlayGames";
-import { emitAchievementToast } from "@/hooks/useToast";
 import { ACHIEVEMENTS, type AchievementState } from "@/lib/achievements";
 import {
   useDailyMissions,
@@ -200,15 +199,6 @@ export function useAchievementChecker() {
       useGameStore
         .getState()
         .updateWeeklyProgress({ achEarned: wp.achEarned + achievement.points });
-      emitAchievementToast({
-        id: `ach-${achievement.id}-day-${airline.day}`,
-        achievementId: achievement.id,
-        title: achievement.title,
-        flavor: achievement.flavor,
-        icon: achievement.icon,
-        points: achievement.points,
-        category: achievement.category,
-      });
     });
 
     // Sync incremental achievements progress to Play Games

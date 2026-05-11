@@ -25,7 +25,6 @@ import { useAchievementChecker } from "@/hooks/useAchievementChecker";
 import { useDailyEvents } from "@/hooks/useDailyEvents";
 import { useGameClock } from "@/hooks/useGameClock";
 import { useGameLoader } from "@/hooks/useGameLoader";
-import { useLeaderboardPush } from "@/hooks/useLeaderboardPush";
 import { useMissionChecker } from "@/hooks/useMissionChecker";
 import { useNotifications } from "@/hooks/useNotifications";
 import { useRateUs } from "@/hooks/useRateUs";
@@ -48,7 +47,6 @@ function GameContent() {
   useDailyEvents();
   useNotifications();
   useRateUs();
-  useLeaderboardPush();
   useRateUs();
   useWeeklyChallenge();
   useAITick();

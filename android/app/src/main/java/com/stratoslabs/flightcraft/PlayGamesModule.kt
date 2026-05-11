@@ -133,4 +133,15 @@ class PlayGamesModule(
                 activity.startActivityForResult(it, 9004)
             }
     }
+
+    @ReactMethod
+    fun setAchievementSteps(
+        achievementId: String,
+        steps: Int
+    ) {
+         val activity = reactApplicationContext.currentActivity ?: return
+
+        PlayGames.getAchievementsClient(activity)
+            .setSteps(achievementId, steps)
+    }
 }

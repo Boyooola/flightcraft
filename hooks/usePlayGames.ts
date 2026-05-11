@@ -47,6 +47,8 @@ function notify() {
 
 // ── Init ─────────────────────────────────────────────────────────
 export async function initPlayGames() {
+  console.log("[PlayGames] Initializing...", GameServices);
+
   if (!GameServices) {
     console.warn("[PlayGames] Native module unavailable");
     return;
@@ -61,7 +63,6 @@ export async function initPlayGames() {
     /**
      * Native module should return:
      * {
-     *   isAuthenticated: boolean,
      *   playerId?: string,
      *   displayName?: string,
      *   avatarUrl?: string
@@ -71,7 +72,7 @@ export async function initPlayGames() {
 
     console.log("[PlayGames] signIn result:", result);
 
-    if (result?.isAuthenticated) {
+    if (result?.playerId) {
       _player = {
         playerId: result.playerId ?? "player",
         displayName: result.displayName ?? "Pilot",
