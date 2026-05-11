@@ -9,19 +9,15 @@
 import { Colors, Radius, Spacing } from "@/constants/theme";
 import { fmtCash } from "@/lib/revenue";
 import {
-  useActiveDemandWave,
   useAirline,
   useCash,
-  useDailyEvent,
   useDay,
-  useDemands,
+  useDayProgress,
   useGameStore,
-  useHubs,
-  useRoutes,
-  useTodayCash,
+  useTodayCash
 } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Animated,
   Platform,
@@ -51,13 +47,17 @@ export default function TopHUD() {
   const airline = useAirline();
   const cash = useCash();
   const day = useDay();
-  const demands = useDemands();
-  const routes = useRoutes();
-  const hubs = useHubs();
   const updateAirline = useGameStore((s) => s.updateAirline);
-  const dailyEvent = useDailyEvent();
-  const activeDemandWave = useActiveDemandWave();
   const todayCash = useTodayCash();
+  const dayProgress = useDayProgress();
+
+  // Convert dayProgress (0→1) to a 24h clock string
+  const gameTime = (() => {
+    const totalMinutes = Math.floor(dayProgress * 24 * 60);
+    const h = Math.floor(totalMinutes / 60) % 24;
+    const m = totalMinutes % 60;
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+  })();
 
   const color = airline?.color ?? Colors.sky;
   const speed = airline?.speed ?? 1;
@@ -67,16 +67,6 @@ export default function TopHUD() {
     Platform.OS === "android"
       ? (StatusBar.currentHeight ?? insets.top ?? 24)
       : insets.top;
-
-  // Combined revenue multiplier — must match RouteLayer exactly
-  const globalRevMul =
-    (dailyEvent?.revenueMultiplier ?? 1.0) *
-    (activeDemandWave?.wave.revenueMultiplier ?? 1.0);
-
-  const activeRoutes = useMemo(
-    () => routes.filter((route) => route.active),
-    [routes],
-  );
 
   const todayReward = todayCash;
 
@@ -176,6 +166,23 @@ export default function TopHUD() {
         <View style={[s.dayBox, { borderColor: color + "44" }]}>
           <Text style={s.dayLabel}>DAY</Text>
           <Text style={[s.day, { color }]}>{day}</Text>
+        </View>
+
+        <View style={s.clockBox}>
+          <Text style={s.clockLabel}>TIME</Text>
+          <Text style={s.clockTime}>{gameTime}</Text>
+          {/* Progress bar showing day progress */}
+          <View style={s.clockTrack}>
+            <View
+              style={[
+                s.clockFill,
+                {
+                  width: `${Math.round(dayProgress * 100)}%` as `${number}%`,
+                  backgroundColor: color,
+                },
+              ]}
+            />
+          </View>
         </View>
 
         <View style={s.speedGroup}>
@@ -295,6 +302,43 @@ const s = StyleSheet.create({
     lineHeight: 20,
   },
 
+  clockBox: {
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: "rgba(255,255,255,.04)",
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 5,
+    minWidth: 52,
+    gap: 2,
+  },
+  clockLabel: {
+    fontSize: 7,
+    color: Colors.dim,
+    letterSpacing: 1.4,
+    fontWeight: "900",
+  },
+  clockTime: {
+    fontSize: 13,
+    fontWeight: "900",
+    color: Colors.text,
+    fontVariant: ["tabular-nums"],
+    lineHeight: 15,
+  },
+  clockTrack: {
+    width: "100%",
+    height: 2,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderRadius: 1,
+    overflow: "hidden",
+    marginTop: 1,
+  },
+  clockFill: {
+    height: "100%",
+    borderRadius: 1,
+  },
   speedGroup: {
     flexDirection: "row",
     gap: 3,

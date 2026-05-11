@@ -554,7 +554,7 @@ export default function AirportSheet() {
 
   const maxPlaneRange =
     ownedPlanes.length > 0
-      ? Math.max(...ownedPlanes.map((plane) => plane.plane_model.range_nm))
+      ? ownedPlanes.reduce((max, p) => Math.max(max, p.plane_model.range_nm), 0)
       : 0;
 
   const aiCompetitors =

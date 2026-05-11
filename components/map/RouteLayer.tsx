@@ -235,19 +235,22 @@ export default function RouteLayer({
                 liveDemand.dest.iata,
               );
 
-              //const effective = Math.floor(delieveredPax * share);
-              //const lost = delieveredPax - effective;
-              // if (effective > 0) {
-              //   addPaxDelivered(liveDemand.id, effective, 0);
-              // }
+              // Math.round instead of Math.floor — prevents last pax
+              // always being lost when share < 1.0 and deliveredPax = 1.
+              // e.g. floor(1 * 0.6) = 0 (wrong), round(1 * 0.6) = 1 (correct).
+              // Also clamp effective to min 1 when boarding happened —
+              // a plane that boarded passengers always delivers at least 1.
+              const effective = Math.max(1, Math.round(delieveredPax * share));
+              const lost = Math.max(0, delieveredPax - effective);
+              if (effective > 0) {
+                addPaxDelivered(liveDemand.id, effective, lost);
+              }
 
-              addPaxDelivered(liveDemand.id, delieveredPax, 0);
-
-              // if (lost > 0) {
-              //   updateDemand(liveDemand.id, {
-              //     ai_stolen_pax: (liveDemand.ai_stolen_pax ?? 0) + 0,
-              //   });
-              // }
+              if (lost > 0) {
+                updateDemand(liveDemand.id, {
+                  ai_stolen_pax: (liveDemand.ai_stolen_pax ?? 0) + 0,
+                });
+              }
 
               const reward = calcInstantDeliveryReward({
                 distNm: route.total_dist_nm ?? liveDemand.dist_nm,

@@ -40,7 +40,7 @@ import {
 } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
 import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   StyleSheet,
@@ -287,7 +287,7 @@ function DemandRushCard({
   );
 }
 
-function PlaneRow({
+const PlaneRow = React.memo(function PlaneRow({
   plane,
   canServe,
   selected,
@@ -436,7 +436,7 @@ function PlaneRow({
       </View>
     </TouchableOpacity>
   );
-}
+});
 
 export default function CreateRouteSheet() {
   const waypoints = useRouteCreationWaypoints();
@@ -538,6 +538,7 @@ export default function CreateRouteSheet() {
         );
 
         const cMix = passengerMixFromDistance(totalDist);
+        // Skip revenue calc for incompatible planes — saves CPU on large fleets
         const revenue = canServe
           ? calcRouteRevenue({
               distNm: totalDist,
@@ -571,7 +572,9 @@ export default function CreateRouteSheet() {
     originHub?.trust,
   ]);
 
+  const [showIncompatible, setShowIncompatible] = useState(false);
   const eligibleCount = classified.filter((item) => item.canServe).length;
+  const incompatibleCount = classified.filter((item) => !item.canServe).length;
   const selectedItems = classified.filter((item) =>
     selectedIds.includes(item.plane.id),
   );
@@ -950,24 +953,71 @@ export default function CreateRouteSheet() {
                 </Text>
               </View>
             ) : (
-              classified.map(({ plane, canServe, reason }) => (
-                <PlaneRow
-                  key={plane.id}
-                  plane={plane}
-                  canServe={canServe}
-                  selected={selectedIds.includes(plane.id)}
-                  reason={reason}
-                  waitingNow={waitingNow}
-                  paxDay={previewDemand.base_pax_day}
-                  totalDist={totalDist}
-                  trustPct={originHub?.trust ?? 0}
-                  color={color}
-                  onSelect={() => {
-                    haptics.tap();
-                    togglePlane(plane.id);
-                  }}
-                />
-              ))
+              <>
+                {/* Available planes only — shown by default */}
+                {classified
+                  .filter((item) => item.canServe)
+                  .map(({ plane, canServe, reason }) => (
+                    <PlaneRow
+                      key={plane.id}
+                      plane={plane}
+                      canServe={canServe}
+                      selected={selectedIds.includes(plane.id)}
+                      reason={reason}
+                      waitingNow={waitingNow}
+                      paxDay={previewDemand.base_pax_day}
+                      totalDist={totalDist}
+                      trustPct={originHub?.trust ?? 0}
+                      color={color}
+                      onSelect={() => {
+                        haptics.tap();
+                        togglePlane(plane.id);
+                      }}
+                    />
+                  ))}
+
+                {/* Show/hide incompatible planes */}
+                {incompatibleCount > 0 && (
+                  <TouchableOpacity
+                    style={s.incompatibleToggle}
+                    onPress={() => setShowIncompatible((v) => !v)}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons
+                      name={showIncompatible ? "chevron-up" : "chevron-down"}
+                      size={12}
+                      color={Colors.dim}
+                    />
+                    <Text style={s.incompatibleToggleTxt}>
+                      {showIncompatible ? "Hide" : "Show"} {incompatibleCount}{" "}
+                      incompatible plane{incompatibleCount !== 1 ? "s" : ""}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+
+                {/* Incompatible planes — collapsed by default */}
+                {showIncompatible &&
+                  classified
+                    .filter((item) => !item.canServe)
+                    .map(({ plane, canServe, reason }) => (
+                      <PlaneRow
+                        key={plane.id}
+                        plane={plane}
+                        canServe={canServe}
+                        selected={selectedIds.includes(plane.id)}
+                        reason={reason}
+                        waitingNow={waitingNow}
+                        paxDay={previewDemand.base_pax_day}
+                        totalDist={totalDist}
+                        trustPct={originHub?.trust ?? 0}
+                        color={color}
+                        onSelect={() => {
+                          haptics.tap();
+                          togglePlane(plane.id);
+                        }}
+                      />
+                    ))}
+              </>
             )}
           </View>
 
@@ -1528,6 +1578,18 @@ const s = StyleSheet.create({
     color: Colors.muted,
     lineHeight: 16,
     marginTop: 2,
+  },
+  incompatibleToggle: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingVertical: 10,
+    justifyContent: "center",
+  },
+  incompatibleToggleTxt: {
+    fontSize: 11,
+    color: Colors.dim,
+    fontWeight: "500",
   },
   emptyPlanes: {
     alignItems: "center",

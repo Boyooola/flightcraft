@@ -180,7 +180,7 @@ const s = StyleSheet.create({
   signInBtn: {
     backgroundColor: "#1a73e8", // Google blue
     borderRadius: Radius.xl,
-    paddingVertical: 4,
+    paddingVertical: 8,
     paddingHorizontal: Spacing.xl,
   },
   btnInner: {

@@ -27,8 +27,10 @@ import {
   useRoutes,
 } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
-import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
-import { useMemo, useState } from "react";
+import {
+  BottomSheetScrollView
+} from "@gorhom/bottom-sheet";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   StyleSheet,
@@ -95,7 +97,7 @@ function QuantitySelector({
   );
 }
 
-function OwnedPlaneRow({
+const OwnedPlaneRow = React.memo(function OwnedPlaneRow({
   plane,
   route,
   onAssign,
@@ -161,9 +163,9 @@ function OwnedPlaneRow({
       )}
     </View>
   );
-}
+});
 
-function OwnedPlaneGroup({
+const OwnedPlaneGroup = React.memo(function OwnedPlaneGroup({
   group,
   planeRouteMap,
   onAssign,
@@ -210,7 +212,7 @@ function OwnedPlaneGroup({
       )}
     </View>
   );
-}
+});
 
 function PlaneCard({
   model,
@@ -243,6 +245,11 @@ function PlaneCard({
       ? `${fmtCash(model.unlock_cash)} cash needed`
       : "";
 
+  // Max qty = how many the player can afford, capped at 20
+  const maxAffordable =
+    model.price > 0
+      ? Math.max(1, Math.min(20, Math.floor(cash / model.price)))
+      : 20;
   const totalCost = model.price * qty;
   const canAfford = cash >= totalCost;
   const canBuy = !locked && canAfford && !buying;
@@ -323,7 +330,7 @@ function PlaneCard({
             <QuantitySelector
               value={qty}
               min={1}
-              max={5}
+              max={maxAffordable}
               onChange={setQty}
               color={fc}
             />
@@ -464,11 +471,11 @@ export default function FleetSheet() {
     return Array.from(map.values());
   }, [ownedPlanes]);
 
-  const handleAssign = () => {
+  const handleAssign = useCallback(() => {
     haptics.confirm();
     closeSheet();
     setTimeout(() => startCreation(), 120);
-  };
+  }, [haptics, closeSheet, startCreation]);
 
   // if (ownedPlanes.length === 0)
   //   return (

@@ -1,9 +1,9 @@
-import { useTabBarHeight } from "@/hooks/useSheetLayout";
-
 import { GameAlert, useGameAlert } from "@/components/ui/GameAlert";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useHaptics } from "@/hooks/useHaptics";
+import { useTabBarHeight } from "@/hooks/useSheetLayout";
 import { useDeactivateRoute } from "@/hooks/useSupabaseWrite";
+import { useSwapPlane } from "@/hooks/useSwapPlane";
 import { hubCrowdingLevel } from "@/lib/demands";
 import { congestionEfficiencyMultiplier } from "@/lib/hubCongestion";
 import {
@@ -14,8 +14,9 @@ import {
 import { passengerTypeBreakdown } from "@/lib/passengerTypes";
 import {
   calcRouteRevenue,
+  computeAircraftUtilization,
   computePriceElasticity,
-  fmtCash
+  fmtCash,
 } from "@/lib/revenue";
 import { supabase } from "@/lib/supabase";
 import type { Demand, Route } from "@/store";
@@ -25,6 +26,7 @@ import {
   useDemands,
   useGameStore,
   useHubs,
+  useOwnedPlanes,
   useRoutes,
 } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
@@ -32,6 +34,8 @@ import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  Modal,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -73,30 +77,11 @@ const PRICE_OPTIONS: {
   },
 ];
 
-function localPricingConfig(strategy?: PriceStrategy) {
-  if (strategy === "low") {
-    return {
-      fareMultiplier: 0.85,
-      demandMultiplier: 1.18,
-      color: Colors.sky,
-      label: "Low Fare",
-    };
-  }
-  if (strategy === "premium") {
-    return {
-      fareMultiplier: 1.28,
-      demandMultiplier: 0.82,
-      color: Colors.purple,
-      label: "Premium",
-    };
-  }
-  return {
-    fareMultiplier: 1,
-    demandMultiplier: 1,
-    color: Colors.green,
-    label: "Standard",
-  };
-}
+const PRICING_COLOR: Record<string, string> = {
+  low: Colors.sky,
+  standard: Colors.green,
+  premium: Colors.purple,
+};
 
 function getRoutePriceStrategy(route: Route): PriceStrategy {
   const value = (route as Route & { price_strategy?: PriceStrategy })
@@ -128,6 +113,8 @@ type RouteGroup = {
   utilizationPct: number;
   congestionLevel: string;
   congestionMultiplier: number;
+  routeId: string;
+  currentPlaneId: string;
 };
 
 function getLiveDemand(route: Route, liveDemands: Demand[]) {
@@ -261,11 +248,13 @@ function RouteGroupRow({
   deactivating,
   onLongPress,
   onPriceChange,
+  onSwap,
 }: {
   group: RouteGroup;
   deactivating: boolean;
   onLongPress: (group: RouteGroup) => void;
   onPriceChange: (group: RouteGroup, strategy: PriceStrategy) => void;
+  onSwap: (group: RouteGroup) => void;
 }) {
   const isConnecting = !!group.via_iata;
   const isProblem =
@@ -273,7 +262,11 @@ function RouteGroupRow({
   const isCleared = group.status.label === "CLEARED";
   const accent = group.status.color;
   const growth = routeGrowthLabel(group.demand);
-  const pricing = localPricingConfig(group.priceStrategy);
+  const pricing = pricingStrategyConfig(
+    group.priceStrategy,
+    group.demand.price_elasticity ?? 1,
+  );
+  const pricingColor = PRICING_COLOR[group.priceStrategy] ?? Colors.green;
 
   return (
     <TouchableOpacity
@@ -332,6 +325,24 @@ function RouteGroupRow({
           <Text style={rr.meta} numberOfLines={1}>
             {group.planeLabel}
           </Text>
+          <TouchableOpacity
+            style={rr.swapBtn}
+            onPress={() => onSwap(group)}
+            hitSlop={8}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="swap-horizontal" size={11} color={Colors.sky} />
+            <Text style={rr.swapTxt}>Swap</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={rr.swapBtn}
+            onPress={() => onSwap(group)}
+            hitSlop={8}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="swap-horizontal" size={11} color={Colors.sky} />
+            <Text style={rr.swapTxt}>Swap</Text>
+          </TouchableOpacity>
 
           <Text style={rr.dot}>•</Text>
 
@@ -420,15 +431,15 @@ function RouteGroupRow({
           </View>
         </View>
 
-        <View style={[rr.pricingBox, { borderColor: pricing.color + "30" }]}>
+        <View style={[rr.pricingBox, { borderColor: pricingColor + "30" }]}>
           <View style={rr.pricingHeader}>
             <View style={rr.pricingTitleRow}>
               <Ionicons
                 name="pricetag-outline"
                 size={11}
-                color={pricing.color}
+                color={pricingColor}
               />
-              <Text style={[rr.pricingTitle, { color: pricing.color }]}>
+              <Text style={[rr.pricingTitle, { color: pricingColor }]}>
                 Pricing
               </Text>
             </View>
@@ -444,16 +455,16 @@ function RouteGroupRow({
           <View style={rr.priceButtons}>
             {PRICE_OPTIONS.map((option) => {
               const active = option.key === group.priceStrategy;
-              const optionConfig = localPricingConfig(option.key);
-
+              const pricingColor =
+                PRICING_COLOR[group.priceStrategy] ?? Colors.green;
               return (
                 <TouchableOpacity
                   key={option.key}
                   style={[
                     rr.priceBtn,
                     active && {
-                      borderColor: optionConfig.color + "66",
-                      backgroundColor: optionConfig.color + "12",
+                      borderColor: pricingColor + "66",
+                      backgroundColor: pricingColor + "12",
                     },
                   ]}
                   onPress={() => onPriceChange(group, option.key)}
@@ -463,12 +474,12 @@ function RouteGroupRow({
                   <Ionicons
                     name={option.icon}
                     size={12}
-                    color={active ? optionConfig.color : Colors.dim}
+                    color={active ? pricingColor : Colors.dim}
                   />
                   <Text
                     style={[
                       rr.priceBtnTitle,
-                      { color: active ? optionConfig.color : Colors.text },
+                      { color: active ? pricingColor : Colors.text },
                     ]}
                     numberOfLines={1}
                   >
@@ -621,6 +632,8 @@ export default function RoutesSheet() {
         ),
         congestionLevel: hubCrowding?.level ?? "normal",
         congestionMultiplier: congestionMul,
+        routeId: first.id,
+        currentPlaneId: first.plane.id,
       };
     });
   }, [activeRoutes, liveDemands, dayProgress, hubs]);
@@ -673,6 +686,12 @@ export default function RoutesSheet() {
     closeSheet();
     setTimeout(() => startCreation(), 120);
   }, [closeSheet, haptics, startCreation]);
+
+  const [swapGroup, setSwapGroup] = useState<RouteGroup | null>(null);
+
+  const handleSwap = useCallback((group: RouteGroup) => {
+    setSwapGroup(group);
+  }, []);
 
   const handlePriceChange = useCallback(
     async (group: RouteGroup, strategy: PriceStrategy) => {
@@ -759,145 +778,154 @@ export default function RoutesSheet() {
   );
 
   return (
-    <BottomSheetScrollView
-      style={s.root}
-      contentContainerStyle={[
-        s.content,
-        { paddingBottom: tabBarH + Spacing.xxl },
-      ]}
-      showsVerticalScrollIndicator={false}
-    >
-      <View style={s.handle} accessibilityRole="none" />
+    <>
+      <BottomSheetScrollView
+        style={s.root}
+        contentContainerStyle={[
+          s.content,
+          { paddingBottom: tabBarH + Spacing.xxl },
+        ]}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={s.handle} accessibilityRole="none" />
 
-      <View style={s.header}>
-        <View style={s.hdrL}>
-          <Ionicons name="flash-outline" size={21} color={color} />
-          <View>
-            <Text style={s.title}>Route Rush</Text>
-            <Text style={s.subtitle}>Grouped by destination</Text>
+        <View style={s.header}>
+          <View style={s.hdrL}>
+            <Ionicons name="flash-outline" size={21} color={color} />
+            <View>
+              <Text style={s.title}>Route Rush</Text>
+              <Text style={s.subtitle}>Grouped by destination</Text>
+            </View>
+
+            {activeRoutes.length > 0 && (
+              <View
+                style={[
+                  s.badge,
+                  {
+                    backgroundColor: color + "20",
+                    borderColor: color + "44",
+                  },
+                ]}
+              >
+                <Text style={[s.badgeTxt, { color }]}>
+                  {activeRoutes.length}
+                </Text>
+              </View>
+            )}
           </View>
-
-          {activeRoutes.length > 0 && (
-            <View
-              style={[
-                s.badge,
-                {
-                  backgroundColor: color + "20",
-                  borderColor: color + "44",
-                },
-              ]}
-            >
-              <Text style={[s.badgeTxt, { color }]}>{activeRoutes.length}</Text>
-            </View>
-          )}
-        </View>
-
-        <TouchableOpacity
-          onPress={() => {
-            haptics.tap();
-            closeSheet();
-          }}
-          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-        >
-          <Ionicons name="close" size={22} color={Colors.dim} />
-        </TouchableOpacity>
-      </View>
-
-      {activeRoutes.length > 0 && (
-        <>
-          <View style={[s.rushStats, { borderColor: summaryBorder }]}>
-            <View style={s.rushStat}>
-              <Text style={[s.rushVal, { color: flowHighlight }]}>
-                {avgFlow}%
-              </Text>
-              <Text style={s.rushLbl}>FLOW</Text>
-            </View>
-            <View style={s.rushDivider} />
-            <View style={s.rushStat}>
-              <Text style={[s.rushVal, { color: Colors.amber }]}>
-                {totalWaiting.toLocaleString()}
-              </Text>
-              <Text style={s.rushLbl}>WAITING</Text>
-            </View>
-            <View style={s.rushDivider} />
-            <View style={s.rushStat}>
-              <Text style={[s.rushVal, { color: Colors.sky }]}>
-                {totalCanBoard.toLocaleString()}
-              </Text>
-              <Text style={s.rushLbl}>READY</Text>
-            </View>
-            <View style={s.rushDivider} />
-            <View style={s.rushStat}>
-              <Text style={[s.rushVal, { color: Colors.green }]}>
-                {fmtCash(totalReward)}
-              </Text>
-              <Text style={s.rushLbl}>EARNED</Text>
-            </View>
-          </View>
-        </>
-      )}
-
-      {stalledCount > 0 && (
-        <View style={s.alertBanner}>
-          <Ionicons name="warning-outline" size={16} color={Colors.red} />
-          <View style={{ flex: 1 }}>
-            <Text style={s.alertTitle}>
-              {stalledCount} route group{stalledCount !== 1 ? "s" : ""} need
-              attention
-            </Text>
-            <Text style={s.alertSub}>
-              Queues are building. Add aircraft, upgrade capacity, or cut weak
-              routes.
-            </Text>
-          </View>
-        </View>
-      )}
-
-      {activeRoutes.length === 0 && (
-        <View style={s.empty}>
-          <Ionicons name="git-network-outline" size={48} color={Colors.dim} />
-          <Text style={s.emptyTitle}>No active routes</Text>
-          <Text style={s.emptySub}>
-            Open the map, assign a hub demand to planes, and the rush starts
-            here.
-          </Text>
 
           <TouchableOpacity
-            style={[s.emptyBtn, { borderColor: color + "55" }]}
-            onPress={handleCreateRoute}
-            activeOpacity={0.8}
+            onPress={() => {
+              haptics.tap();
+              closeSheet();
+            }}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
           >
-            <Ionicons name="map-outline" size={15} color={color} />
-            <Text style={[s.emptyBtnText, { color }]}>Open map</Text>
+            <Ionicons name="close" size={22} color={Colors.dim} />
           </TouchableOpacity>
         </View>
-      )}
 
-      {activeRoutes.length > 0 && (
-        <>
-          <Text style={s.eyebrow}>ROUTE GROUPS</Text>
-          <Text style={s.eyebrowSub}>
-            Same destination routes are grouped · hold a row to remove all
-            assigned planes
-          </Text>
+        {activeRoutes.length > 0 && (
+          <>
+            <View style={[s.rushStats, { borderColor: summaryBorder }]}>
+              <View style={s.rushStat}>
+                <Text style={[s.rushVal, { color: flowHighlight }]}>
+                  {avgFlow}%
+                </Text>
+                <Text style={s.rushLbl}>FLOW</Text>
+              </View>
+              <View style={s.rushDivider} />
+              <View style={s.rushStat}>
+                <Text style={[s.rushVal, { color: Colors.amber }]}>
+                  {totalWaiting.toLocaleString()}
+                </Text>
+                <Text style={s.rushLbl}>WAITING</Text>
+              </View>
+              <View style={s.rushDivider} />
+              <View style={s.rushStat}>
+                <Text style={[s.rushVal, { color: Colors.sky }]}>
+                  {totalCanBoard.toLocaleString()}
+                </Text>
+                <Text style={s.rushLbl}>READY</Text>
+              </View>
+              <View style={s.rushDivider} />
+              <View style={s.rushStat}>
+                <Text style={[s.rushVal, { color: Colors.green }]}>
+                  {fmtCash(totalReward)}
+                </Text>
+                <Text style={s.rushLbl}>EARNED</Text>
+              </View>
+            </View>
+          </>
+        )}
 
-          <View style={s.section}>
-            {sortedGroups.map((group) => (
-              <RouteGroupRow
-                key={group.id}
-                group={group}
-                deactivating={deactivating === group.id}
-                onLongPress={handleLongPress}
-                onPriceChange={handlePriceChange}
-              />
-            ))}
+        {stalledCount > 0 && (
+          <View style={s.alertBanner}>
+            <Ionicons name="warning-outline" size={16} color={Colors.red} />
+            <View style={{ flex: 1 }}>
+              <Text style={s.alertTitle}>
+                {stalledCount} route group{stalledCount !== 1 ? "s" : ""} need
+                attention
+              </Text>
+              <Text style={s.alertSub}>
+                Queues are building. Add aircraft, upgrade capacity, or cut weak
+                routes.
+              </Text>
+            </View>
           </View>
-        </>
-      )}
+        )}
 
-      <View style={{ height: 36 }} />
-      <GameAlert ref={gameAlert.ref} />
-    </BottomSheetScrollView>
+        {activeRoutes.length === 0 && (
+          <View style={s.empty}>
+            <Ionicons name="git-network-outline" size={48} color={Colors.dim} />
+            <Text style={s.emptyTitle}>No active routes</Text>
+            <Text style={s.emptySub}>
+              Open the map, assign a hub demand to planes, and the rush starts
+              here.
+            </Text>
+
+            <TouchableOpacity
+              style={[s.emptyBtn, { borderColor: color + "55" }]}
+              onPress={handleCreateRoute}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="map-outline" size={15} color={color} />
+              <Text style={[s.emptyBtnText, { color }]}>Open map</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {activeRoutes.length > 0 && (
+          <>
+            <Text style={s.eyebrow}>ROUTE GROUPS</Text>
+            <Text style={s.eyebrowSub}>
+              Same destination routes are grouped · hold a row to remove all
+              assigned planes
+            </Text>
+
+            <View style={s.section}>
+              {sortedGroups.map((group) => (
+                <RouteGroupRow
+                  key={group.id}
+                  group={group}
+                  deactivating={deactivating === group.id}
+                  onLongPress={handleLongPress}
+                  onSwap={handleSwap}
+                  onPriceChange={handlePriceChange}
+                />
+              ))}
+            </View>
+          </>
+        )}
+
+        <View style={{ height: 36 }} />
+        <GameAlert ref={gameAlert.ref} />
+      </BottomSheetScrollView>
+
+      {swapGroup && (
+        <SwapPlaneModal group={swapGroup} onClose={() => setSwapGroup(null)} />
+      )}
+    </>
   );
 }
 
@@ -1006,6 +1034,22 @@ const rr = StyleSheet.create({
     fontSize: 11,
     fontWeight: "900",
     fontFamily: Typography.mono,
+  },
+  swapBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    backgroundColor: "rgba(56,189,248,0.1)",
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderWidth: 0.5,
+    borderColor: "rgba(56,189,248,0.3)",
+  },
+  swapTxt: {
+    fontSize: 9,
+    fontWeight: "700",
+    color: Colors.sky,
   },
   hint: {
     fontSize: 10,
@@ -1336,3 +1380,186 @@ const es = StyleSheet.create({
     maxWidth: 280,
   },
 });
+
+// ─────────────────────────────────────────────────────────────────
+// SWAP PLANE MODAL
+// Shows idle compatible planes for this route, sorted by efficiency
+// ─────────────────────────────────────────────────────────────────
+
+function SwapPlaneModal({
+  group,
+  onClose,
+}: {
+  group: RouteGroup;
+  onClose: () => void;
+}) {
+  const ownedPlanes = useOwnedPlanes();
+  const routes = useRoutes();
+  const { swapPlane, swapping } = useSwapPlane();
+
+  const dist = group.total_dist_nm;
+  const busyIds = new Set(
+    routes.filter((r) => r.active).map((r) => r.plane.id),
+  );
+
+  // Idle planes compatible with this route, scored by capacity fit
+  const candidates = ownedPlanes
+    .filter((p) => {
+      const isCurrentPlane = group.routes.some((r) => r.plane.id === p.id);
+      const isIdle = !busyIds.has(p.id) || isCurrentPlane;
+      const inRange = p.plane_model.range_nm >= dist;
+      return isIdle && inRange && !isCurrentPlane;
+    })
+    .map((p) => {
+      const cap = p.plane_model.pax_capacity;
+      const fit = Math.min(
+        100,
+        Math.round((cap / Math.max(1, group.demand.base_pax_day)) * 100),
+      );
+      const util = computeAircraftUtilization({
+        distNm: dist,
+        speedKts: p.plane_model.speed_kts,
+      });
+      return { plane: p, cap, fit, utilLabel: util.label };
+    })
+    .sort((a, b) => {
+      // Prefer planes closer to 100% capacity fit, then by util
+      const aScore = Math.abs(100 - a.fit);
+      const bScore = Math.abs(100 - b.fit);
+      return aScore - bScore;
+    });
+
+  const handleSwap = async (newPlaneId: string) => {
+    const ok = await swapPlane(group.routeId, group.currentPlaneId, newPlaneId);
+    if (ok) onClose();
+  };
+
+  return (
+    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
+      <View style={sw.overlay}>
+        <View style={sw.sheet}>
+          {/* Header */}
+          <View style={sw.header}>
+            <View>
+              <Text style={sw.title}>Swap Plane</Text>
+              <Text style={sw.sub}>
+                {group.demand.origin.iata} → {group.demand.dest.iata} ·{" "}
+                {dist.toLocaleString()}nm
+              </Text>
+            </View>
+            <TouchableOpacity onPress={onClose} hitSlop={12}>
+              <Ionicons name="close" size={18} color={Colors.dim} />
+            </TouchableOpacity>
+          </View>
+
+          {candidates.length === 0 ? (
+            <View style={sw.empty}>
+              <Ionicons name="airplane-outline" size={32} color={Colors.dim} />
+              <Text style={sw.emptyTxt}>
+                No idle compatible planes available
+              </Text>
+              <Text style={sw.emptySub}>
+                Buy more planes or free up an assigned one
+              </Text>
+            </View>
+          ) : (
+            <ScrollView style={sw.list} showsVerticalScrollIndicator={false}>
+              {candidates.map(({ plane, cap, fit, utilLabel }) => {
+                const fc =
+                  fit >= 80
+                    ? Colors.green
+                    : fit >= 40
+                      ? Colors.amber
+                      : Colors.dim;
+                return (
+                  <TouchableOpacity
+                    key={plane.id}
+                    style={sw.row}
+                    onPress={() => handleSwap(plane.id)}
+                    disabled={swapping}
+                    activeOpacity={0.82}
+                  >
+                    <View style={sw.rowBody}>
+                      <Text style={sw.planeName}>
+                        {plane.plane_model.nickname}
+                      </Text>
+                      <Text style={sw.planeSub}>
+                        {cap} seats ·{" "}
+                        {plane.plane_model.range_nm.toLocaleString()}nm ·{" "}
+                        {utilLabel}
+                      </Text>
+                    </View>
+                    <View
+                      style={[
+                        sw.fitBadge,
+                        { backgroundColor: fc + "18", borderColor: fc + "44" },
+                      ]}
+                    >
+                      <Text style={[sw.fitTxt, { color: fc }]}>{fit}% fit</Text>
+                    </View>
+                    <Ionicons
+                      name="chevron-forward"
+                      size={14}
+                      color={Colors.dim}
+                    />
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          )}
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+const sw = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    justifyContent: "flex-end",
+  },
+  sheet: {
+    backgroundColor: "#0d1526",
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: Spacing.lg,
+    maxHeight: "70%",
+    borderTopWidth: 1,
+    borderColor: Colors.border,
+  },
+  header: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    marginBottom: Spacing.md,
+  },
+  title: { fontSize: 16, fontWeight: "900", color: Colors.text },
+  sub: { fontSize: 11, color: Colors.dim, marginTop: 2 },
+  list: { marginTop: 4 },
+  row: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+    paddingVertical: Spacing.md,
+    borderBottomWidth: 0.5,
+    borderBottomColor: Colors.border,
+  },
+  rowBody: { flex: 1 },
+  planeName: { fontSize: 13, fontWeight: "700", color: Colors.text },
+  planeSub: { fontSize: 11, color: Colors.muted, marginTop: 2 },
+  fitBadge: {
+    borderRadius: 6,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  fitTxt: { fontSize: 10, fontWeight: "700" },
+  empty: { alignItems: "center", gap: Spacing.sm, paddingVertical: 40 },
+  emptyTxt: { fontSize: 14, fontWeight: "700", color: Colors.text },
+  emptySub: { fontSize: 12, color: Colors.dim, textAlign: "center" },
+});
+
+function pricingStrategyConfig(priceStrategy: string, arg1: number) {
+  throw new Error("Function not implemented.");
+}
