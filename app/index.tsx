@@ -1,27 +1,19 @@
 /**
  * app/index.tsx
  *
- * Entry point — checks Supabase session and routes accordingly.
- *
- *   No session  → (auth)/index  (auth screen)
- *   Has session → (game)/index  (map screen via loader)
+ * Entry point — routes straight to the game screen.
+ * Play Games sign-in is handled inside useGameLoader.
+ * If sign-in fails, useGameLoader sets phase → "auth" which shows AuthScreen.
  */
 
 import { Colors } from "@/constants/theme";
-import { supabase } from "@/lib/supabase";
 import { router } from "expo-router";
 import { useEffect } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 
 export default function Index() {
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session) {
-        router.replace("/(game)");
-      } else {
-        router.replace("/(auth)");
-      }
-    });
+    router.replace("/(game)");
   }, []);
 
   return (

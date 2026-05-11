@@ -41,12 +41,6 @@ export function useCreateAirline() {
       if (!name.trim()) return { error: "Airline name is required" };
 
       try {
-        const {
-          data: { user },
-          error: authErr,
-        } = await supabase.auth.getUser();
-        if (authErr || !user) return { error: "Not authenticated" };
-
         const loanRate =
           difficulty === "easy" ? 3 : difficulty === "hard" ? 9 : 5;
 
@@ -70,11 +64,13 @@ export function useCreateAirline() {
           })
           .select()
           .single();
-
+        console.log("Supabase insert response:", { data, error });
         if (error) return { error: error.message };
 
         // Wire the seed into the demand generation system
         setDemandSeed(seed.toUpperCase());
+
+        console.log("Created airline with ID:", data.id);
 
         setAirline({
           id: data.id,
@@ -98,6 +94,7 @@ export function useCreateAirline() {
         setPhase("tutorial");
         return { error: null };
       } catch (err: any) {
+        console.error("Error creating airline:", err);
         return { error: err.message ?? "Failed to create airline" };
       }
     },

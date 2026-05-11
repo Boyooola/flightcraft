@@ -148,7 +148,21 @@ export default function SetupScreen() {
     setError(null);
 
     const diff = DIFFICULTIES.find((d) => d.id === difficulty)!;
-
+    console.log("Creating airline with params:", {
+      name: name.trim(),
+      color,
+      difficulty,
+      cash: diff.cash,
+      loan: diff.cash,
+      seed: (
+        seed
+          .trim()
+          .toUpperCase()
+          .replace(/[^A-F0-9]/g, "") || generateSeed()
+      ).slice(0, 16),
+      ai_count: aiCount,
+      ai_difficulty: aiDiff,
+    });
     const { error: err } = await createAirline({
       name: name.trim(),
       color,

@@ -54,7 +54,7 @@ export function useAuth() {
     console.log("Attempting Play Games sign-in...");
     const result = await signInWithPlayGames();
     if (result?.playerId) setPlayerId(result.playerId);
-    return result;
+    return result!;
   }, []);
 
   const signOut = useCallback(async () => {

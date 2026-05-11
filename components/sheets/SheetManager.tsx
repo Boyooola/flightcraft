@@ -8,11 +8,10 @@
 import { Colors } from "@/constants/theme";
 import { useAvailableSheetHeight, useHudHeight } from "@/hooks/useSheetLayout";
 import { useActiveSheet, useGameStore } from "@/store";
-import { Ionicons } from "@expo/vector-icons";
 import type { BottomSheetBackdropProps } from "@gorhom/bottom-sheet";
 import BottomSheet, { BottomSheetBackdrop } from "@gorhom/bottom-sheet";
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { StyleSheet } from "react-native";
 import AchievementsSheet from "./AchievementsSheet";
 import AirportSheet from "./AirportSheet";
 import BankSheet from "./BankSheet";
@@ -97,40 +96,6 @@ export default function SheetManager() {
       containerStyle={{ zIndex: 200 }}
     >
       {/* Close button row — always visible at top of every sheet */}
-      <View style={s.closeRow}>
-        <Text style={s.sheetTitle}>
-          {activeSheet === "airport"
-            ? "Airport"
-            : activeSheet === "routes"
-              ? "Routes"
-              : activeSheet === "fleet"
-                ? "Fleet"
-                : activeSheet === "finance"
-                  ? "Finance"
-                  : activeSheet === "settings"
-                    ? "Settings"
-                    : activeSheet === "leaderboard"
-                      ? "Leaderboard"
-                      : activeSheet === "bank"
-                        ? "Bank"
-                        : activeSheet === "create-route"
-                          ? "New Route"
-                          : activeSheet === "achievements"
-                            ? "Achievements"
-                            : activeSheet === "missions"
-                              ? "Missions"
-                              : ""}
-        </Text>
-        <TouchableOpacity
-          style={s.closeBtn}
-          onPress={() => useGameStore.getState().closeSheet()}
-          hitSlop={12}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="close" size={16} color={Colors.dim} />
-        </TouchableOpacity>
-      </View>
-
       {activeSheet === "airport" && <AirportSheet />}
       {activeSheet === "routes" && <RoutesSheet />}
       {activeSheet === "fleet" && <FleetSheet />}

@@ -470,19 +470,19 @@ export default function FleetSheet() {
     setTimeout(() => startCreation(), 120);
   };
 
-  if (ownedPlanes.length === 0)
-    return (
-      <BottomSheetScrollView contentContainerStyle={[es.wrap]}>
-        <View style={es.empty}>
-          <Ionicons name="airplane-outline" size={48} color={Colors.dim} />
-          <Text style={es.emptyTitle}>No planes yet</Text>
-          <Text style={es.emptySub}>
-            Buy your first aircraft to start moving passengers and earning
-            revenue.
-          </Text>
-        </View>
-      </BottomSheetScrollView>
-    );
+  // if (ownedPlanes.length === 0)
+  //   return (
+  //     <BottomSheetScrollView contentContainerStyle={[es.wrap]}>
+  //       <View style={es.empty}>
+  //         <Ionicons name="airplane-outline" size={48} color={Colors.dim} />
+  //         <Text style={es.emptyTitle}>No planes yet</Text>
+  //         <Text style={es.emptySub}>
+  //           Buy your first aircraft to start moving passengers and earning
+  //           revenue.
+  //         </Text>
+  //       </View>
+  //     </BottomSheetScrollView>
+  //   );
 
   return (
     <BottomSheetScrollView

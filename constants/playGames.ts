@@ -6,7 +6,7 @@
 
 export const PLAY_GAMES_APP_ID = "482109260344";
 export const PLAY_GAMES_CLIENT_ID =
-  "482109260344-b4qnsu8fmg7toe5h6f0h58rpmiufu1ms.apps.googleusercontent.com";
+  "942162913163-8j6acvehrvochrjlr3ccqn9f3c9cahtq.apps.googleusercontent.com";
 
 // ── Leaderboard ──────────────────────────────────────────────────
 export const LEADERBOARD_NET_WORTH = "CgkIuITO_4MOEAIQFQ";

@@ -96,9 +96,10 @@ export function useGameLoader() {
     // ── Play Games sign-in (required) ─────────────────────────
     initPlayGames();
     let playerId = getPlayerId();
-
+    console.log("Player ID:", playerId);
     if (!playerId) {
       const player = await signInWithPlayGames();
+      console.log("Signed in player:", player);
       if (!player?.playerId) {
         // Sign-in failed or cancelled — show auth screen
         setPhase("auth");
