@@ -40,7 +40,10 @@ app-example
 
 # generated native folders
 /ios
-/android
+android/.gradle
+android/app/build
+android/build
+android/.cxx
 
 .env.local
 

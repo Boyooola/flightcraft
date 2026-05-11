@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "482109260344",
+    "project_id": "flightcraft-494801",
+    "storage_bucket": "flightcraft-494801.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:482109260344:android:daaabbd06e303299e49ccd",
+        "android_client_info": {
+          "package_name": "com.stratoslabs.flightcraft"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "482109260344-vsho1tk482kkqsp1nbsc91quj6gc9m6j.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.stratoslabs.flightcraft",
+            "certificate_hash": "1f85ff01f6f553cc081b8128e91947ec14ead41c"
+          }
+        },
+        {
+          "client_id": "482109260344-9ocipf4frj52t8rf5jf8mu2so2r81plc.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDKiTJDzU2hfdkkL-keO-zYcpT8hqYMoWU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "482109260344-9ocipf4frj52t8rf5jf8mu2so2r81plc.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
