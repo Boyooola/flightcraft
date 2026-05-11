@@ -92,7 +92,7 @@ export function waitingPaxForDemand(
   const waiting = spawned - delivered;
 
   // If negative, respawn from remaining pool
-  if (waiting < 0) {
+  if (waiting <= 0) {
     return remaining;
   }
 
@@ -131,6 +131,7 @@ export function boardPassengers(params: {
   loadFactorMax?: number;
 }): number {
   const waiting = waitingPaxForDemand(params.demand, params.dayProgress);
+
   if (waiting <= 0) return 0;
 
   // Board up to plane capacity — always fill available seats with waiting pax

@@ -235,23 +235,24 @@ export default function RouteLayer({
                 liveDemand.dest.iata,
               );
 
-              const effective = Math.floor(delieveredPax * share);
-              const lost = delieveredPax - effective;
+              //const effective = Math.floor(delieveredPax * share);
+              //const lost = delieveredPax - effective;
+              // if (effective > 0) {
+              //   addPaxDelivered(liveDemand.id, effective, 0);
+              // }
 
-              if (effective > 0) {
-                addPaxDelivered(liveDemand.id, effective, lost);
-              }
+              addPaxDelivered(liveDemand.id, delieveredPax, 0);
 
-              if (lost > 0) {
-                updateDemand(liveDemand.id, {
-                  ai_stolen_pax: (liveDemand.ai_stolen_pax ?? 0) + lost,
-                });
-              }
+              // if (lost > 0) {
+              //   updateDemand(liveDemand.id, {
+              //     ai_stolen_pax: (liveDemand.ai_stolen_pax ?? 0) + 0,
+              //   });
+              // }
 
               const reward = calcInstantDeliveryReward({
                 distNm: route.total_dist_nm ?? liveDemand.dist_nm,
                 trustPct: hub?.trust ?? 0,
-                deliveredPax: effective,
+                deliveredPax: delieveredPax,
                 priceStrategy: (route as any).price_strategy ?? "standard",
                 priceElasticity: liveDemand.price_elasticity ?? 1,
                 crowdMultiplier: globalRevMul, // event + wave multiplier
