@@ -33,41 +33,35 @@ export function useSwapPlane() {
           .eq("id", routeId);
         if (routeErr) throw routeErr;
 
-        // 2. Unassign old plane
-        const { error: oldErr } = await supabase
-          .from("owned_planes")
-          .update({ route_id: null })
-          .eq("id", oldPlaneId);
-        if (oldErr) throw oldErr;
-
-        // 3. Assign new plane
-        const { error: newErr } = await supabase
-          .from("owned_planes")
-          .update({ route_id: routeId })
-          .eq("id", newPlaneId);
-        if (newErr) throw newErr;
-
         // 4. Update store atomically
         const { routes, ownedPlanes } = useGameStore.getState();
 
-        // Find the new plane model
+        // Find the new plane and update its route_id before assigning to route
         const newPlane = ownedPlanes.find((p) => p.id === newPlaneId);
         if (!newPlane) throw new Error("Plane not found in store");
 
-        // Update route with new plane
-        useGameStore.setState({
-          routes: routes.map((r) =>
-            r.id === routeId ? { ...r, plane: newPlane } : r,
-          ),
-          ownedPlanes: ownedPlanes.map((p) => {
-            if (p.id === oldPlaneId) return { ...p, route_id: null };
-            if (p.id === newPlaneId) return { ...p, route_id: routeId };
-            return p;
-          }),
-        });
+        // Plane with updated route_id — needed so route reflects correct state
+        const updatedNewPlane = { ...newPlane, route_id: routeId };
+
+        // Use setState with replace=false and fresh arrays to trigger re-render
+        useGameStore.setState(
+          {
+            routes: routes.map((r) =>
+              r.id === routeId ? { ...r, plane: updatedNewPlane } : r,
+            ),
+            ownedPlanes: ownedPlanes.map((p) => {
+              if (p.id === oldPlaneId) return { ...p, route_id: null };
+              if (p.id === newPlaneId) return updatedNewPlane;
+              return p;
+            }),
+          },
+          false,
+          "swapPlane",
+        );
 
         return true;
       } catch (e: any) {
+        console.error("Error swapping plane:", e);
         setError(e.message ?? "Failed to swap plane");
         return false;
       } finally {

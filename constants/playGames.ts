@@ -4,83 +4,83 @@
  * Auto-generated from games-ids.xml
  */
 
-export const PLAY_GAMES_APP_ID = "482109260344";
+export const PLAY_GAMES_APP_ID = "364325398732";
 export const PLAY_GAMES_CLIENT_ID =
-  "942162913163-8j6acvehrvochrjlr3ccqn9f3c9cahtq.apps.googleusercontent.com";
+  "364325398732-smb7fk719t96vai07k8qub1vpmrm4jtt.apps.googleusercontent.com";
 
 // ── Leaderboard ──────────────────────────────────────────────────
-export const LEADERBOARD_NET_WORTH = "CgkIuITO_4MOEAIQFQ";
+export const LEADERBOARD_NET_WORTH = "CgkIzNHxm80KEAIQAQ";
 
 // ── Achievements ─────────────────────────────────────────────────
 export const ACHIEVEMENTS = {
   // Milestones
-  first_takeoff: "CgkIuITO_4MOEAIQAQ",
-  first_passengers: "CgkIuITO_4MOEAIQAg",
-  first_hub: "CgkIuITO_4MOEAIQAw",
-  first_plane: "CgkIuITO_4MOEAIQBA",
-  three_routes: "CgkIuITO_4MOEAIQBQ",
-  second_hub: "CgkIuITO_4MOEAIQBg",
+  first_takeoff: "CgkIzNHxm80KEAIQBw",
+  first_passengers: "CgkIzNHxm80KEAIQLA",
+  first_hub: "CgkIzNHxm80KEAIQAg",
+  first_plane: "CgkIzNHxm80KEAIQNQ",
+  three_routes: "CgkIzNHxm80KEAIQLQ",
+  second_hub: "CgkIzNHxm80KEAIQGg",
   // Daily pax
-  pax_100_day: "CgkIuITO_4MOEAIQBw",
-  pax_500_day: "CgkIuITO_4MOEAIQCA",
-  pax_1000_day: "CgkIuITO_4MOEAIQCQ",
-  pax_2500_day: "CgkIuITO_4MOEAIQCg",
-  pax_5000_day: "CgkIuITO_4MOEAIQCw",
+  pax_100_day: "CgkIzNHxm80KEAIQGA",
+  pax_500_day: "CgkIzNHxm80KEAIQKQ",
+  pax_1000_day: "CgkIzNHxm80KEAIQEg",
+  pax_2500_day: "CgkIzNHxm80KEAIQKA",
+  pax_5000_day: "CgkIzNHxm80KEAIQKg",
   // All-time pax
-  pax_10k_all_time: "CgkIuITO_4MOEAIQDA",
-  pax_100k_all_time: "CgkIuITO_4MOEAIQDQ",
+  pax_10k_all_time: "CgkIzNHxm80KEAIQDw",
+  pax_100k_all_time: "CgkIzNHxm80KEAIQDg",
   // Routes
-  routes_5: "CgkIuITO_4MOEAIQDg",
-  routes_10: "CgkIuITO_4MOEAIQDw",
-  routes_20: "CgkIuITO_4MOEAIQEA",
-  routes_35: "CgkIuITO_4MOEAIQEQ",
+  routes_5: "CgkIzNHxm80KEAIQJA",
+  routes_10: "CgkIzNHxm80KEAIQKw",
+  routes_20: "CgkIzNHxm80KEAIQNA",
+  routes_35: "CgkIzNHxm80KEAIQNg",
   // Hubs
-  hubs_5: "CgkIuITO_4MOEAIQEg",
-  hubs_10: "CgkIuITO_4MOEAIQEw",
+  hubs_5: "CgkIzNHxm80KEAIQJg",
+  hubs_10: "CgkIzNHxm80KEAIQAw",
   // Countries
-  countries_5: "CgkIuITO_4MOEAIQFA",
-  countries_15: "CgkIuITO_4MOEAIQFg",
+  countries_5: "CgkIzNHxm80KEAIQHQ",
+  countries_15: "CgkIzNHxm80KEAIQMA",
   // Geography
-  two_continents: "CgkIuITO_4MOEAIQFw",
-  five_continents: "CgkIuITO_4MOEAIQGA",
-  connecting_route: "CgkIuITO_4MOEAIQGQ",
-  long_haul: "CgkIuITO_4MOEAIQGg",
-  ultra_long: "CgkIuITO_4MOEAIQGw",
-  trans_atlantic: "CgkIuITO_4MOEAIQHA",
-  trans_pacific: "CgkIuITO_4MOEAIQHQ",
+  two_continents: "CgkIzNHxm80KEAIQMQ",
+  five_continents: "CgkIzNHxm80KEAIQEw",
+  connecting_route: "CgkIzNHxm80KEAIQIA",
+  long_haul: "CgkIzNHxm80KEAIQNw",
+  ultra_long: "CgkIzNHxm80KEAIQCg",
+  trans_atlantic: "CgkIzNHxm80KEAIQBA",
+  trans_pacific: "CgkIzNHxm80KEAIQEQ",
   // Fleet
-  planes_3: "CgkIuITO_4MOEAIQHg",
-  planes_10: "CgkIuITO_4MOEAIQHw",
-  planes_25: "CgkIuITO_4MOEAIQIA",
-  mixed_fleet: "CgkIuITO_4MOEAIQIQ",
-  all_families: "CgkIuITO_4MOEAIQIg",
+  planes_3: "CgkIzNHxm80KEAIQDQ",
+  planes_10: "CgkIzNHxm80KEAIQIQ",
+  planes_25: "CgkIzNHxm80KEAIQGw",
+  mixed_fleet: "CgkIzNHxm80KEAIQIg",
+  all_families: "CgkIzNHxm80KEAIQBg",
   // Trust
-  trust_80: "CgkIuITO_4MOEAIQIw",
-  trust_100: "CgkIuITO_4MOEAIQJA",
-  no_crowding_day: "CgkIuITO_4MOEAIQJQ",
-  all_hubs_full: "CgkIuITO_4MOEAIQJg",
+  trust_80: "CgkIzNHxm80KEAIQHg",
+  trust_100: "CgkIzNHxm80KEAIQLg",
+  no_crowding_day: "CgkIzNHxm80KEAIQJQ",
+  all_hubs_full: "CgkIzNHxm80KEAIQGQ",
   // Streaks
-  route_streak_5: "CgkIuITO_4MOEAIQJw",
-  route_streak_15: "CgkIuITO_4MOEAIQKA",
-  speed_mode: "CgkIuITO_4MOEAIQKQ",
+  route_streak_5: "CgkIzNHxm80KEAIQMg",
+  route_streak_15: "CgkIzNHxm80KEAIQCw",
+  speed_mode: "CgkIzNHxm80KEAIQHA",
   // Cash
-  cash_100k: "CgkIuITO_4MOEAIQKg",
-  first_million: "CgkIuITO_4MOEAIQKw",
-  ten_million: "CgkIuITO_4MOEAIQLA",
-  debt_free: "CgkIuITO_4MOEAIQLQ",
-  net_worth_10m: "CgkIuITO_4MOEAIQLg",
-  tycoon: "CgkIuITO_4MOEAIQLw",
+  cash_100k: "CgkIzNHxm80KEAIQFw",
+  first_million: "CgkIzNHxm80KEAIQBQ",
+  ten_million: "CgkIzNHxm80KEAIQIw",
+  debt_free: "CgkIzNHxm80KEAIQFg",
+  net_worth_10m: "CgkIzNHxm80KEAIQLw",
+  tycoon: "CgkIzNHxm80KEAIQFA",
   // Missions
-  first_mission: "CgkIuITO_4MOEAIQMA",
-  missions_10: "CgkIuITO_4MOEAIQMQ",
-  missions_30: "CgkIuITO_4MOEAIQMg",
-  perfect_day: "CgkIuITO_4MOEAIQMw",
-  mission_sweep: "CgkIuITO_4MOEAIQNA",
+  first_mission: "CgkIzNHxm80KEAIQJw",
+  missions_10: "CgkIzNHxm80KEAIQEA",
+  missions_30: "CgkIzNHxm80KEAIQFQ",
+  perfect_day: "CgkIzNHxm80KEAIQDA",
+  mission_sweep: "CgkIzNHxm80KEAIQHw",
   // Days
-  day_30: "CgkIuITO_4MOEAIQNQ",
-  day_100: "CgkIuITO_4MOEAIQNg",
-  day_365: "CgkIuITO_4MOEAIQNw",
-  speed_builder: "CgkIuITO_4MOEAIQOA",
+  day_30: "CgkIzNHxm80KEAIQMw",
+  day_100: "CgkIzNHxm80KEAIQCA",
+  day_365: "CgkIzNHxm80KEAIQOA",
+  speed_builder: "CgkIzNHxm80KEAIQCQ",
 } as const;
 
 export type AchievementId = keyof typeof ACHIEVEMENTS;

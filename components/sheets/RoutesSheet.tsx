@@ -1,9 +1,9 @@
+import SwapPlaneSheet from "@/components/sheets/SwapPlaneSheet";
 import { GameAlert, useGameAlert } from "@/components/ui/GameAlert";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useHaptics } from "@/hooks/useHaptics";
 import { useTabBarHeight } from "@/hooks/useSheetLayout";
 import { useDeactivateRoute } from "@/hooks/useSupabaseWrite";
-import { useSwapPlane } from "@/hooks/useSwapPlane";
 import { hubCrowdingLevel } from "@/lib/demands";
 import { congestionEfficiencyMultiplier } from "@/lib/hubCongestion";
 import {
@@ -14,9 +14,8 @@ import {
 import { passengerTypeBreakdown } from "@/lib/passengerTypes";
 import {
   calcRouteRevenue,
-  computeAircraftUtilization,
   computePriceElasticity,
-  fmtCash,
+  fmtCash
 } from "@/lib/revenue";
 import { supabase } from "@/lib/supabase";
 import type { Demand, Route } from "@/store";
@@ -26,16 +25,13 @@ import {
   useDemands,
   useGameStore,
   useHubs,
-  useOwnedPlanes,
-  useRoutes,
+  useRoutes
 } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
 import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
-  Modal,
-  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -262,10 +258,6 @@ function RouteGroupRow({
   const isCleared = group.status.label === "CLEARED";
   const accent = group.status.color;
   const growth = routeGrowthLabel(group.demand);
-  const pricing = pricingStrategyConfig(
-    group.priceStrategy,
-    group.demand.price_elasticity ?? 1,
-  );
   const pricingColor = PRICING_COLOR[group.priceStrategy] ?? Colors.green;
 
   return (
@@ -334,16 +326,6 @@ function RouteGroupRow({
             <Ionicons name="swap-horizontal" size={11} color={Colors.sky} />
             <Text style={rr.swapTxt}>Swap</Text>
           </TouchableOpacity>
-          <TouchableOpacity
-            style={rr.swapBtn}
-            onPress={() => onSwap(group)}
-            hitSlop={8}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="swap-horizontal" size={11} color={Colors.sky} />
-            <Text style={rr.swapTxt}>Swap</Text>
-          </TouchableOpacity>
-
           <Text style={rr.dot}>•</Text>
 
           <Text
@@ -923,7 +905,7 @@ export default function RoutesSheet() {
       </BottomSheetScrollView>
 
       {swapGroup && (
-        <SwapPlaneModal group={swapGroup} onClose={() => setSwapGroup(null)} />
+        <SwapPlaneSheet group={swapGroup} onClose={() => setSwapGroup(null)} />
       )}
     </>
   );
@@ -1385,181 +1367,3 @@ const es = StyleSheet.create({
 // SWAP PLANE MODAL
 // Shows idle compatible planes for this route, sorted by efficiency
 // ─────────────────────────────────────────────────────────────────
-
-function SwapPlaneModal({
-  group,
-  onClose,
-}: {
-  group: RouteGroup;
-  onClose: () => void;
-}) {
-  const ownedPlanes = useOwnedPlanes();
-  const routes = useRoutes();
-  const { swapPlane, swapping } = useSwapPlane();
-
-  const dist = group.total_dist_nm;
-  const busyIds = new Set(
-    routes.filter((r) => r.active).map((r) => r.plane.id),
-  );
-
-  // Idle planes compatible with this route, scored by capacity fit
-  const candidates = ownedPlanes
-    .filter((p) => {
-      const isCurrentPlane = group.routes.some((r) => r.plane.id === p.id);
-      const isIdle = !busyIds.has(p.id) || isCurrentPlane;
-      const inRange = p.plane_model.range_nm >= dist;
-      return isIdle && inRange && !isCurrentPlane;
-    })
-    .map((p) => {
-      const cap = p.plane_model.pax_capacity;
-      const fit = Math.min(
-        100,
-        Math.round((cap / Math.max(1, group.demand.base_pax_day)) * 100),
-      );
-      const util = computeAircraftUtilization({
-        distNm: dist,
-        speedKts: p.plane_model.speed_kts,
-      });
-      return { plane: p, cap, fit, utilLabel: util.label };
-    })
-    .sort((a, b) => {
-      // Prefer planes closer to 100% capacity fit, then by util
-      const aScore = Math.abs(100 - a.fit);
-      const bScore = Math.abs(100 - b.fit);
-      return aScore - bScore;
-    });
-
-  const handleSwap = async (newPlaneId: string) => {
-    const ok = await swapPlane(group.routeId, group.currentPlaneId, newPlaneId);
-    if (ok) onClose();
-  };
-
-  return (
-    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
-      <View style={sw.overlay}>
-        <View style={sw.sheet}>
-          {/* Header */}
-          <View style={sw.header}>
-            <View>
-              <Text style={sw.title}>Swap Plane</Text>
-              <Text style={sw.sub}>
-                {group.demand.origin.iata} → {group.demand.dest.iata} ·{" "}
-                {dist.toLocaleString()}nm
-              </Text>
-            </View>
-            <TouchableOpacity onPress={onClose} hitSlop={12}>
-              <Ionicons name="close" size={18} color={Colors.dim} />
-            </TouchableOpacity>
-          </View>
-
-          {candidates.length === 0 ? (
-            <View style={sw.empty}>
-              <Ionicons name="airplane-outline" size={32} color={Colors.dim} />
-              <Text style={sw.emptyTxt}>
-                No idle compatible planes available
-              </Text>
-              <Text style={sw.emptySub}>
-                Buy more planes or free up an assigned one
-              </Text>
-            </View>
-          ) : (
-            <ScrollView style={sw.list} showsVerticalScrollIndicator={false}>
-              {candidates.map(({ plane, cap, fit, utilLabel }) => {
-                const fc =
-                  fit >= 80
-                    ? Colors.green
-                    : fit >= 40
-                      ? Colors.amber
-                      : Colors.dim;
-                return (
-                  <TouchableOpacity
-                    key={plane.id}
-                    style={sw.row}
-                    onPress={() => handleSwap(plane.id)}
-                    disabled={swapping}
-                    activeOpacity={0.82}
-                  >
-                    <View style={sw.rowBody}>
-                      <Text style={sw.planeName}>
-                        {plane.plane_model.nickname}
-                      </Text>
-                      <Text style={sw.planeSub}>
-                        {cap} seats ·{" "}
-                        {plane.plane_model.range_nm.toLocaleString()}nm ·{" "}
-                        {utilLabel}
-                      </Text>
-                    </View>
-                    <View
-                      style={[
-                        sw.fitBadge,
-                        { backgroundColor: fc + "18", borderColor: fc + "44" },
-                      ]}
-                    >
-                      <Text style={[sw.fitTxt, { color: fc }]}>{fit}% fit</Text>
-                    </View>
-                    <Ionicons
-                      name="chevron-forward"
-                      size={14}
-                      color={Colors.dim}
-                    />
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-          )}
-        </View>
-      </View>
-    </Modal>
-  );
-}
-
-const sw = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.6)",
-    justifyContent: "flex-end",
-  },
-  sheet: {
-    backgroundColor: "#0d1526",
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    padding: Spacing.lg,
-    maxHeight: "70%",
-    borderTopWidth: 1,
-    borderColor: Colors.border,
-  },
-  header: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    marginBottom: Spacing.md,
-  },
-  title: { fontSize: 16, fontWeight: "900", color: Colors.text },
-  sub: { fontSize: 11, color: Colors.dim, marginTop: 2 },
-  list: { marginTop: 4 },
-  row: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.sm,
-    paddingVertical: Spacing.md,
-    borderBottomWidth: 0.5,
-    borderBottomColor: Colors.border,
-  },
-  rowBody: { flex: 1 },
-  planeName: { fontSize: 13, fontWeight: "700", color: Colors.text },
-  planeSub: { fontSize: 11, color: Colors.muted, marginTop: 2 },
-  fitBadge: {
-    borderRadius: 6,
-    borderWidth: 1,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-  },
-  fitTxt: { fontSize: 10, fontWeight: "700" },
-  empty: { alignItems: "center", gap: Spacing.sm, paddingVertical: 40 },
-  emptyTxt: { fontSize: 14, fontWeight: "700", color: Colors.text },
-  emptySub: { fontSize: 12, color: Colors.dim, textAlign: "center" },
-});
-
-function pricingStrategyConfig(priceStrategy: string, arg1: number) {
-  throw new Error("Function not implemented.");
-}

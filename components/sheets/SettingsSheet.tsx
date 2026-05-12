@@ -104,7 +104,7 @@ export default function SettingsSheet() {
       icon: "trash-outline",
       title: "Delete Account",
       message:
-        "This permanently deletes your airline, all progress, routes, hubs, planes, and achievements. This cannot be undone.",
+        "This permanently deletes your airline, routes, hubs, fleet, and all saved progress from our servers. Your Google Play Games achievements and leaderboard score are managed by Google and will not be affected. This cannot be undone.",
       buttons: [
         { label: "Cancel", style: "cancel" },
         {

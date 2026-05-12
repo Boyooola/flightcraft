@@ -14,7 +14,7 @@ import {
   useDay,
   useDayProgress,
   useGameStore,
-  useTodayCash
+  useTodayCash,
 } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
 import { useEffect, useRef, useState } from "react";
@@ -51,14 +51,6 @@ export default function TopHUD() {
   const todayCash = useTodayCash();
   const dayProgress = useDayProgress();
 
-  // Convert dayProgress (0→1) to a 24h clock string
-  const gameTime = (() => {
-    const totalMinutes = Math.floor(dayProgress * 24 * 60);
-    const h = Math.floor(totalMinutes / 60) % 24;
-    const m = totalMinutes % 60;
-    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-  })();
-
   const color = airline?.color ?? Colors.sky;
   const speed = airline?.speed ?? 1;
   const lowCash = cash < 200_000;
@@ -70,10 +62,50 @@ export default function TopHUD() {
 
   const todayReward = todayCash;
 
+  const timeTicker = useRef(new Animated.Value(0)).current;
+  const [displayedMinutes, setDisplayedMinutes] = useState(0);
   const rewardTicker = useRef(new Animated.Value(0)).current;
   const [displayedReward, setDisplayedReward] = useState(0);
   const rewardFlash = useRef(new Animated.Value(0)).current;
   const prevReward = useRef(0);
+
+  // Time ticker — listens to animated value and updates displayed minutes
+  useEffect(() => {
+    const id = timeTicker.addListener(({ value }) => {
+      setDisplayedMinutes(Math.floor(value));
+    });
+    return () => timeTicker.removeListener(id);
+  }, [timeTicker]);
+
+  // Animate time forward when dayProgress changes
+  const targetMinutes = Math.floor(dayProgress * 24 * 60);
+  const prevMinutes = useRef(0);
+
+  useEffect(() => {
+    if (targetMinutes === 0) {
+      // Day reset — snap back to midnight
+      prevMinutes.current = 0;
+      timeTicker.setValue(0);
+      setDisplayedMinutes(0);
+      return;
+    }
+    if (targetMinutes !== prevMinutes.current) {
+      timeTicker.setValue(prevMinutes.current);
+      Animated.timing(timeTicker, {
+        toValue: targetMinutes,
+        duration: 800,
+        useNativeDriver: false,
+      }).start();
+      prevMinutes.current = targetMinutes;
+    }
+  }, [targetMinutes, timeTicker]);
+
+  // Format displayed minutes → HH:MM
+  const gameTime = (() => {
+    const h = Math.floor(displayedMinutes / 60) % 24;
+    const m = displayedMinutes % 60;
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+  })();
 
   useEffect(() => {
     const id = rewardTicker.addListener(({ value }) => {
@@ -84,33 +116,44 @@ export default function TopHUD() {
   }, [rewardTicker]);
 
   useEffect(() => {
-    if (todayReward !== prevReward.current) {
-      Animated.sequence([
-        Animated.timing(rewardFlash, {
-          toValue: 1,
-          duration: 120,
-          useNativeDriver: true,
-        }),
-        Animated.timing(rewardFlash, {
-          toValue: 0,
-          duration: 360,
-          useNativeDriver: true,
-        }),
-      ]).start();
-
-      Animated.timing(rewardTicker, {
-        toValue: todayReward,
-        duration: 450,
-        useNativeDriver: false,
-      }).start();
-
-      prevReward.current = todayReward;
-    }
-
     if (todayReward === 0) {
+      // Day reset — snap back to zero immediately, no animation
       prevReward.current = 0;
       rewardTicker.setValue(0);
       setDisplayedReward(0);
+      return;
+    }
+
+    if (todayReward !== prevReward.current) {
+      const from = prevReward.current;
+      const to = todayReward;
+      prevReward.current = to;
+
+      // Start ticker from current displayed value → new value
+      // so it increments by the delta, not from 0
+      rewardTicker.setValue(from);
+
+      Animated.parallel([
+        // Flash
+        Animated.sequence([
+          Animated.timing(rewardFlash, {
+            toValue: 1,
+            duration: 100,
+            useNativeDriver: true,
+          }),
+          Animated.timing(rewardFlash, {
+            toValue: 0,
+            duration: 300,
+            useNativeDriver: true,
+          }),
+        ]),
+        // Count up from previous → new
+        Animated.timing(rewardTicker, {
+          toValue: to,
+          duration: 400,
+          useNativeDriver: false,
+        }),
+      ]).start();
     }
   }, [todayReward, rewardFlash, rewardTicker]);
 
