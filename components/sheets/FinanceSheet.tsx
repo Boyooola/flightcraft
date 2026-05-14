@@ -1,4 +1,3 @@
-import { useTabBarHeight } from "@/hooks/useSheetLayout";
 /**
  * components/sheets/FinanceSheet.tsx
  *
@@ -12,6 +11,7 @@ import { useTabBarHeight } from "@/hooks/useSheetLayout";
  */
 
 import { Colors, Radius, Spacing } from "@/constants/theme";
+import { useTabBarHeight } from "@/hooks/useSheetLayout";
 import {
   calcRouteRevenue,
   dailyInterest,
@@ -26,6 +26,7 @@ import {
   useHubs,
   useLedger,
   useLoan,
+  useOwnedPlanes,
   useRoutes,
 } from "@/store";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
@@ -172,6 +173,7 @@ export default function FinanceSheet() {
   const cash = useCash();
   const loan = useLoan();
   const day = useDay();
+  const ownedPlanes = useOwnedPlanes();
   const tabBarH = useTabBarHeight();
   const closeSheet = useGameStore((s) => s.closeSheet);
   const openSheet = useGameStore((s) => s.openSheet);
@@ -212,6 +214,25 @@ export default function FinanceSheet() {
       .sort((a, b) => b.reward - a.reward);
   }, [routes, hubs, day]);
 
+  const recentLedger = useMemo(
+    () =>
+      [...ledger]
+        .sort((a, b) => b.day - a.day || b.id.localeCompare(a.id))
+        .slice(0, 30),
+    [ledger],
+  );
+
+  const cashBars = useMemo(() => {
+    const byDay: Record<number, number> = {};
+    ledger.forEach((e) => {
+      byDay[e.day] = (byDay[e.day] ?? 0) + e.amount;
+    });
+    return Array.from({ length: 18 }, (_, i) => {
+      const d = Math.max(1, day - 17 + i);
+      return byDay[d] ?? 0;
+    });
+  }, [ledger, day]);
+
   if (routeRewards.length === 0) {
     return (
       <BottomSheetScrollView contentContainerStyle={es.wrap}>
@@ -229,8 +250,6 @@ export default function FinanceSheet() {
 
   const totalRouteReward = routeRewards.reduce((sum, r) => sum + r.reward, 0);
 
-  // Maintenance cost for idle planes (no active route)
-  const ownedPlanes = useGameStore.getState().ownedPlanes ?? [];
   const activeRoutes = routes.filter((r) => r.active);
   const activePlaneIds = new Set(activeRoutes.map((r) => r.plane.id));
   const idlePlanes = ownedPlanes.filter((p) => !activePlaneIds.has(p.id));
@@ -244,29 +263,6 @@ export default function FinanceSheet() {
 
   const dailyNet = totalRouteReward - interest - maintenanceCost;
   const netWorth = cash - loan;
-
-  // eslint-disable-next-line react-hooks/rules-of-hooks
-  const recentLedger = useMemo(
-    () =>
-      [...ledger]
-        .sort((a, b) => b.day - a.day || b.id.localeCompare(a.id))
-        .slice(0, 30),
-    [ledger],
-  );
-
-  // eslint-disable-next-line react-hooks/rules-of-hooks
-  const cashBars = useMemo(() => {
-    const byDay: Record<number, number> = {};
-
-    ledger.forEach((e) => {
-      byDay[e.day] = (byDay[e.day] ?? 0) + e.amount;
-    });
-
-    return Array.from({ length: 18 }, (_, i) => {
-      const d = Math.max(1, day - 17 + i);
-      return byDay[d] ?? 0;
-    });
-  }, [ledger, day]);
 
   const bestRoute = routeRewards[0];
 
@@ -283,8 +279,8 @@ export default function FinanceSheet() {
         <View style={s.hdrL}>
           <Ionicons name="flash-outline" size={21} color={color} />
           <View>
-            <Text style={s.title}>Cash Rush</Text>
-            <Text style={s.subtitle}>Earn by moving passengers</Text>
+            <Text style={s.title}>Finances</Text>
+            <Text style={s.subtitle}>Earnings and history</Text>
           </View>
         </View>
 
@@ -323,7 +319,7 @@ export default function FinanceSheet() {
       </View>
 
       <View style={s.hero}>
-        <Text style={s.heroLabel}>TODAY&apos;S FLOW REWARD</Text>
+        <Text style={s.heroLabel}>Today&apos;s earnings</Text>
         <Text
           style={[
             s.heroValue,
@@ -349,7 +345,7 @@ export default function FinanceSheet() {
                 size={12}
                 color={Colors.red}
               />
-              <Text style={s.heroLineLabel}>Loan drag</Text>
+              <Text style={s.heroLineLabel}>Loan interest</Text>
               <Text style={[s.heroLineValue, { color: Colors.red }]}>
                 -{fmtCash(interest)}
               </Text>
@@ -360,17 +356,17 @@ export default function FinanceSheet() {
 
       <View style={s.statsRow}>
         <StatCard
-          label="CASH"
+          label="Cash"
           value={fmtCash(cash)}
           color={cash < 100_000 ? Colors.red : Colors.green}
         />
         <StatCard
-          label="NET"
+          label="Net worth"
           value={fmtCashShort(netWorth)}
           color={netWorth >= 0 ? Colors.green : Colors.red}
         />
         <StatCard
-          label="LOAN"
+          label="Loan"
           value={fmtCash(loan)}
           color={loan > 0 ? Colors.red : Colors.dim}
           sub={loan > 0 ? `${fmtCash(interest)}/day` : "clear"}
@@ -380,7 +376,7 @@ export default function FinanceSheet() {
       {cashBars.some((v) => v !== 0) && (
         <View style={s.section}>
           <View style={s.sectionHead}>
-            <Text style={s.sectionTitle}>RECENT CASH FLOW</Text>
+            <Text style={s.sectionTitle}>Cash flow</Text>
             <Text style={s.sectionHint}>last 18 days</Text>
           </View>
           <CashBar data={cashBars} color={color} />
@@ -409,7 +405,7 @@ export default function FinanceSheet() {
       {routeRewards.length > 0 ? (
         <View style={s.section}>
           <View style={s.sectionHead}>
-            <Text style={s.sectionTitle}>ROUTE REWARDS</Text>
+            <Text style={s.sectionTitle}>Routes</Text>
             <Text style={s.sectionHint}>{routeRewards.length} active</Text>
           </View>
 
@@ -422,7 +418,7 @@ export default function FinanceSheet() {
           <MaterialCommunityIcons name="routes" size={36} color={Colors.dim} />
           <Text style={s.emptyTitle}>No cash flow yet</Text>
           <Text style={s.emptySub}>
-            Create routes from demand slots to start earning.
+            Open a hub, create a route, and assign a plane to start earning.
           </Text>
         </View>
       )}
@@ -430,7 +426,7 @@ export default function FinanceSheet() {
       {recentLedger.length > 0 && (
         <View style={s.section}>
           <View style={s.sectionHead}>
-            <Text style={s.sectionTitle}>RECENT REWARDS</Text>
+            <Text style={s.sectionTitle}>Recent activity</Text>
             <Text style={s.sectionHint}>latest 30</Text>
           </View>
 

@@ -119,12 +119,12 @@ export default function DailyEventCard() {
   const color = isWave ? Colors.amber : TYPE_COLOR[dailyEvent.type];
 
   const label = isWave
-    ? "DEMAND WAVE"
+    ? "Demand wave"
     : dailyEvent.type === "positive"
-      ? "RUSH BOOST"
+      ? "Good news"
       : dailyEvent.type === "negative"
-        ? "ROUTE TROUBLE"
-        : "MAP UPDATE";
+        ? "Heads up"
+        : "Update";
 
   const trendIcon = isWave
     ? "pulse-outline"

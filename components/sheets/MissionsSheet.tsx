@@ -193,7 +193,7 @@ function MissionCard({ mission, color }: { mission: Mission; color: string }) {
                 ]}
               >
                 <Text style={[mc.statusText, { color: accent }]}>
-                  {done ? "CLEARED" : "ACTIVE"}
+                  {done ? "DONE" : "IN PROGRESS"}
                 </Text>
               </View>
             </View>
@@ -239,8 +239,8 @@ function MissionCard({ mission, color }: { mission: Mission; color: string }) {
             {mission.completed
               ? "Reward earned"
               : done
-                ? "Reward on day advance"
-                : "Clear this contract"}
+                ? "Reward arriving next day"
+                : "Complete to earn reward"}
           </Text>
         </View>
       </View>
@@ -275,7 +275,7 @@ function WeeklyChallengeCard({
 
       <View style={wc.body}>
         <View style={wc.badge}>
-          <Text style={wc.badgeText}>WEEKLY RUSH</Text>
+          <Text style={wc.badgeText}>WEEKLY CHALLENGE</Text>
         </View>
 
         <View style={wc.titleRow}>
@@ -321,7 +321,7 @@ function WeeklyChallengeCard({
             </TouchableOpacity>
           ) : (
             <Text style={[wc.note, done && { color: GREEN }]}>
-              {done ? "Earned this week" : "Big weekly reward"}
+              {done ? "Earned this week" : "Complete for a big bonus"}
             </Text>
           )}
         </View>
@@ -359,8 +359,8 @@ export default function MissionsSheet() {
         <View style={s.hdrL}>
           <Ionicons name="flash-outline" size={21} color={color} />
           <View>
-            <Text style={s.title}>Mission Rush</Text>
-            <Text style={s.subtitle}>Clear contracts before day ends</Text>
+            <Text style={s.title}>Missions</Text>
+            <Text style={s.subtitle}>Daily contracts · reset each day</Text>
           </View>
         </View>
 
@@ -376,14 +376,14 @@ export default function MissionsSheet() {
         style={[s.hero, { borderColor: allDone ? GREEN + "44" : color + "44" }]}
       >
         <View>
-          <Text style={s.heroLabel}>DAY {day} CONTRACTS</Text>
+          <Text style={s.heroLabel}>Day {day}</Text>
           <Text style={[s.heroValue, { color: allDone ? GREEN : color }]}>
             {doneCount}/3
           </Text>
           <Text style={s.heroSub}>
             {allDone
-              ? "Board cleared. Rewards soon."
-              : "Complete missions to boost your airline."}
+              ? "All done for today — rewards on next day."
+              : "Finish all three to earn bonus cash."}
           </Text>
         </View>
 
@@ -407,7 +407,7 @@ export default function MissionsSheet() {
         <View style={s.allDone}>
           <Ionicons name="trophy" size={14} color={GREEN} />
           <Text style={s.allDoneText}>
-            Daily board cleared. Rewards credit on next day advance.
+            All three missions complete — bonus cash arriving with the next day.
           </Text>
         </View>
       )}
@@ -422,13 +422,13 @@ export default function MissionsSheet() {
         </View>
       )}
 
-      <Text style={s.sectionTitle}>TODAY&apos;S CONTRACTS</Text>
+      <Text style={s.sectionTitle}>Today&apos;s missions</Text>
 
       {missions.length === 0 ? (
         <View style={s.empty}>
           <Ionicons name="flag-outline" size={40} color={Colors.dim} />
           <Text style={s.emptyText}>
-            Missions generate at the start of each day.
+            New missions will appear at the start of tomorrow. Come back then!
           </Text>
         </View>
       ) : (
@@ -473,7 +473,6 @@ const mc = StyleSheet.create({
   },
   doneTitle: {
     color: Colors.dim,
-    textDecorationLine: "line-through",
   },
   status: {
     borderRadius: Radius.full,

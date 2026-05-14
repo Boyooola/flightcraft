@@ -23,28 +23,32 @@ const CATEGORY_META: Record<
   AchievementCategory,
   { label: string; icon: string; color: string }
 > = {
-  pioneer: { label: "Start Rush", icon: "rocket-outline", color: Colors.sky },
+  pioneer: {
+    label: "Getting Started",
+    icon: "rocket-outline",
+    color: Colors.sky,
+  },
   passenger: {
-    label: "Passenger Flow",
+    label: "Passengers",
     icon: "people-outline",
     color: Colors.green,
   },
   network: {
-    label: "Route Web",
+    label: "Routes & Network",
     icon: "git-network-outline",
     color: Colors.sky,
   },
   fleet: {
-    label: "Fleet Power",
+    label: "Fleet",
     icon: "airplane-outline",
     color: Colors.amber,
   },
   operations: {
-    label: "Smooth Flow",
+    label: "Operations",
     icon: "flash-outline",
     color: Colors.orange,
   },
-  financial: { label: "Cash Rush", icon: "cash-outline", color: Colors.green },
+  financial: { label: "Finances", icon: "cash-outline", color: Colors.green },
   missions: { label: "Contracts", icon: "checkbox-outline", color: PURPLE },
   prestige: { label: "Prestige", icon: "trophy-outline", color: PURPLE },
 };
@@ -127,8 +131,8 @@ export default function AchievementsSheet() {
         <View style={s.hdrL}>
           <Ionicons name="flash-outline" size={21} color={color} />
           <View>
-            <Text style={s.title}>Trophy Rush</Text>
-            <Text style={s.subtitle}>Clear goals, earn points</Text>
+            <Text style={s.title}>Achievements</Text>
+            <Text style={s.subtitle}>Your milestones and progress</Text>
           </View>
         </View>
 
@@ -142,11 +146,11 @@ export default function AchievementsSheet() {
 
       <View style={[s.hero, { borderColor: color + "44" }]}>
         <View>
-          <Text style={s.heroLabel}>TROPHY PROGRESS</Text>
+          <Text style={s.heroLabel}>Overall progress</Text>
           <Text style={[s.heroValue, { color }]}>{progressPct}%</Text>
           <Text style={s.heroSub}>
             {earnedPoints.toLocaleString()} / {TOTAL_POINTS.toLocaleString()}{" "}
-            pts
+            points
           </Text>
         </View>
 
@@ -154,7 +158,7 @@ export default function AchievementsSheet() {
           <Text style={[s.heroCount, { color: Colors.green }]}>
             {earnedCount}
           </Text>
-          <Text style={s.heroCountLbl}>earned</Text>
+          <Text style={s.heroCountLbl}>unlocked</Text>
         </View>
       </View>
 
@@ -174,7 +178,7 @@ export default function AchievementsSheet() {
 
       {latestEarned.length > 0 && (
         <View style={s.section}>
-          <Text style={s.sectionTitle}>LATEST CLEARS</Text>
+          <Text style={s.sectionTitle}>Recently unlocked</Text>
           {latestEarned.map((achievement) => {
             const meta = CATEGORY_META[achievement.category];
             return (
@@ -293,7 +297,7 @@ export default function AchievementsSheet() {
                         style={[s.achTitle, !isEarned && { color: Colors.dim }]}
                         numberOfLines={1}
                       >
-                        {isHidden ? "Hidden Rush Goal" : achievement.title}
+                        {isHidden ? "Hidden achievement" : achievement.title}
                       </Text>
 
                       <View
@@ -328,7 +332,7 @@ export default function AchievementsSheet() {
 
                     {isEarned && dayEarned !== undefined && (
                       <Text style={[s.earnedText, { color: meta.color }]}>
-                        Cleared on day {dayEarned}
+                        Unlocked on day {dayEarned}
                       </Text>
                     )}
                   </View>

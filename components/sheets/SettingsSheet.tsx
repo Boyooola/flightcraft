@@ -6,7 +6,6 @@
 
 import { GameAlert, useGameAlert } from "@/components/ui/GameAlert";
 import { Colors, Radius, Spacing } from "@/constants/theme";
-import { useAuth } from "@/hooks/useAuth";
 import { useGameSounds } from "@/hooks/useGameSounds";
 import {
   showAchievements,
@@ -18,7 +17,7 @@ import { openPlayStorePage } from "@/hooks/useRateUs";
 import { useTabBarHeight } from "@/hooks/useSheetLayout";
 import { fmtCash } from "@/lib/revenue";
 
-import { useAirline, useDay, useGameStore, useLoadComplete } from "@/store";
+import { useAirline, useDay, useGameStore } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
 import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import { useState } from "react";
@@ -90,8 +89,6 @@ export default function SettingsSheet() {
   const tabBarH = useTabBarHeight();
 
   const [deleting, setDeleting] = useState(false);
-  const loadComplete = useLoadComplete();
-  const { signOut } = useAuth();
   const { player, isSignedIn } = usePlayGames();
   const sounds = useGameSounds();
   const color = airline?.color ?? Colors.sky;
@@ -167,8 +164,8 @@ export default function SettingsSheet() {
         <View style={s.hdrL}>
           <Ionicons name="flash-outline" size={21} color={color} />
           <View>
-            <Text style={s.title}>Control Panel</Text>
-            <Text style={s.subtitle}>Settings and game links</Text>
+            <Text style={s.title}>Settings</Text>
+            <Text style={s.subtitle}>Your airline and preferences</Text>
           </View>
         </View>
 
@@ -205,12 +202,12 @@ export default function SettingsSheet() {
         </View>
       </View>
 
-      <SectionHeader label="QUICK ACCESS" />
+      <SectionHeader label="SHORTCUTS" />
 
       <View style={s.card}>
         <SettingRow
           icon="flag-outline"
-          label="Mission Rush"
+          label="Missions"
           sublabel="Daily contracts and rewards"
           onPress={() => openSheet("missions")}
           color={color}
@@ -218,8 +215,8 @@ export default function SettingsSheet() {
         <Divider />
         <SettingRow
           icon="trophy-outline"
-          label="Trophy Rush"
-          sublabel="Achievements and progress"
+          label="Achievements"
+          sublabel="Your progress and unlocks"
           onPress={() => openSheet("achievements")}
           color="#a78bfa"
         />
@@ -289,13 +286,13 @@ export default function SettingsSheet() {
         />
       </View>
 
-      <SectionHeader label="GAME FEEL" />
+      <SectionHeader label="SOUND" />
 
       <View style={s.card}>
         <SettingRow
           icon="volume-high-outline"
           label="Sound Effects"
-          sublabel="Planes, rewards, purchases"
+          sublabel="Tap sounds and reward effects"
           color={Colors.sky}
           right={
             <Switch
@@ -336,23 +333,14 @@ export default function SettingsSheet() {
         <SettingRow
           icon="information-circle-outline"
           label="Version"
-          sublabel="0.4.0"
+          sublabel="0.5.0"
           color={Colors.dim}
         />
-        {/* <Divider />
-        <SettingRow
-          icon="shield-checkmark-outline"
-          label="Privacy Policy"
-          sublabel="How Flightcraft handles data"
-          onPress={() => openSheet("privacy-policy")}
-          color={Colors.green}
-        /> */}
-
         <Divider />
         <SettingRow
           icon="star-outline"
-          label="Rate Flightcraft"
-          sublabel="Enjoying the game? Leave a review ★"
+          label="Rate FlightCraft"
+          sublabel="Leave a review on the Play Store"
           onPress={() => openPlayStorePage()}
           color={Colors.amber}
         />
@@ -494,14 +482,5 @@ const s = StyleSheet.create({
     height: StyleSheet.hairlineWidth,
     backgroundColor: Colors.border,
     marginLeft: Spacing.md + 32 + Spacing.md,
-  },
-  inlineError: {
-    paddingHorizontal: Spacing.md,
-    paddingBottom: Spacing.sm,
-  },
-  inlineErrorText: {
-    fontSize: 10,
-    color: Colors.red,
-    lineHeight: 14,
   },
 });

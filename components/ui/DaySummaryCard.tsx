@@ -172,7 +172,7 @@ export default function DaySummaryCard() {
             ? `${stalledRoutes} stalled`
             : waitingPax > 0
               ? `${fmtPax(waitingPax)} waiting`
-              : "Flow clear";
+              : "All clear";
 
   return (
     <Animated.View
@@ -231,7 +231,7 @@ export default function DaySummaryCard() {
             <View style={s.metric}>
               <Ionicons
                 name={
-                  statusText === "Flow clear"
+                  statusText === "All clear"
                     ? "checkmark-circle"
                     : "warning-outline"
                 }

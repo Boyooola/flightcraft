@@ -163,10 +163,10 @@ export default function MissionsPill() {
 
       <View style={s.body}>
         <Text style={[s.label, { color: accent }]} numberOfLines={1}>
-          {allDone ? "Board Clear" : "Mission Rush"}
+          {allDone ? "All done!" : "Missions"}
         </Text>
         <Text style={s.sub}>
-          {liveCount}/{total} cleared
+          {liveCount}/{total} complete
         </Text>
       </View>
 
@@ -200,7 +200,7 @@ const s = StyleSheet.create({
     alignItems: "center",
     gap: 7,
     paddingHorizontal: Spacing.sm + 3,
-    paddingVertical: Spacing.xs + 2,
+    paddingVertical: (Spacing.xs ?? 4) + 2,
     borderRadius: Radius.full,
     borderWidth: 1,
     maxWidth: 220,

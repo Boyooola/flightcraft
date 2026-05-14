@@ -19,7 +19,6 @@ import {
   simulatePaxDay,
 } from "@/lib/demands";
 import { fmtCash } from "@/lib/revenue";
-
 import { supabase } from "@/lib/supabase";
 import type { Airport, Demand, OwnedPlane, PlaneModel } from "@/store";
 import { useGameStore } from "@/store";
@@ -133,7 +132,7 @@ export function useBuyHub() {
             status: row.status as Demand["status"],
             delivered_pax_today: 0,
             popularity: row.popularity,
-            base_pax_day: row.base_pax_day ?? 0,
+            base_pax_day: row.base_pax_day,
           }));
 
           addDemands(fullDemands);
@@ -363,12 +362,49 @@ export function useCreateRoute() {
       demand: Demand,
       plane: OwnedPlane,
       viaIata: string | null = null,
+      viaPaxRatio: number | null = null,
       totalDistNm: number | null = null,
     ): Promise<{ error: string | null }> => {
-      const { airline, addRoute } = store();
+      const { airline, addRoute, airports } = store();
       if (!airline) return { error: "No airline found" };
 
       const routeDistNm = totalDistNm ?? demand.dist_nm;
+
+      // Auto-compute via_pax_ratio for connecting routes
+      let computedViaPaxRatio = viaPaxRatio;
+      if (viaIata && !computedViaPaxRatio) {
+        try {
+          const { computeViaPaxRatio } = await import("@/lib/od");
+          const viaAirport = airports.find((a) => a.iata === viaIata);
+          const destAirport = demand.dest;
+          if (viaAirport && destAirport && totalDistNm) {
+            // Approximate leg distances — origin→via and via→dest
+            const originAirport = demand.origin;
+            const leg1 =
+              originAirport && viaAirport
+                ? Math.round(
+                    Math.sqrt(
+                      Math.pow((originAirport.lat - viaAirport.lat) * 60, 2) +
+                        Math.pow(
+                          (originAirport.lng - viaAirport.lng) *
+                            60 *
+                            Math.cos((originAirport.lat * Math.PI) / 180),
+                          2,
+                        ),
+                    ),
+                  )
+                : totalDistNm * 0.5;
+            const leg2 = totalDistNm - leg1;
+            computedViaPaxRatio = computeViaPaxRatio({
+              leg1Nm: leg1,
+              leg2Nm: leg2,
+              viaAirport,
+              destAirport,
+              businessPct: demand.business_pct ?? 0.25,
+            });
+          }
+        } catch {}
+      }
 
       if (!viaIata && demand.dist_nm > plane.plane_model.range_nm) {
         return {
@@ -396,7 +432,7 @@ export function useCreateRoute() {
         via_iata: viaIata,
         total_dist_nm: routeDistNm,
         active: true,
-        via_pax_ratio: null,
+        via_pax_ratio: computedViaPaxRatio,
         price_strategy: "standard",
       });
 
@@ -442,7 +478,7 @@ export function useCreateRoute() {
           via_iata: viaIata,
           total_dist_nm: routeDistNm,
           active: true,
-          via_pax_ratio: null,
+          via_pax_ratio: computedViaPaxRatio,
         });
 
         setOwnedPlanes(
@@ -514,9 +550,9 @@ export function useSaveAirlineDay() {
         supabase
           .from("demands")
           .update({
-            base_pax_day: d.base_pax_day,
             popularity: d.popularity,
             delivered_pax_today: d.delivered_pax_today,
+            base_pax_day: d.base_pax_day,
           })
           .eq("id", d.id),
       ),
@@ -581,10 +617,10 @@ export function useSpawnDailyDemand() {
           dest: airportMap.get(data.dest_iata)!,
           dist_nm: data.dist_nm,
           haul: data.haul,
-          base_pax_day: data.base_pax_day,
           status: "pending",
           delivered_pax_today: data.delivered_pax_today,
-          popularity: data.populary,
+          base_pax_day: data.base_pax_day ?? 0,
+          popularity: data.popularity,
         },
       ]);
     } catch {

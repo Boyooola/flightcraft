@@ -7,7 +7,7 @@
  *
  * Steps:
  *   1. BUY HUB   — pulse a hub dot, prompt player to tap it
- *   2. BUY PLANE — open Fleet automatically, prompt to buy CRJ200
+ *   2. BUY PLANE — open Fleet automatically, prompt to buy starter plane
  *   3. CREATE ROUTE — activate FAB, prompt to tap hub then dest
  *   4. SPEED UP  — show speed controls
  *   5. DONE      — dismiss tutorial
@@ -60,7 +60,7 @@ const STEPS: StepDef[] = [
     id: "plane",
     icon: "airplane",
     title: "Buy an aircraft",
-    body: "Open the Fleet tab below. The CRJ200 ($100K) is the best starter — cheap and reliable. Tap Buy to purchase it.",
+    body: "Open the Fleet tab below and buy your first aircraft. Start with the cheapest available — it's enough to get your first route running.",
     action: "👇 Open Fleet tab and buy a plane",
     checkDone: (s) => s.planeCount >= 1,
   },
@@ -76,9 +76,9 @@ const STEPS: StepDef[] = [
     id: "speed",
     icon: "speedometer-outline",
     title: "Speed up time",
-    body: "Your route earns revenue as planes fly. Tap 2× or 3× in the top bar to speed up the game. Watch the TODAY counter rise in real time.",
-    action: "☝️ Tap 2× in the top right",
-    checkDone: () => false, // manual advance only
+    body: "Your route earns revenue as planes fly. Tap 2× or 3× in the top bar to speed things up. Watch the TODAY counter grow in real time.",
+    action: "☝️ Tap 2× or 3× in the top bar",
+    checkDone: () => false, // advance manually — speed not in store state check
   },
   {
     id: "done",
@@ -121,6 +121,7 @@ export default function TutorialScreen() {
   const setPhase = useGameStore((s) => s.setPhase);
 
   const color = airline?.color ?? Colors.sky;
+  const speed = airline?.speed ?? 1;
   const [idx, setIdx] = useState(0);
   const step = STEPS[Math.min(idx, STEPS.length - 1)];
 
@@ -153,6 +154,14 @@ export default function TutorialScreen() {
       planeCount: planes.length,
       routeCount: routes.filter((r) => r.active).length,
     };
+    // Speed step auto-advances when player taps 2x or 3x
+    if (step.id === "speed" && speed > 1) {
+      const t = setTimeout(
+        () => setIdx((i) => Math.min(i + 1, STEPS.length - 1)),
+        600,
+      );
+      return () => clearTimeout(t);
+    }
     if (STEPS[idx].checkDone(state)) {
       // Short delay so player sees the result before advancing
       const t = setTimeout(
@@ -161,7 +170,7 @@ export default function TutorialScreen() {
       );
       return () => clearTimeout(t);
     }
-  }, [idx, hubs.length, planes.length, routes.length]);
+  }, [idx, hubs.length, planes.length, routes.length, speed]);
 
   const handleNext = () => {
     if (step.id === "done") {
@@ -221,6 +230,19 @@ export default function TutorialScreen() {
 
         {/* Body */}
         <Text style={s.body}>{step.body}</Text>
+
+        {/* Action hint — pulsing prompt showing what to do right now */}
+        {/* {!isDoneStep && (
+          <Animated.View
+            style={[
+              s.actionHint,
+              { borderColor: color + "55", backgroundColor: color + "10" },
+              { transform: [{ scale: pulse }] },
+            ]}
+          >
+            <Text style={[s.actionTxt, { color }]}>{step.action}</Text>
+          </Animated.View>
+        )} */}
 
         {/* Next / Done button */}
         <TouchableOpacity

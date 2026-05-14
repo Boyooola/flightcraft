@@ -46,11 +46,13 @@ export default function BankruptScreen() {
     // Delete airline and all related data — player starts fresh
     const airlineId = airline?.id;
     if (airlineId) {
-      await supabase.from("routes").delete().eq("airline_id", airlineId);
-      await supabase.from("demands").delete().eq("airline_id", airlineId);
-      await supabase.from("owned_planes").delete().eq("airline_id", airlineId);
-      await supabase.from("hubs").delete().eq("airline_id", airlineId);
-      await supabase.from("ledger").delete().eq("airline_id", airlineId);
+      await Promise.all([
+        supabase.from("routes").delete().eq("airline_id", airlineId),
+        supabase.from("demands").delete().eq("airline_id", airlineId),
+        supabase.from("owned_planes").delete().eq("airline_id", airlineId),
+        supabase.from("hubs").delete().eq("airline_id", airlineId),
+        supabase.from("ledger").delete().eq("airline_id", airlineId),
+      ]);
       await supabase.from("airlines").delete().eq("id", airlineId);
     }
     // Reset store and go back to setup
@@ -65,7 +67,7 @@ export default function BankruptScreen() {
       >
         {/* Icon */}
         <View style={s.iconWrap}>
-          <Ionicons name="warning" size={44} color={Colors.red} />
+          <Ionicons name="airplane-outline" size={44} color={Colors.red} />
         </View>
 
         {/* Headline */}
@@ -117,8 +119,8 @@ export default function BankruptScreen() {
         </TouchableOpacity>
 
         <Text style={s.hint}>
-          Tip: keep loan below 2× your daily revenue and always have planes on
-          active routes.
+          Tip: keep at least one plane on an active route at all times, and pay
+          down your loan as you grow.
         </Text>
       </Animated.View>
     </Animated.View>

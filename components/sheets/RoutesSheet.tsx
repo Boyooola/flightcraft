@@ -6,6 +6,7 @@ import { useTabBarHeight } from "@/hooks/useSheetLayout";
 import { useDeactivateRoute } from "@/hooks/useSupabaseWrite";
 import { hubCrowdingLevel } from "@/lib/demands";
 import { congestionEfficiencyMultiplier } from "@/lib/hubCongestion";
+import { splitOdPax } from "@/lib/od";
 import {
   demandFlowStatus,
   remainingPax,
@@ -15,7 +16,7 @@ import { passengerTypeBreakdown } from "@/lib/passengerTypes";
 import {
   calcRouteRevenue,
   computePriceElasticity,
-  fmtCash
+  fmtCash,
 } from "@/lib/revenue";
 import { supabase } from "@/lib/supabase";
 import type { Demand, Route } from "@/store";
@@ -25,7 +26,7 @@ import {
   useDemands,
   useGameStore,
   useHubs,
-  useRoutes
+  useRoutes,
 } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
 import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
@@ -39,7 +40,13 @@ import {
 } from "react-native";
 
 type RouteFlowStatus = {
-  label: "CLEARED" | "JAMMED" | "STALLED" | "BOARDING" | "MOVING" | "WAITING";
+  label:
+    | "DONE"
+    | "OVERLOADED"
+    | "NEEDS HELP"
+    | "BOARDING"
+    | "FLYING"
+    | "PENDING";
   color: string;
   priority: number;
   hint: string;
@@ -111,6 +118,7 @@ type RouteGroup = {
   congestionMultiplier: number;
   routeId: string;
   currentPlaneId: string;
+  viaPaxRatio: number | null;
 };
 
 function getLiveDemand(route: Route, liveDemands: Demand[]) {
@@ -133,28 +141,28 @@ function buildStatus(
     leftToMove <= 0
   ) {
     return {
-      label: "CLEARED",
+      label: "DONE",
       color: Colors.green,
       priority: 6,
-      hint: "Demand slot cleared",
+      hint: "All passengers moved today",
     };
   }
 
   if (flowStatus === "jammed") {
     return {
-      label: "JAMMED",
+      label: "OVERLOADED",
       color: Colors.red,
       priority: 0,
-      hint: "Queue is growing fast",
+      hint: "Queue growing faster than capacity",
     };
   }
 
   if (waitingPax > 0 && deliveredPax <= 0) {
     return {
-      label: "STALLED",
+      label: "NEEDS HELP",
       color: Colors.red,
       priority: 1,
-      hint: "Passengers are waiting",
+      hint: "Passengers waiting with no movement",
     };
   }
 
@@ -163,24 +171,24 @@ function buildStatus(
       label: "BOARDING",
       color: Colors.amber,
       priority: 2,
-      hint: "Ready to board more pax",
+      hint: "Passengers boarding now",
     };
   }
 
   if (deliveredPax > 0) {
     return {
-      label: "MOVING",
+      label: "FLYING",
       color: Colors.green,
       priority: 3,
-      hint: "Flow is moving",
+      hint: "Route is running well",
     };
   }
 
   return {
-    label: "WAITING",
+    label: "PENDING",
     color: Colors.sky,
     priority: 4,
-    hint: "Demand is spawning",
+    hint: "Waiting for passengers to appear",
   };
 }
 
@@ -252,10 +260,17 @@ function RouteGroupRow({
   onPriceChange: (group: RouteGroup, strategy: PriceStrategy) => void;
   onSwap: (group: RouteGroup) => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const isConnecting = !!group.via_iata;
+  const viaPaxRatio = group.viaPaxRatio ?? 0.3;
+  const paxDay = group.demand.base_pax_day ?? group.demand.base_pax_day ?? 0;
+  // Use targetPax (pax_day) for the split — more reliable than delivered count
+  const odPaxBase = group.targetPax > 0 ? group.targetPax : paxDay;
+  const odSplit =
+    isConnecting && odPaxBase > 0 ? splitOdPax(odPaxBase, viaPaxRatio) : null;
   const isProblem =
-    group.status.label === "STALLED" || group.status.label === "JAMMED";
-  const isCleared = group.status.label === "CLEARED";
+    group.status.label === "NEEDS HELP" || group.status.label === "OVERLOADED";
+  const isCleared = group.status.label === "DONE";
   const accent = group.status.color;
   const growth = routeGrowthLabel(group.demand);
   const pricingColor = PRICING_COLOR[group.priceStrategy] ?? Colors.green;
@@ -268,6 +283,7 @@ function RouteGroupRow({
         isCleared && rr.cleared,
         deactivating && { opacity: 0.45 },
       ]}
+      onPress={() => setExpanded((v) => !v)}
       onLongPress={() => onLongPress(group)}
       delayLongPress={400}
       activeOpacity={0.88}
@@ -313,62 +329,23 @@ function RouteGroupRow({
 
         <View style={rr.metaRow}>
           <Ionicons name="airplane" size={11} color={Colors.dim} />
-
           <Text style={rr.meta} numberOfLines={1}>
             {group.planeLabel}
           </Text>
-          <TouchableOpacity
-            style={rr.swapBtn}
-            onPress={() => onSwap(group)}
-            hitSlop={8}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="swap-horizontal" size={11} color={Colors.sky} />
-            <Text style={rr.swapTxt}>Swap</Text>
-          </TouchableOpacity>
-          <Text style={rr.dot}>•</Text>
-
-          <Text
-            style={[rr.moved, { color: accent, fontFamily: Typography.mono }]}
-          >
-            ×{group.routes.length}
-          </Text>
-
-          <Text style={rr.dot}>•</Text>
-
-          <Text
-            style={[
-              rr.moved,
-              { color: Colors.text, fontFamily: Typography.mono },
-            ]}
-          >
-            {group.deliveredPax.toLocaleString()} /{" "}
-            {group.targetPax.toLocaleString()} pax
-          </Text>
-
-          {(() => {
-            const mix = passengerTypeBreakdown({
-              businessPct: group.demand.business_pct,
-              leisurePct: group.demand.leisure_pct,
-            });
-            return mix.businessPct > 0 ? (
-              <>
-                <Text style={rr.dot}>•</Text>
-                <Text
-                  style={[
-                    rr.paxMix,
-                    {
-                      color: mix.businessPct >= 35 ? Colors.amber : Colors.dim,
-                    },
-                  ]}
-                >
-                  {mix.businessPct}% biz
-                </Text>
-              </>
-            ) : null;
-          })()}
+          {group.routes.length > 1 && (
+            <Text style={[rr.moved, { color: accent }]}>
+              ×{group.routes.length}
+            </Text>
+          )}
+          <View style={{ flex: 1 }} />
+          <Ionicons
+            name={expanded ? "chevron-up" : "chevron-down"}
+            size={12}
+            color={Colors.dim}
+          />
         </View>
 
+        {/* Always visible — compact progress */}
         <View style={rr.bottom}>
           <View style={rr.progressTrack}>
             <View
@@ -395,86 +372,129 @@ function RouteGroupRow({
           </Text>
         </View>
 
-        <View style={rr.hintRow}>
-          <Text style={rr.hint} numberOfLines={1}>
-            {group.waitingPax.toLocaleString()} waiting ·{" "}
-            {group.totalCapacity.toLocaleString()} seats · Util{" "}
-            {group.utilizationPct}%
-            {group.congestionLevel !== "normal"
-              ? ` · Cong -${Math.round((1 - group.congestionMultiplier) * 100)}%`
-              : ""}
-          </Text>
-
-          <View style={rr.growthWrap}>
-            <Ionicons name={growth.icon} size={11} color={growth.color} />
-            <Text style={[rr.growth, { color: growth.color }]}>
-              {growth.text}
+        {expanded && (
+          <View style={rr.hintRow}>
+            <Text style={rr.hint} numberOfLines={1}>
+              {group.waitingPax.toLocaleString()} waiting ·{" "}
+              {group.totalCapacity.toLocaleString()} seats
+              {group.congestionLevel !== "normal"
+                ? ` · hub busy -${Math.round((1 - group.congestionMultiplier) * 100)}%`
+                : ""}
             </Text>
-          </View>
-        </View>
 
-        <View style={[rr.pricingBox, { borderColor: pricingColor + "30" }]}>
-          <View style={rr.pricingHeader}>
-            <View style={rr.pricingTitleRow}>
-              <Ionicons
-                name="pricetag-outline"
-                size={11}
-                color={pricingColor}
-              />
-              <Text style={[rr.pricingTitle, { color: pricingColor }]}>
-                Pricing
+            <View style={rr.growthWrap}>
+              <Ionicons name={growth.icon} size={11} color={growth.color} />
+              <Text style={[rr.growth, { color: growth.color }]}>
+                {growth.text}
               </Text>
             </View>
-            <Text style={rr.pricingEffect}>
-              {group.priceStrategy === "low"
-                ? "+18% demand, -15% fare"
-                : group.priceStrategy === "premium"
-                  ? "-18% demand, +28% fare"
-                  : "Balanced demand and fare"}
-            </Text>
           </View>
+        )}
 
-          <View style={rr.priceButtons}>
-            {PRICE_OPTIONS.map((option) => {
-              const active = option.key === group.priceStrategy;
-              const pricingColor =
-                PRICING_COLOR[group.priceStrategy] ?? Colors.green;
-              return (
-                <TouchableOpacity
-                  key={option.key}
-                  style={[
-                    rr.priceBtn,
-                    active && {
-                      borderColor: pricingColor + "66",
-                      backgroundColor: pricingColor + "12",
-                    },
-                  ]}
-                  onPress={() => onPriceChange(group, option.key)}
-                  disabled={deactivating || active}
-                  activeOpacity={0.82}
-                >
-                  <Ionicons
-                    name={option.icon}
-                    size={12}
-                    color={active ? pricingColor : Colors.dim}
-                  />
-                  <Text
-                    style={[
-                      rr.priceBtnTitle,
-                      { color: active ? pricingColor : Colors.text },
-                    ]}
-                    numberOfLines={1}
-                  >
-                    {option.label}
-                  </Text>
-                  <Text style={rr.priceBtnSub} numberOfLines={1}>
-                    {option.sub}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
+        {expanded && (
+          <View style={rr.expandedExtra}>
+            {/* O&D breakdown — connecting routes */}
+            {isConnecting && odSplit && (
+              <View style={rr.odRow}>
+                <Ionicons
+                  name="git-branch-outline"
+                  size={11}
+                  color={Colors.sky}
+                />
+                <Text style={rr.odTxt}>
+                  {odSplit.localPax} stop at {group.via_iata} ·{" "}
+                  {odSplit.transitPax} continue to {group.demand.dest.iata}
+                </Text>
+              </View>
+            )}
+            {/* Biz/leisure mix */}
+            {(() => {
+              const mix = passengerTypeBreakdown({
+                businessPct: group.demand.business_pct,
+                leisurePct: group.demand.leisure_pct,
+              });
+              return mix.businessPct > 0 ? (
+                <Text style={rr.mixTxt}>
+                  {mix.businessPct}% business · {mix.leisurePct}% leisure
+                </Text>
+              ) : null;
+            })()}
+            {/* Swap button */}
+            <TouchableOpacity
+              style={rr.swapBtnFull}
+              onPress={() => onSwap(group)}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="swap-horizontal" size={13} color={Colors.sky} />
+              <Text style={rr.swapFullTxt}>Swap Plane</Text>
+            </TouchableOpacity>
           </View>
-        </View>
+        )}
+
+        {expanded && (
+          <View style={[rr.pricingBox, { borderColor: pricingColor + "30" }]}>
+            <View style={rr.pricingHeader}>
+              <View style={rr.pricingTitleRow}>
+                <Ionicons
+                  name="pricetag-outline"
+                  size={11}
+                  color={pricingColor}
+                />
+                <Text style={[rr.pricingTitle, { color: pricingColor }]}>
+                  Pricing
+                </Text>
+              </View>
+              <Text style={rr.pricingEffect}>
+                {group.priceStrategy === "low"
+                  ? "+18% demand, -15% fare"
+                  : group.priceStrategy === "premium"
+                    ? "-18% demand, +28% fare"
+                    : "Balanced demand and fare"}
+              </Text>
+            </View>
+
+            <View style={rr.priceButtons}>
+              {PRICE_OPTIONS.map((option) => {
+                const active = option.key === group.priceStrategy;
+                const pricingColor =
+                  PRICING_COLOR[group.priceStrategy] ?? Colors.green;
+                return (
+                  <TouchableOpacity
+                    key={option.key}
+                    style={[
+                      rr.priceBtn,
+                      active && {
+                        borderColor: pricingColor + "66",
+                        backgroundColor: pricingColor + "12",
+                      },
+                    ]}
+                    onPress={() => onPriceChange(group, option.key)}
+                    disabled={deactivating || active}
+                    activeOpacity={0.82}
+                  >
+                    <Ionicons
+                      name={option.icon}
+                      size={12}
+                      color={active ? pricingColor : Colors.dim}
+                    />
+                    <Text
+                      style={[
+                        rr.priceBtnTitle,
+                        { color: active ? pricingColor : Colors.text },
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {option.label}
+                    </Text>
+                    <Text style={rr.priceBtnSub} numberOfLines={1}>
+                      {option.sub}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+        )}
       </View>
 
       {deactivating && (
@@ -616,6 +636,7 @@ export default function RoutesSheet() {
         congestionMultiplier: congestionMul,
         routeId: first.id,
         currentPlaneId: first.plane.id,
+        viaPaxRatio: (first as any).via_pax_ratio ?? null,
       };
     });
   }, [activeRoutes, liveDemands, dayProgress, hubs]);
@@ -646,11 +667,11 @@ export default function RoutesSheet() {
       : 0;
 
   const stalledCount = groupedRoutes.filter(
-    (r) => r.status.label === "STALLED" || r.status.label === "JAMMED",
+    (r) => r.status.label === "NEEDS HELP" || r.status.label === "OVERLOADED",
   ).length;
 
   const clearedCount = groupedRoutes.filter(
-    (r) => r.status.label === "CLEARED",
+    (r) => r.status.label === "DONE",
   ).length;
 
   const flowHighlight =
@@ -775,8 +796,8 @@ export default function RoutesSheet() {
           <View style={s.hdrL}>
             <Ionicons name="flash-outline" size={21} color={color} />
             <View>
-              <Text style={s.title}>Route Rush</Text>
-              <Text style={s.subtitle}>Grouped by destination</Text>
+              <Text style={s.title}>Routes</Text>
+              <Text style={s.subtitle}>All active routes</Text>
             </View>
 
             {activeRoutes.length > 0 && (
@@ -814,28 +835,28 @@ export default function RoutesSheet() {
                 <Text style={[s.rushVal, { color: flowHighlight }]}>
                   {avgFlow}%
                 </Text>
-                <Text style={s.rushLbl}>FLOW</Text>
+                <Text style={s.rushLbl}>Flow</Text>
               </View>
               <View style={s.rushDivider} />
               <View style={s.rushStat}>
                 <Text style={[s.rushVal, { color: Colors.amber }]}>
                   {totalWaiting.toLocaleString()}
                 </Text>
-                <Text style={s.rushLbl}>WAITING</Text>
+                <Text style={s.rushLbl}>Waiting</Text>
               </View>
               <View style={s.rushDivider} />
               <View style={s.rushStat}>
                 <Text style={[s.rushVal, { color: Colors.sky }]}>
                   {totalCanBoard.toLocaleString()}
                 </Text>
-                <Text style={s.rushLbl}>READY</Text>
+                <Text style={s.rushLbl}>Ready</Text>
               </View>
               <View style={s.rushDivider} />
               <View style={s.rushStat}>
                 <Text style={[s.rushVal, { color: Colors.green }]}>
                   {fmtCash(totalReward)}
                 </Text>
-                <Text style={s.rushLbl}>EARNED</Text>
+                <Text style={s.rushLbl}>Earned</Text>
               </View>
             </View>
           </>
@@ -850,7 +871,7 @@ export default function RoutesSheet() {
                 attention
               </Text>
               <Text style={s.alertSub}>
-                Queues are building. Add aircraft, upgrade capacity, or cut weak
+                Passengers are piling up. Try adding more planes or opening new
                 routes.
               </Text>
             </View>
@@ -860,10 +881,10 @@ export default function RoutesSheet() {
         {activeRoutes.length === 0 && (
           <View style={s.empty}>
             <Ionicons name="git-network-outline" size={48} color={Colors.dim} />
-            <Text style={s.emptyTitle}>No active routes</Text>
+            <Text style={s.emptyTitle}>No routes yet</Text>
             <Text style={s.emptySub}>
-              Open the map, assign a hub demand to planes, and the rush starts
-              here.
+              Tap a hub on the map, pick a destination, assign a plane and your
+              first route will appear here.
             </Text>
 
             <TouchableOpacity
@@ -879,10 +900,9 @@ export default function RoutesSheet() {
 
         {activeRoutes.length > 0 && (
           <>
-            <Text style={s.eyebrow}>ROUTE GROUPS</Text>
+            <Text style={s.eyebrow}>YOUR ROUTES</Text>
             <Text style={s.eyebrowSub}>
-              Same destination routes are grouped · hold a row to remove all
-              assigned planes
+              Tap a route to see details · hold to remove
             </Text>
 
             <View style={s.section}>
@@ -1016,6 +1036,60 @@ const rr = StyleSheet.create({
     fontSize: 11,
     fontWeight: "900",
     fontFamily: Typography.mono,
+  },
+  expandedExtra: {
+    gap: Spacing.sm,
+    paddingTop: Spacing.sm,
+    borderTopWidth: 0.5,
+    borderTopColor: Colors.border,
+    marginTop: Spacing.sm,
+  },
+  odRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  odTxt: {
+    fontSize: 11,
+    color: Colors.sky,
+    flex: 1,
+  },
+  mixTxt: {
+    fontSize: 11,
+    color: Colors.dim,
+  },
+  swapBtnFull: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: "rgba(56,189,248,0.3)",
+    backgroundColor: "rgba(56,189,248,0.08)",
+    alignSelf: "flex-start",
+  },
+  swapFullTxt: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: Colors.sky,
+  },
+  odPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    backgroundColor: "rgba(56,189,248,0.08)",
+    borderRadius: 5,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderWidth: 0.5,
+    borderColor: "rgba(56,189,248,0.25)",
+  },
+  odPillTxt: {
+    fontSize: 8,
+    fontWeight: "700",
+    color: Colors.sky,
   },
   swapBtn: {
     flexDirection: "row",

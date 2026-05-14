@@ -279,8 +279,12 @@ function DepartureRow({
               </>
             ) : (
               <>
-                <Text style={dep.waiting}>WAITING</Text>
-                <Text style={dep.small}>{waitingPax.toLocaleString()} pax</Text>
+                <Text style={[dep.waiting, !hub && { color: Colors.dim }]}>
+                  {hub ? "WAITING" : "~" + demand.base_pax_day.toLocaleString()}
+                </Text>
+                <Text style={dep.small}>
+                  {hub ? waitingPax.toLocaleString() + " pax" : "pax/day"}
+                </Text>
               </>
             )}
           </View>
@@ -307,12 +311,11 @@ function DepartureRow({
             </View>
 
             <Text style={dep.meta} numberOfLines={1}>
-              <Ionicons name="airplane-outline" size={10} color={Colors.dim} />{" "}
               {planeLabel}
-              {firstRoute?.via_iata ? ` · via ${firstRoute.via_iata}` : ""}
+              {firstRoute?.via_iata ? ` via ${firstRoute.via_iata}` : ""}
               {waitingPax > 0
                 ? ` · ${waitingPax.toLocaleString()} waiting`
-                : " · clear"}
+                : ""}
             </Text>
           </>
         ) : hub ? (
@@ -341,33 +344,65 @@ function DepartureRow({
   );
 }
 
-function ArrivalRow({
-  route,
-  demand,
+function ArrivalsSummary({
+  arrivals,
+  demands,
   color,
 }: {
-  route: Route;
-  demand: Demand;
+  arrivals: Route[];
+  demands: Demand[];
   color: string;
 }) {
-  const paxToday = demand.delivered_pax_today ?? 0;
+  // Group by origin city — combine pax from multiple planes on same route
+  const grouped = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        iata: string;
+        city: string;
+        country: string;
+        paxToday: number;
+        routeCount: number;
+      }
+    >();
+    arrivals.forEach((route) => {
+      const demand =
+        demands.find((d) => d.id === route.demand.id) ?? route.demand;
+      const key = demand.origin.iata;
+      const paxToday = demand.delivered_pax_today ?? 0;
+      if (map.has(key)) {
+        const existing = map.get(key)!;
+        existing.paxToday += paxToday;
+        existing.routeCount += 1;
+      } else {
+        map.set(key, {
+          iata: demand.origin.iata,
+          city: demand.origin.city,
+          country: demand.origin.country,
+          paxToday,
+          routeCount: 1,
+        });
+      }
+    });
+    return Array.from(map.values()).sort((a, b) => b.paxToday - a.paxToday);
+  }, [arrivals, demands]);
+
+  const totalPax = grouped.reduce((s, g) => s + g.paxToday, 0);
 
   return (
-    <View style={arr.row}>
-      <View style={[arr.dot, { backgroundColor: color }]} />
-      <View style={arr.info}>
-        <Text style={arr.origin} numberOfLines={1}>
-          <CountryFlag isoCode={demand.origin.country} size={16} />{" "}
-          {demand.origin.iata} · {demand.origin.city}
-        </Text>
-      </View>
-      <View style={arr.right}>
-        <Text style={arr.pax}>{paxToday.toLocaleString()} arrived</Text>
-        <Text style={arr.plane} numberOfLines={1}>
-          {route.plane.plane_model.nickname}
-        </Text>
-      </View>
-    </View>
+    <>
+      {grouped.map((g) => (
+        <View key={g.iata} style={arr.row}>
+          <View style={[arr.dot, { backgroundColor: color }]} />
+          <View style={arr.info}>
+            <Text style={arr.origin} numberOfLines={1}>
+              <CountryFlag isoCode={g.country} size={16} /> {g.iata} · {g.city}
+            </Text>
+          </View>
+          <Text style={arr.pax}>{g.paxToday.toLocaleString()} arrived</Text>
+        </View>
+      ))}
+    </>
   );
 }
 
@@ -877,7 +912,7 @@ export default function AirportSheet() {
         <View style={s.buySection}>
           <View style={s.buyTop}>
             <View>
-              <Text style={s.metaLbl}>HUB COST</Text>
+              <Text style={s.metaLbl}>Cost to buy</Text>
               <Text
                 style={[
                   s.bigMoney,
@@ -889,7 +924,7 @@ export default function AirportSheet() {
             </View>
 
             <View style={{ alignItems: "flex-end" }}>
-              <Text style={s.metaLbl}>YOUR CASH</Text>
+              <Text style={s.metaLbl}>You have</Text>
               <Text style={[s.bigMoney, { color: Colors.text }]}>
                 {fmtCash(cash)}
               </Text>
@@ -904,8 +939,8 @@ export default function AirportSheet() {
                 color={Colors.amber}
               />
               <Text style={s.lockText}>
-                Rivals control this airport. Raise market share to{" "}
-                {TRUST_BUY_THRESHOLD}% to buy.
+                Rivals have a strong foothold here. Serve nearby routes to build
+                presence and unlock this airport.
               </Text>
             </View>
           )}
@@ -942,7 +977,11 @@ export default function AirportSheet() {
                     { color: canAfford ? Colors.bg : Colors.dim },
                   ]}
                 >
-                  {canAfford ? "Buy Hub" : "Locked"}
+                  {canAfford
+                    ? `Open Hub · ${fmtCash(cost)}`
+                    : trustLocked
+                      ? "Build presence first"
+                      : "Not enough cash"}
                 </Text>
               </>
             )}
@@ -1049,7 +1088,7 @@ export default function AirportSheet() {
 
       {departures.length === 0 ? (
         <View style={s.emptyBoard}>
-          <Text style={s.emptyTxt}>No visible demand yet</Text>
+          <Text style={s.emptyTxt}>No routes available here yet</Text>
         </View>
       ) : (
         departures.map(({ demand, routes: demandRoutes, key }) => (
@@ -1075,19 +1114,11 @@ export default function AirportSheet() {
             </View>
           </View>
 
-          {arrivals.map((route) => {
-            const demand =
-              demands.find((d) => d.id === route.demand.id) ?? route.demand;
-
-            return (
-              <ArrivalRow
-                key={route.id}
-                route={route}
-                demand={demand}
-                color={color}
-              />
-            );
-          })}
+          <ArrivalsSummary
+            arrivals={arrivals}
+            demands={demands}
+            color={color}
+          />
         </>
       )}
 
@@ -1323,37 +1354,30 @@ const arr = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: Spacing.sm,
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.xs ?? 4,
     paddingVertical: Spacing.sm,
-    paddingHorizontal: Spacing.lg,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.border,
+    paddingHorizontal: Spacing.md,
+    borderRadius: Radius.lg,
+    backgroundColor: "rgba(255,255,255,.025)",
   },
   dot: {
     width: 6,
     height: 6,
     borderRadius: 3,
+    flexShrink: 0,
   },
-  info: {
-    flex: 1,
-    minWidth: 0,
-  },
+  info: { flex: 1, minWidth: 0 },
   origin: {
     fontSize: 12,
-    color: Colors.muted,
-    fontWeight: "700",
-  },
-  right: {
-    alignItems: "flex-end",
-    maxWidth: "42%",
+    color: Colors.text,
+    fontWeight: "600",
   },
   pax: {
-    fontSize: 10,
-    color: Colors.green,
-    fontWeight: "800",
-  },
-  plane: {
-    fontSize: 9,
-    color: Colors.dim,
+    fontSize: 11,
+    color: Colors.muted,
+    fontWeight: "600",
+    flexShrink: 0,
   },
 });
 

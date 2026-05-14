@@ -20,7 +20,7 @@ import { Colors, Radius, Spacing } from "@/constants/theme";
 import { useSheetLayout } from "@/hooks/useSheetLayout";
 import { useActiveDemandWave, useDailyEvent, useGameStore } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import {
   Animated,
   StyleSheet,
@@ -48,38 +48,57 @@ export default function SurgeIndicator() {
   const day = useGameStore((s) => s.airline?.day ?? 0);
 
   // Derive what to show — wave takes priority over plain event
-  const waveKind = activeDemandWave?.wave.kind ?? dailyEvent?.waveKind;
-  const isWave = !!waveKind;
-
-  const revMul =
-    (dailyEvent?.revenueMultiplier ?? 1.0) *
-    (activeDemandWave?.wave.revenueMultiplier ?? 1.0);
-
-  const hasEffect = isWave || Math.abs(revMul - 1.0) >= 0.01;
-
-  const title =
-    activeDemandWave?.wave.title ??
-    (dailyEvent?.waveKind ? dailyEvent.title : null) ??
-    dailyEvent?.title ??
-    "";
-
-  const icon =
-    activeDemandWave?.wave.icon ?? dailyEvent?.icon ?? "flash-outline";
-
-  const pct = Math.round((revMul - 1) * 100);
-  const pctTxt = pct > 0 ? `+${pct}%` : pct < 0 ? `${pct}%` : null;
-
-  const color = waveKind
-    ? (WAVE_COLORS[waveKind] ?? Colors.amber)
-    : revMul > 1
-      ? "#22c55e"
-      : "#ef4444";
-
-  // How many pax affected (wave only)
-  const totalAddedPax =
-    activeDemandWave?.totalAddedPax ?? dailyEvent?.waveAddedPax;
-  const affectedSlots =
-    activeDemandWave?.updates.length ?? dailyEvent?.waveAffectedSlots;
+  const {
+    waveKind,
+    isWave,
+    revMul,
+    hasEffect,
+    title,
+    icon,
+    pct,
+    pctTxt,
+    color,
+    totalAddedPax,
+    affectedSlots,
+  } = useMemo(() => {
+    const waveKind = activeDemandWave?.wave.kind ?? dailyEvent?.waveKind;
+    const isWave = !!waveKind;
+    const revMul =
+      (dailyEvent?.revenueMultiplier ?? 1.0) *
+      (activeDemandWave?.wave.revenueMultiplier ?? 1.0);
+    const hasEffect = isWave || Math.abs(revMul - 1.0) >= 0.01;
+    const title =
+      activeDemandWave?.wave.title ??
+      (dailyEvent?.waveKind ? dailyEvent.title : null) ??
+      dailyEvent?.title ??
+      "";
+    const icon =
+      activeDemandWave?.wave.icon ?? dailyEvent?.icon ?? "flash-outline";
+    const pct = Math.round((revMul - 1) * 100);
+    const pctTxt = pct > 0 ? `+${pct}%` : pct < 0 ? `${pct}%` : null;
+    const color = waveKind
+      ? (WAVE_COLORS[waveKind] ?? Colors.amber)
+      : revMul > 1
+        ? "#22c55e"
+        : "#ef4444";
+    const totalAddedPax =
+      activeDemandWave?.totalAddedPax ?? dailyEvent?.waveAddedPax;
+    const affectedSlots =
+      activeDemandWave?.updates.length ?? dailyEvent?.waveAffectedSlots;
+    return {
+      waveKind,
+      isWave,
+      revMul,
+      hasEffect,
+      title,
+      icon,
+      pct,
+      pctTxt,
+      color,
+      totalAddedPax,
+      affectedSlots,
+    };
+  }, [activeDemandWave, dailyEvent]);
 
   // Slide in when effect appears, slide out when it clears
   useEffect(() => {
@@ -172,12 +191,13 @@ export default function SurgeIndicator() {
           <Text style={s.sub} numberOfLines={1}>
             {[
               // Pax boost — only for waves
-              totalAddedPax != null && `+${totalAddedPax.toLocaleString()} pax`,
+              totalAddedPax != null &&
+                `+${totalAddedPax.toLocaleString()} passengers`,
               // Revenue effect — for any event with multiplier
               pctTxt && `${pctTxt} revenue`,
               // Affected routes — only for waves
               affectedSlots != null &&
-                `${affectedSlots} route${affectedSlots !== 1 ? "s" : ""}`,
+                `${affectedSlots} route${affectedSlots !== 1 ? "s" : ""} affected`,
             ]
               .filter(Boolean)
               .join(" · ")}
@@ -192,7 +212,13 @@ export default function SurgeIndicator() {
           ]}
         >
           <Text style={[s.typeTxt, { color }]}>
-            {isWave && pctTxt ? "PAX + REV" : isWave ? "PAX" : "REV"}
+            {isWave && pctTxt
+              ? "Boost"
+              : isWave
+                ? "Demand"
+                : pct > 0
+                  ? "Bonus"
+                  : "Event"}
           </Text>
         </View>
       </TouchableOpacity>

@@ -313,6 +313,10 @@ export function calcInstantDeliveryReward(params: {
   congestionMultiplier?: number;
   businessPct?: number;
   leisurePct?: number;
+  // O&D via route params — if set, uses O&D split revenue
+  viaPaxRatio?: number | null;
+  leg1DistNm?: number | null;
+  leg2DistNm?: number | null;
 }): number {
   const {
     distNm,
@@ -324,8 +328,32 @@ export function calcInstantDeliveryReward(params: {
     congestionMultiplier = 1.0,
     businessPct = 0.25,
     leisurePct = 0.75,
+    viaPaxRatio,
+    leg1DistNm,
+    leg2DistNm,
   } = params;
 
+  // ── O&D via route — split revenue across two legs ──────────────
+  if (viaPaxRatio != null && leg1DistNm != null && leg2DistNm != null) {
+    const { calcOdRevenue } = require("@/lib/od");
+    const pricing = priceStrategyConfig(priceStrategy, priceElasticity);
+    const od = calcOdRevenue({
+      totalDeliveredPax: deliveredPax,
+      viaPaxRatio,
+      leg1DistNm,
+      leg2DistNm,
+      trustPct,
+      fareMultiplier: pricing.fareMultiplier,
+      businessPct,
+      leisurePct,
+    });
+    return Math.max(
+      0,
+      Math.round(od.totalRevenue * crowdMultiplier * congestionMultiplier),
+    );
+  }
+
+  // ── Standard point-to-point route ─────────────────────────────
   const mix = { businessPct, leisurePct };
   const fareMul = passengerFareMultiplier(mix);
 

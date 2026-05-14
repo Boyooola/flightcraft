@@ -8,14 +8,14 @@
  *
  * Airport tap logic:
  *   Normal mode      → open AirportSheet for that airport
- *   Route creation   → add airport as waypoint (hub first, then dest)
+ *   Route creation   → add airport as waypoint
  *                      when 2+ waypoints, open CreateRouteSheet
  */
 
 import type { Airport } from "@/store";
-import { useAirline, useGameStore } from "@/store";
+import { useAirline, useGameStore, useHubs } from "@/store";
 import MapboxGL from "@rnmapbox/maps";
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { StyleSheet, View } from "react-native";
 import AIRouteLayer from "./AIRouteLayer";
 import AirportLayer from "./AirportLayer";
@@ -23,14 +23,37 @@ import RouteLayer from "./RouteLayer";
 import RoutePreviewLayer from "./RoutePreviewLayer";
 
 const MAPBOX_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_TOKEN ?? "";
+if (__DEV__ && !MAPBOX_TOKEN) {
+  console.warn(
+    "[GameMap] EXPO_PUBLIC_MAPBOX_TOKEN is not set — map will not render",
+  );
+}
 MapboxGL.setAccessToken(MAPBOX_TOKEN);
 
-// Default camera — world view
+// Default camera — centered on world landmass (Africa/Europe junction)
+// Gives a balanced view of all continents on first load
 const DEFAULT_CAMERA = {
-  centerCoordinate: [114.0, 15.0],
-  zoomLevel: 2.8,
+  centerCoordinate: [20.0, 20.0],
+  zoomLevel: 2.5,
   animationDuration: 0,
 };
+
+// Labels to hide from Mapbox Dark style — keeps map clean
+const HIDDEN_LABELS = [
+  "settlement-label",
+  "settlement-subdivision-label",
+  "place-label",
+  "place-city-label",
+  "place-town-label",
+  "place-village-label",
+  "poi-label",
+  "transit-label",
+  "airport-label",
+  "water-point-label",
+  "natural-point-label",
+  "settlement-minor-label",
+  "settlement-major-label",
+];
 
 interface GameMapProps {
   airlineColor: string;
@@ -39,17 +62,27 @@ interface GameMapProps {
 
 export default function GameMap({ airlineColor, onMapReady }: GameMapProps) {
   const airline = useAirline();
-  const mapRef = useRef<MapboxGL.MapView>(null);
+  const hubs = useHubs();
+  const cameraRef = useRef<MapboxGL.Camera>(null);
   const routeCreationMode = useGameStore((s) => s.routeCreationMode);
   const creationWaypoints = useGameStore((s) => s.creationWaypoints);
 
   const color = airline?.color ?? "#38BDF8";
   const speed = airline?.speed ?? 1;
 
+  // ── Fly to first hub when it's purchased ────────────────────────
+  const prevHubCount = useRef(0);
+  useEffect(() => {
+    if (hubs.length === 1 && prevHubCount.current === 0) {
+      const hub = hubs[0].airport;
+      cameraRef.current?.flyTo([hub.lng, hub.lat], 800);
+      cameraRef.current?.zoomTo(4.5, 800);
+    }
+    prevHubCount.current = hubs.length;
+  }, [hubs.length]);
+
   // ── Airport tap handler ──────────────────────────────────────────
   const handleAirportPress = useCallback((airport: Airport) => {
-    // Read fresh from store — never use closure state inside callbacks
-    // that trigger store updates (causes infinite re-render loops)
     const {
       routeCreationMode: isCreating,
       creationWaypoints: waypoints,
@@ -69,23 +102,21 @@ export default function GameMap({ airlineColor, onMapReady }: GameMapProps) {
         }
       }
       addWpt(airport);
-      // Check new length after adding
       if (waypoints.length + 1 >= 2) {
         open("create-route");
       }
       return;
     }
 
-    // Normal mode
+    // Normal mode — open airport sheet
     useGameStore.getState().openSheet("airport", airport);
-  }, []); // no deps — always reads fresh from store
+  }, []);
 
   const waypointIatas = creationWaypoints.map((a) => a.iata);
 
   return (
     <View style={s.root}>
       <MapboxGL.MapView
-        ref={mapRef}
         style={s.map}
         styleURL={MapboxGL.StyleURL.Dark}
         logoEnabled={false}
@@ -96,8 +127,9 @@ export default function GameMap({ airlineColor, onMapReady }: GameMapProps) {
         pitchEnabled={false}
       >
         <MapboxGL.Camera
+          ref={cameraRef}
           defaultSettings={DEFAULT_CAMERA}
-          minZoomLevel={1.5}
+          minZoomLevel={2.2}
           maxZoomLevel={12}
         />
 
@@ -108,22 +140,8 @@ export default function GameMap({ airlineColor, onMapReady }: GameMapProps) {
           waypointIatas={waypointIatas}
         />
 
-        {/* Hide Mapbox default city/place dots and labels */}
-        {[
-          "settlement-label",
-          "settlement-subdivision-label",
-          "place-label",
-          "place-city-label",
-          "place-town-label",
-          "place-village-label",
-          "poi-label",
-          "transit-label",
-          "airport-label",
-          "water-point-label",
-          "natural-point-label",
-          "settlement-minor-label",
-          "settlement-major-label",
-        ].map((id) => (
+        {/* Hide Mapbox default labels — keeps map clean */}
+        {HIDDEN_LABELS.map((id) => (
           <MapboxGL.SymbolLayer
             key={id}
             id={`hide-${id}`}

@@ -75,12 +75,12 @@ function buildGoals(state: {
   if (state.pendingDemands > 0) {
     goals.push({
       id: "clear-demand-slot",
-      category: "RUSH",
+      category: "Priority",
       icon: "flash-outline",
-      label: "Clear 1 demand slot",
+      label: "Serve one more route destination",
       current: state.servedDemands,
       target: state.servedDemands + 1,
-      reward: "New demand appears",
+      reward: "Unlocks new demand",
       priority: 100,
     });
   }
@@ -88,7 +88,7 @@ function buildGoals(state: {
   if (state.totalDemandPax > 0) {
     goals.push({
       id: "move-waiting-pax",
-      category: "FLOW",
+      category: "Passengers",
       icon: "people-outline",
       label: "Move waiting passengers",
       current: state.deliveredDemandPax,
@@ -103,12 +103,12 @@ function buildGoals(state: {
   if (nextRoute) {
     goals.push({
       id: `routes-${nextRoute}`,
-      category: "ROUTES",
+      category: "Routes",
       icon: "git-network-outline",
       label: `Open ${nextRoute} active route${nextRoute !== 1 ? "s" : ""}`,
       current: state.routes,
       target: nextRoute,
-      reward: nextRoute >= 10 ? "Route web" : "More flow",
+      reward: nextRoute >= 10 ? "Wider network" : "More passengers",
       priority: 85,
     });
   }
@@ -118,12 +118,12 @@ function buildGoals(state: {
   if (nextPlane) {
     goals.push({
       id: `planes-${nextPlane}`,
-      category: "FLEET",
+      category: "Fleet",
       icon: "airplane-outline",
       label: `Own ${nextPlane} aircraft`,
       current: state.planes,
       target: nextPlane,
-      reward: "Carry more pax",
+      reward: "Move more passengers",
       priority: 75,
     });
   }
@@ -133,12 +133,12 @@ function buildGoals(state: {
   if (nextHub) {
     goals.push({
       id: `hubs-${nextHub}`,
-      category: "HUBS",
+      category: "Hubs",
       icon: "business-outline",
       label: `Own ${nextHub} hub${nextHub !== 1 ? "s" : ""}`,
       current: state.hubs,
       target: nextHub,
-      reward: "More demand slots",
+      reward: "More route destinations",
       priority: 70,
     });
   }
@@ -148,12 +148,12 @@ function buildGoals(state: {
   if (nextCash) {
     goals.push({
       id: `cash-${nextCash}`,
-      category: "CASH",
+      category: "Cash",
       icon: "cash-outline",
       label: `Reach ${fmtCash(nextCash)} cash`,
       current: state.cash,
       target: nextCash,
-      reward: "Upgrade power",
+      reward: "Buy better planes",
       priority: 55,
     });
   }
@@ -163,12 +163,12 @@ function buildGoals(state: {
   if (nextAch) {
     goals.push({
       id: `ach-${nextAch}`,
-      category: "TROPHY",
+      category: "Achievements",
       icon: "trophy-outline",
       label: `Earn ${nextAch} achievement points`,
       current: state.achPoints,
       target: nextAch,
-      reward: `${nextAch}pt club`,
+      reward: "Achievement milestone",
       priority: 40,
     });
   }
@@ -182,7 +182,7 @@ function buildGoals(state: {
 
 function GoalRow({ goal, color }: { goal: Goal; color: string }) {
   const progress = pct(goal);
-  const hot = goal.category === "RUSH" || goal.category === "FLOW";
+  const hot = goal.category === "Priority" || goal.category === "Passengers";
   const accent = hot ? "#22c55e" : color;
 
   return (
@@ -317,7 +317,7 @@ export default function GoalsOverlay() {
               <View style={s.panelHdrL}>
                 <Ionicons name="flash-outline" size={19} color={color} />
                 <View>
-                  <Text style={s.panelTitle}>Rush Goals</Text>
+                  <Text style={s.panelTitle}>Goals</Text>
                   <Text style={s.panelSub}>Keep passengers moving</Text>
                 </View>
               </View>
@@ -392,7 +392,7 @@ export default function GoalsOverlay() {
                         },
                       ]}
                     >
-                      GLOBAL CONTRACT
+                      Global contract
                     </Text>
                     <Text style={s.contractTitle} numberOfLines={1}>
                       {globalContract.title}
@@ -442,13 +442,15 @@ export default function GoalsOverlay() {
                   <Text style={s.contractMeta}>
                     {globalContract.status === "active"
                       ? `${contractDaysLeft(globalContract, airline.day)}d left`
-                      : globalContract.status.toUpperCase()}
+                      : globalContract.status === "completed"
+                        ? "Completed ✓"
+                        : "Failed"}
                   </Text>
                 </View>
               </View>
             )}
 
-            <Text style={s.sectionHdr}>NEXT OBJECTIVES</Text>
+            <Text style={s.sectionHdr}>What to do next</Text>
 
             <ScrollView showsVerticalScrollIndicator={false}>
               {goals.map((goal) => (
@@ -468,7 +470,7 @@ const gr = StyleSheet.create({
     flexDirection: "row",
     gap: Spacing.sm,
     paddingVertical: Spacing.sm,
-    paddingHorizontal: Spacing.xs,
+    paddingHorizontal: Spacing.xs ?? 4,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Colors.border,
   },

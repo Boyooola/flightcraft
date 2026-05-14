@@ -15,7 +15,11 @@
 import { Platform, StatusBar, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-const HUD_CONTENT_H = 56; // TopHUD rows height (excluding safe area)
+// TopHUD is now two rows:
+//   Row 1: airline name + cash + speed buttons  (~44px)
+//   Gap + Row 2: stats bar (TODAY/DAY/TIME)     (~42px)
+//   Container paddingBottom (Spacing.sm)         (~8px)
+const HUD_CONTENT_H = 110; // TopHUD two-row height (excluding safe area)
 const TAB_CONTENT_H = 53; // TabBar rows height (excluding safe area)
 
 /** Height of TopHUD including top safe area inset */

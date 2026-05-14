@@ -46,6 +46,14 @@ export type ActiveSheet =
   | "missions"
   | "privacy-policy";
 
+export type AirportTier =
+  | "mega"
+  | "large"
+  | "major"
+  | "regional"
+  | "minor"
+  | "local";
+
 export interface Airport {
   iata: string;
   icao: string;
@@ -55,7 +63,7 @@ export interface Airport {
   continent: string;
   lat: number;
   lng: number;
-  tier: "mega" | "large" | "major" | "regional" | "minor" | "local";
+  tier: AirportTier;
   pax_annual_m: number | null;
 }
 

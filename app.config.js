@@ -2,7 +2,7 @@ export default {
   expo: {
     name: "Flightcraft",
     slug: "flightcraft",
-    version: "0.4.0",
+    version: "0.5.0",
     orientation: "portrait",
     icon: "./assets/images/icon.png",
     scheme: "flightcraft",
@@ -29,7 +29,7 @@ export default {
 
     android: {
       package: "com.stratoslabs.flightcraft",
-      versionCode: 13,
+      versionCode: 14,
       adaptiveIcon: {
         foregroundImage: "./assets/images/adaptive-icon.png",
         backgroundColor: "#04090f",

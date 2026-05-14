@@ -258,9 +258,19 @@ export default function RouteLayer({
                 deliveredPax: delieveredPax,
                 priceStrategy: (route as any).price_strategy ?? "standard",
                 priceElasticity: liveDemand.price_elasticity ?? 1,
-                crowdMultiplier: globalRevMul, // event + wave multiplier
+                crowdMultiplier: globalRevMul,
                 businessPct: liveDemand.business_pct ?? 0.25,
                 leisurePct: liveDemand.leisure_pct ?? 0.75,
+                // O&D via route split
+                viaPaxRatio: route.via_iata
+                  ? (route.via_pax_ratio ?? 0.3)
+                  : null,
+                leg1DistNm: route.via_iata
+                  ? ((route as any).leg1_dist_nm ?? null)
+                  : null,
+                leg2DistNm: route.via_iata
+                  ? ((route as any).leg2_dist_nm ?? null)
+                  : null,
               });
 
               earnCash(reward);

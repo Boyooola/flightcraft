@@ -27,9 +27,7 @@ import {
   useRoutes,
 } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
-import {
-  BottomSheetScrollView
-} from "@gorhom/bottom-sheet";
+import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import React, { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
@@ -96,74 +94,6 @@ function QuantitySelector({
     </View>
   );
 }
-
-const OwnedPlaneRow = React.memo(function OwnedPlaneRow({
-  plane,
-  route,
-  onAssign,
-}: {
-  plane: OwnedPlane;
-  route: string | null;
-  onAssign?: () => void;
-}) {
-  const fc = FAMILY_COLOR[plane.plane_model.family] ?? Colors.sky;
-  const idle = !route;
-
-  return (
-    <View style={[op.row, idle && { borderColor: Colors.amber + "55" }]}>
-      <View
-        style={[op.stripe, { backgroundColor: idle ? Colors.amber : fc }]}
-      />
-
-      <View style={op.body}>
-        <View style={op.top}>
-          <Text style={op.name}>{plane.plane_model.nickname}</Text>
-          <View
-            style={[
-              op.statePill,
-              {
-                backgroundColor: idle
-                  ? Colors.amber + "18"
-                  : Colors.green + "18",
-              },
-            ]}
-          >
-            <Text
-              style={[
-                op.stateTxt,
-                { color: idle ? Colors.amber : Colors.green },
-              ]}
-            >
-              {idle ? "IDLE" : "MOVING"}
-            </Text>
-          </View>
-        </View>
-
-        <Text style={[op.route, { color: idle ? Colors.amber : Colors.muted }]}>
-          {route ?? "Ready to clear a demand slot"}
-        </Text>
-
-        <View style={op.specs}>
-          <Text style={op.spec}>{plane.plane_model.pax_capacity} pax</Text>
-          <Text style={op.spec}>
-            {plane.plane_model.range_nm.toLocaleString()}nm
-          </Text>
-          <Text style={op.spec}>{plane.plane_model.speed_kts}kts</Text>
-        </View>
-      </View>
-
-      {idle && onAssign && (
-        <TouchableOpacity
-          style={[op.assignBtn, { backgroundColor: fc }]}
-          onPress={onAssign}
-        >
-          <Ionicons name="flash-outline" size={13} color={Colors.bg} />
-          <Text style={op.assignTxt}>Assign</Text>
-        </TouchableOpacity>
-      )}
-    </View>
-  );
-});
 
 const OwnedPlaneGroup = React.memo(function OwnedPlaneGroup({
   group,
@@ -240,7 +170,7 @@ function PlaneCard({
   const locked = lockedByDemands || lockedByCash;
 
   const lockReason = lockedByDemands
-    ? `${model.unlock_demands - demandScore} slots needed`
+    ? `Open ${model.unlock_demands - demandScore} more route${model.unlock_demands - demandScore !== 1 ? "s" : ""} to unlock`
     : lockedByCash
       ? `${fmtCash(model.unlock_cash)} cash needed`
       : "";
@@ -477,20 +407,6 @@ export default function FleetSheet() {
     setTimeout(() => startCreation(), 120);
   }, [haptics, closeSheet, startCreation]);
 
-  // if (ownedPlanes.length === 0)
-  //   return (
-  //     <BottomSheetScrollView contentContainerStyle={[es.wrap]}>
-  //       <View style={es.empty}>
-  //         <Ionicons name="airplane-outline" size={48} color={Colors.dim} />
-  //         <Text style={es.emptyTitle}>No planes yet</Text>
-  //         <Text style={es.emptySub}>
-  //           Buy your first aircraft to start moving passengers and earning
-  //           revenue.
-  //         </Text>
-  //       </View>
-  //     </BottomSheetScrollView>
-  //   );
-
   return (
     <BottomSheetScrollView
       style={s.root}
@@ -504,8 +420,8 @@ export default function FleetSheet() {
         <View style={s.hdrL}>
           <Ionicons name="flash-outline" size={21} color={color} />
           <View>
-            <Text style={s.title}>Fleet Rush</Text>
-            <Text style={s.subtitle}>Move passengers faster</Text>
+            <Text style={s.title}>Fleet</Text>
+            <Text style={s.subtitle}>Your aircraft</Text>
           </View>
         </View>
 
@@ -537,7 +453,7 @@ export default function FleetSheet() {
           <Text style={[s.rushVal, { color: Colors.green }]}>
             {totalCapacity}
           </Text>
-          <Text style={s.rushLbl}>Seat Flow</Text>
+          <Text style={s.rushLbl}>Total seats</Text>
         </View>
         <View style={s.rushStat}>
           <Text
@@ -567,20 +483,26 @@ export default function FleetSheet() {
           <Ionicons name="chevron-forward" size={18} color={Colors.dim} />
         </TouchableOpacity>
       )}
-      {/* 
-      <View style={[s.topAction, { borderColor: color + "44" }]}>
-        <Ionicons name="add-circle-outline" size={17} color={color} />
-        <View style={{ flex: 1 }}>
-          <Text style={s.topActionTitle}>Buy Aircraft</Text>
-          <Text style={s.topActionSub}>
-            Purchase more planes without scrolling past your fleet.
-          </Text>
-        </View>
-      </View> */}
+      {ownedPlanes.length > 0 && (
+        <>
+          <Text style={s.eyebrow}>YOUR FLEET</Text>
+          <View style={s.section}>
+            {groupedOwned.map((group) => (
+              <OwnedPlaneGroup
+                key={group.model.id}
+                group={group}
+                planeRouteMap={planeRouteMap}
+                onAssign={handleAssign}
+              />
+            ))}
+          </View>
+          <View style={s.divider} />
+        </>
+      )}
 
-      <Text style={s.eyebrow}>BUY MORE FLOW</Text>
+      <Text style={s.eyebrow}>ADD AIRCRAFT</Text>
       <Text style={s.eyebrowSub}>
-        {fmtCash(cash)} cash · clear demand slots to unlock better planes
+        {fmtCash(cash)} available · serve more routes to unlock larger aircraft
       </Text>
 
       {grouped.map(({ family, label, color: fc, planes: familyPlanes }) => (
@@ -601,26 +523,35 @@ export default function FleetSheet() {
         </View>
       ))}
 
-      {ownedPlanes.length > 0 && (
-        <>
-          <View style={s.divider} />
-
-          <Text style={s.eyebrow}>ACTIVE FLEET</Text>
-          <View style={s.section}>
-            {groupedOwned.map((group) => (
-              <OwnedPlaneGroup
-                key={group.model.id}
-                group={group}
-                planeRouteMap={planeRouteMap}
-                onAssign={handleAssign}
-              />
-            ))}
-          </View>
-        </>
+      {ownedPlanes.length === 0 && (
+        <View style={s.emptyState}>
+          <Ionicons name="airplane-outline" size={48} color={Colors.dim} />
+          <Text style={s.emptyTitle}>No planes yet</Text>
+          <Text style={s.emptySub}>
+            Buy your first aircraft below to start moving passengers and earning
+            revenue.
+          </Text>
+        </View>
       )}
     </BottomSheetScrollView>
   );
 }
+
+const qs = StyleSheet.create({
+  wrap: { flexDirection: "row", alignItems: "center", gap: 4 },
+  btn: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: "rgba(255,255,255,.04)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  disabled: { opacity: 0.35 },
+  val: { fontSize: 14, fontWeight: "900", minWidth: 22, textAlign: "center" },
+});
 
 const g = StyleSheet.create({
   row: {
@@ -633,186 +564,30 @@ const g = StyleSheet.create({
     marginBottom: Spacing.sm,
     backgroundColor: "rgba(255,255,255,.025)",
   },
-
   stripe: { width: 4, alignSelf: "stretch" },
-
-  body: {
-    flex: 1,
-    padding: Spacing.md,
-    gap: 4,
-  },
-
+  body: { flex: 1, padding: Spacing.md, gap: 4 },
   top: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
-
-  name: {
-    fontSize: 13,
-    color: Colors.text,
-    fontWeight: "800",
-  },
-
-  count: {
-    fontSize: 12,
-    fontWeight: "900",
-    color: Colors.dim,
-  },
-
-  meta: {
-    fontSize: 10,
-    color: Colors.dim,
-    fontWeight: "600",
-  },
-
-  specs: {
-    fontSize: 9,
-    color: Colors.dim,
-  },
-
+  name: { fontSize: 13, fontWeight: "700", color: Colors.text, flex: 1 },
+  count: { fontSize: 13, fontWeight: "900", color: Colors.muted },
+  meta: { fontSize: 11, color: Colors.muted },
+  specs: { fontSize: 10, color: Colors.dim },
   assignBtn: {
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    marginRight: Spacing.sm,
     borderRadius: Radius.md,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    marginRight: Spacing.md,
   },
-
-  assignTxt: {
-    fontSize: 11,
-    fontWeight: "900",
-    color: Colors.bg,
-  },
-});
-
-const qs = StyleSheet.create({
-  wrap: { flexDirection: "row", alignItems: "center", gap: 2 },
-  btn: {
-    width: 28,
-    height: 28,
-    borderRadius: 8,
-    backgroundColor: "rgba(255,255,255,.06)",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  disabled: { opacity: 0.35 },
-  val: {
-    fontSize: 14,
-    fontWeight: "800",
-    minWidth: 24,
-    textAlign: "center",
-  },
-});
-
-const op = StyleSheet.create({
-  row: {
-    flexDirection: "row",
-    alignItems: "center",
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    overflow: "hidden",
-    marginBottom: Spacing.sm,
-    backgroundColor: "rgba(255,255,255,.025)",
-  },
-  stripe: { width: 4, alignSelf: "stretch" },
-  body: { flex: 1, padding: Spacing.md, gap: 5 },
-  top: { flexDirection: "row", alignItems: "center", gap: 8 },
-  name: { fontSize: 13, color: Colors.text, fontWeight: "800", flex: 1 },
-  statePill: {
-    borderRadius: Radius.full,
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-  },
-  stateTxt: { fontSize: 8, fontWeight: "900", letterSpacing: 1 },
-  route: { fontSize: 10, fontWeight: "600" },
-  specs: { flexDirection: "row", gap: 6 },
-  spec: {
-    fontSize: 9,
-    color: Colors.dim,
-    backgroundColor: "rgba(255,255,255,.05)",
-    paddingHorizontal: 6,
-    borderRadius: Radius.sm,
-  },
-  assignBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    borderRadius: Radius.md,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    marginRight: Spacing.md,
-  },
-  assignTxt: { fontSize: 11, fontWeight: "900", color: Colors.bg },
+  assignTxt: { fontSize: 11, fontWeight: "700", color: Colors.bg },
 });
 
 const pc = StyleSheet.create({
-  card: {
-    flexDirection: "row",
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    overflow: "hidden",
-    marginBottom: Spacing.sm,
-    backgroundColor: "rgba(255,255,255,.025)",
-  },
-  locked: { opacity: 0.55 },
-  stripe: { width: 4 },
-  body: { flex: 1, padding: Spacing.md, gap: Spacing.sm },
-  header: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    gap: Spacing.sm,
-  },
-  family: { fontSize: 9, fontWeight: "900", letterSpacing: 1.2 },
-  name: { fontSize: 14, color: Colors.text, fontWeight: "800" },
-  role: { fontSize: 10, color: Colors.dim, marginTop: 2 },
-  priceBox: { alignItems: "flex-end" },
-  price: { fontSize: 16, fontWeight: "900" },
-  priceSub: { fontSize: 8, color: Colors.dim },
-  flowBox: {
-    flexDirection: "row",
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    overflow: "hidden",
-  },
-  flowItem: {
-    flex: 1,
-    alignItems: "center",
-    paddingVertical: Spacing.sm,
-    backgroundColor: "rgba(255,255,255,.025)",
-  },
-  flowVal: { fontSize: 13, fontWeight: "900" },
-  flowLbl: { fontSize: 8, color: Colors.dim, marginTop: 1 },
-  lockRow: { flexDirection: "row", alignItems: "center", gap: 6 },
-  lockTxt: { fontSize: 10, color: Colors.dim, flex: 1 },
-  buyRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.sm,
-    flexWrap: "wrap",
-  },
-  total: { fontSize: 12, fontWeight: "800" },
-  buyBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 5,
-    borderRadius: Radius.md,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
-    minHeight: 36,
-    marginLeft: "auto",
-  },
-  buyTxt: { fontSize: 12, fontWeight: "900" },
-  error: { fontSize: 10, color: Colors.red },
   cardCompact: {
     flexDirection: "row",
     borderRadius: Radius.lg,
@@ -822,75 +597,45 @@ const pc = StyleSheet.create({
     marginBottom: Spacing.sm,
     backgroundColor: "rgba(255,255,255,.025)",
   },
-
-  compactMain: {
-    flex: 1,
-    paddingVertical: Spacing.sm,
-    paddingHorizontal: Spacing.md,
-    gap: 7,
-  },
-
+  locked: { opacity: 0.6 },
+  stripe: { width: 4 },
+  compactMain: { flex: 1, padding: Spacing.md, gap: 8 },
   compactTop: {
     flexDirection: "row",
     alignItems: "flex-start",
-    justifyContent: "space-between",
     gap: Spacing.sm,
   },
-
-  compactInfo: {
-    flex: 1,
-    minWidth: 0,
-  },
-
-  compactSpecs: {
-    fontSize: 10,
-    color: Colors.dim,
-    fontWeight: "700",
-    marginTop: 1,
-  },
-
-  compactPrice: {
-    alignItems: "flex-end",
-    flexShrink: 0,
-  },
-
+  compactInfo: { flex: 1, gap: 2 },
+  family: { fontSize: 9, fontWeight: "700", letterSpacing: 0.5 },
+  name: { fontSize: 14, fontWeight: "900", color: Colors.text },
+  compactSpecs: { fontSize: 11, color: Colors.dim },
+  compactPrice: { alignItems: "flex-end", gap: 2 },
+  price: { fontSize: 16, fontWeight: "900" },
+  priceSub: { fontSize: 9, color: Colors.dim },
+  lockRowCompact: { flexDirection: "row", alignItems: "center", gap: 6 },
+  lockTxt: { fontSize: 11, color: Colors.dim, flex: 1 },
   buyRowCompact: {
     flexDirection: "row",
     alignItems: "center",
     gap: Spacing.sm,
   },
-
-  totalCompact: {
-    flex: 1,
-    fontSize: 12,
-    fontWeight: "900",
-  },
-
+  totalCompact: { fontSize: 13, fontWeight: "700", flex: 1 },
   buyBtnCompact: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    gap: 5,
+    gap: 4,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 8,
     borderRadius: Radius.md,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    minWidth: 78,
   },
-
-  lockRowCompact: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    borderRadius: Radius.md,
-    backgroundColor: "rgba(255,255,255,.04)",
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-  },
+  buyTxt: { fontSize: 12, fontWeight: "700", color: Colors.bg },
+  error: { fontSize: 10, color: Colors.red },
 });
 
 const s = StyleSheet.create({
   root: { flex: 1 },
-  content: { paddingBottom: Spacing.xxl },
+  content: { paddingTop: Spacing.sm },
+
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -899,9 +644,14 @@ const s = StyleSheet.create({
     paddingTop: Spacing.sm,
     paddingBottom: Spacing.md,
   },
-  hdrL: { flexDirection: "row", alignItems: "center", gap: Spacing.sm },
+  hdrL: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
   title: { fontSize: 20, color: Colors.text, fontWeight: "900" },
-  subtitle: { fontSize: 10, color: Colors.dim },
+  subtitle: { fontSize: 10, color: Colors.dim, marginTop: 1 },
+
   rushStats: {
     flexDirection: "row",
     marginHorizontal: Spacing.lg,
@@ -909,108 +659,81 @@ const s = StyleSheet.create({
     borderRadius: Radius.lg,
     borderWidth: 1,
     borderColor: Colors.border,
-    overflow: "hidden",
     backgroundColor: "rgba(255,255,255,.025)",
+    overflow: "hidden",
   },
   rushStat: {
     flex: 1,
     alignItems: "center",
-    paddingVertical: Spacing.sm,
+    paddingVertical: Spacing.sm + 2,
+    gap: 2,
   },
-  rushVal: { fontSize: 16, fontWeight: "900" },
-  rushLbl: { fontSize: 8, color: Colors.dim, marginTop: 2 },
+  rushVal: { fontSize: 18, fontWeight: "900" },
+  rushLbl: {
+    fontSize: 8,
+    color: Colors.dim,
+    fontWeight: "700",
+    letterSpacing: 0.5,
+  },
+
   actionBanner: {
     flexDirection: "row",
     alignItems: "center",
-    gap: Spacing.sm,
+    gap: Spacing.md,
     marginHorizontal: Spacing.lg,
     marginBottom: Spacing.md,
+    padding: Spacing.md,
     borderRadius: Radius.lg,
     borderWidth: 1,
-    backgroundColor: "rgba(255,255,255,.035)",
-    padding: Spacing.md,
+    backgroundColor: "rgba(255,255,255,.025)",
   },
-  actionTitle: { fontSize: 13, color: Colors.text, fontWeight: "800" },
-  actionSub: { fontSize: 10, color: Colors.dim, marginTop: 2 },
+  actionTitle: { fontSize: 13, fontWeight: "700", color: Colors.text },
+  actionSub: { fontSize: 11, color: Colors.muted, marginTop: 2 },
+
   eyebrow: {
     fontSize: 9,
     color: Colors.dim,
     letterSpacing: 2.5,
-    paddingHorizontal: Spacing.lg,
-    marginBottom: 12,
     fontWeight: "900",
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.lg,
+    paddingBottom: Spacing.xs ?? 4,
   },
   eyebrowSub: {
-    fontSize: 10,
+    fontSize: 11,
     color: Colors.dim,
     paddingHorizontal: Spacing.lg,
     marginBottom: Spacing.sm,
   },
-  section: { paddingHorizontal: Spacing.lg, marginBottom: Spacing.sm },
-  divider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: Colors.border,
-    marginVertical: Spacing.md,
-  },
+
+  section: { paddingHorizontal: Spacing.lg },
   familyHeader: {
     flexDirection: "row",
     alignItems: "center",
+    gap: 8,
+    marginBottom: Spacing.sm,
+  },
+  familyDot: { width: 8, height: 8, borderRadius: 4 },
+  familyLabel: { fontSize: 11, fontWeight: "700" },
+
+  divider: {
+    height: 1,
+    backgroundColor: Colors.border,
+    marginVertical: Spacing.lg,
+    marginHorizontal: Spacing.lg,
+  },
+
+  emptyState: {
+    alignItems: "center",
     gap: Spacing.sm,
-    marginBottom: Spacing.sm,
+    paddingVertical: Spacing.xxl ?? 40,
+    paddingHorizontal: Spacing.xl,
   },
-  familyDot: { width: 8, height: 8, borderRadius: 999 },
-  familyLabel: { fontSize: 11, fontWeight: "900", letterSpacing: 1 },
-  topAction: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-
-    backgroundColor: "rgba(255,255,255,0.02)",
-
-    marginTop: Spacing.sm,
-    marginBottom: Spacing.sm,
-  },
-
-  topActionTitle: {
-    fontSize: 13,
-    fontWeight: "900",
-    color: Colors.text,
-  },
-
-  topActionSub: {
-    fontSize: 11,
-    color: Colors.dim,
-    marginTop: 2,
-    fontWeight: "600",
-  },
-});
-
-const es = StyleSheet.create({
-  wrap: { flex: 1, padding: Spacing.lg },
-  empty: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    gap: Spacing.md,
-    paddingVertical: 60,
-  },
-  emptyTitle: {
-    fontSize: 17,
-    fontWeight: "700",
-    color: Colors.text,
-    textAlign: "center",
-  },
+  emptyTitle: { fontSize: 16, fontWeight: "700", color: Colors.text },
   emptySub: {
     fontSize: 13,
-    color: Colors.muted,
+    color: Colors.dim,
     textAlign: "center",
-    lineHeight: 20,
-    maxWidth: 280,
+    lineHeight: 19,
   },
 });

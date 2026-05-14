@@ -20,10 +20,7 @@ import {
   waitingPaxForDemand,
   type PassengerFlowDemand,
 } from "@/lib/passengerFlow";
-import {
-  passengerMixFromDistance,
-  passengerTypeBreakdown,
-} from "@/lib/passengerTypes";
+import { passengerMixFromDistance } from "@/lib/passengerTypes";
 import { calcRouteRevenue, fmtCash } from "@/lib/revenue";
 import { distNm } from "@/lib/routing";
 import type { Airport, Demand, OwnedPlane } from "@/store";
@@ -206,82 +203,24 @@ function DemandRushCard({
         </View>
       </View>
 
-      <View style={rush.stats}>
-        <View style={rush.statBox}>
-          <Text style={[rush.statValue, { color: waitingColor }]}>
-            {waiting.toLocaleString()}
-          </Text>
-          <Text style={rush.statLabel}>Waiting now</Text>
-        </View>
-        <View style={rush.statBox}>
-          <Text style={[rush.statValue, { color: Colors.sky }]}>
-            {spawned.toLocaleString()}
-          </Text>
-          <Text style={rush.statLabel}>Appeared</Text>
-        </View>
-        <View style={rush.statBox}>
-          <Text style={[rush.statValue, { color: Colors.green }]}>
-            {moved.toLocaleString()}
-          </Text>
-          <Text style={rush.statLabel}>Moved</Text>
-        </View>
-      </View>
-
-      <View style={rush.progressRow}>
-        <View style={rush.track}>
-          <View
-            style={[
-              rush.fill,
-              { width: `${progress}%` as any, backgroundColor: color },
-            ]}
-          />
-        </View>
-        <Text style={[rush.progressText, { color }]}>{progress}%</Text>
-      </View>
-
-      {(() => {
-        const paxDist =
-          existingDemand?.business_pct != null
-            ? {
-                businessPct: existingDemand.business_pct,
-                leisurePct: existingDemand.leisure_pct ?? 0.75,
-              }
-            : passengerMixFromDistance(totalDist);
-        const paxInfo = passengerTypeBreakdown(paxDist);
-        return (
-          <View style={rush.mixRow}>
-            <Ionicons
-              name="briefcase-outline"
-              size={11}
-              color={paxInfo.businessPct >= 35 ? Colors.amber : Colors.dim}
-            />
-            <Text
-              style={[
-                rush.mixTxt,
-                {
-                  color: paxInfo.businessPct >= 35 ? Colors.amber : Colors.dim,
-                },
-              ]}
-            >
-              {paxInfo.label} · {paxInfo.businessPct}% business
+      {/* One-line summary — waiting pax + daily estimate */}
+      <View style={rush.summaryRow}>
+        {waiting > 0 ? (
+          <>
+            <Ionicons name="people-outline" size={12} color={Colors.amber} />
+            <Text style={[rush.summaryTxt, { color: Colors.amber }]}>
+              {waiting.toLocaleString()} waiting now
             </Text>
-          </View>
-        );
-      })()}
-
-      <View style={rush.noteRow}>
-        <Ionicons
-          name={existingDemand ? "flash-outline" : "sparkles-outline"}
-          size={13}
-          color={waiting > 0 ? Colors.amber : Colors.dim}
-        />
-        <Text style={rush.note}>
-          {existingDemand
-            ? waiting > 0
-              ? "This route can clear real travelers immediately."
-              : "Travelers will keep appearing as the day progresses."
-            : `Estimated ${demand.base_pax_day.toLocaleString()} travelers/day · ${totalDist.toLocaleString()}nm corridor.`}
-        </Text>
+          </>
+        ) : (
+          <>
+            <Ionicons name="sparkles-outline" size={12} color={Colors.dim} />
+            <Text style={rush.summaryTxt}>
+              ~{demand.base_pax_day.toLocaleString()} travelers/day ·{" "}
+              {totalDist.toLocaleString()}nm
+            </Text>
+          </>
+        )}
       </View>
     </View>
   );
@@ -390,48 +329,13 @@ const PlaneRow = React.memo(function PlaneRow({
           · {model.speed_kts}kts
         </Text>
 
-        {canServe && (
-          <>
-            <View style={planeStyles.flowRow}>
-              <View style={planeStyles.flowBox}>
-                <Text
-                  style={[
-                    planeStyles.flowValue,
-                    { color: waitingNow > 0 ? Colors.amber : Colors.dim },
-                  ]}
-                >
-                  {boardedNow.toLocaleString()}
-                </Text>
-                <Text style={planeStyles.flowLabel}>board now</Text>
-              </View>
-              <View style={planeStyles.flowBox}>
-                <Text style={[planeStyles.flowValue, { color: capColor }]}>
-                  {capacityPct}%
-                </Text>
-                <Text style={planeStyles.flowLabel}>slot power</Text>
-              </View>
-              <View style={planeStyles.flowBox}>
-                <Text style={[planeStyles.flowValue, { color: Colors.green }]}>
-                  {fmtCash(revenue)}
-                </Text>
-                <Text style={planeStyles.flowLabel}>first reward</Text>
-              </View>
-            </View>
-
-            <View style={planeStyles.barRow}>
-              <View style={planeStyles.track}>
-                <View
-                  style={[
-                    planeStyles.fill,
-                    {
-                      width: `${capacityPct}%` as any,
-                      backgroundColor: capColor,
-                    },
-                  ]}
-                />
-              </View>
-            </View>
-          </>
+        {canServe && revenue > 0 && (
+          <Text style={planeStyles.rewardLine}>
+            Est. {fmtCash(revenue)} first reward
+            {waitingNow > 0
+              ? ` · ${Math.min(waitingNow, model.pax_capacity)} board now`
+              : ""}
+          </Text>
         )}
       </View>
     </TouchableOpacity>
@@ -472,6 +376,7 @@ export default function CreateRouteSheet() {
       : [0];
 
   const totalDist = legs.reduce((sum, leg) => sum + leg, 0);
+
   const maxLeg = Math.max(...legs);
   const haul = haulClass(totalDist);
   const fee = CREATION_FEE[haul] ?? 150_000;
@@ -764,14 +669,14 @@ export default function CreateRouteSheet() {
         <View style={[s.successIcon, { backgroundColor: color + "18" }]}>
           <Ionicons name="flash-outline" size={38} color={color} />
         </View>
-        <Text style={s.successTitle}>Route Live</Text>
+        <Text style={s.successTitle}>✈ Route Open!</Text>
         <Text style={[s.successRoute, { color }]}>
           {origin?.iata}
           {via ? ` → ${via.iata}` : ""} → {dest?.iata}
         </Text>
         <Text style={s.successSub}>
-          Your assigned planes will board waiting travelers as they appear and
-          turn them into cash flow.
+          Your plane is heading out now. Watch it move on the map and check back
+          for your first earnings.
         </Text>
       </View>
     );
@@ -831,19 +736,23 @@ export default function CreateRouteSheet() {
 
       <View style={s.summaryBar}>
         <View style={s.summaryItem}>
-          <Text style={s.summaryLabel}>DISTANCE</Text>
+          <Text style={s.summaryLabel}>Distance</Text>
           <Text style={s.summaryValue}>{totalDist.toLocaleString()}nm</Text>
         </View>
         <View style={s.summaryDivider} />
         <View style={s.summaryItem}>
-          <Text style={s.summaryLabel}>HAUL</Text>
+          <Text style={s.summaryLabel}>Type</Text>
           <Text style={[s.summaryValue, { color: haulColor }]}>
-            {haul.toUpperCase()}
+            {haul === "short"
+              ? "Short hop"
+              : haul === "medium"
+                ? "Mid-range"
+                : "Long haul"}
           </Text>
         </View>
         <View style={s.summaryDivider} />
         <View style={s.summaryItem}>
-          <Text style={s.summaryLabel}>IDLE PLANES</Text>
+          <Text style={s.summaryLabel}>Available</Text>
           <Text
             style={[
               s.summaryValue,
@@ -884,43 +793,67 @@ export default function CreateRouteSheet() {
             />
           </View>
 
+          {/* O&D Info — connecting routes only */}
+          {via && legs.length === 2 && origin && dest && (
+            <View style={s.odBox}>
+              <View style={s.odHeader}>
+                <Ionicons
+                  name="git-branch-outline"
+                  size={13}
+                  color={Colors.sky}
+                />
+                <Text style={s.odTitle}>Connecting Route</Text>
+              </View>
+              <View style={s.odLegs}>
+                <View style={s.odLeg}>
+                  <Text style={s.odLegIata}>
+                    {origin.iata} → {via.iata}
+                  </Text>
+                  <Text style={s.odLegDist}>
+                    {Math.round(legs[0]).toLocaleString()}nm
+                  </Text>
+                </View>
+                <Ionicons name="arrow-forward" size={12} color={Colors.dim} />
+                <View style={s.odLeg}>
+                  <Text style={s.odLegIata}>
+                    {via.iata} → {dest.iata}
+                  </Text>
+                  <Text style={s.odLegDist}>
+                    {Math.round(legs[1]).toLocaleString()}nm
+                  </Text>
+                </View>
+              </View>
+              <Text style={s.odHint}>
+                ✈ Passengers continuing to {dest?.iata} pay more — they&apos;re
+                booking the full journey
+              </Text>
+              {paxDay > 0 && paxDay < 20 && (
+                <View style={s.odWarn}>
+                  <Ionicons
+                    name="information-circle-outline"
+                    size={11}
+                    color={Colors.amber}
+                  />
+                  <Text style={s.odWarnTxt}>
+                    Not many travellers are heading this way yet. Consider a
+                    busier corridor for your first connecting route.
+                  </Text>
+                </View>
+              )}
+            </View>
+          )}
+
           <View style={s.divider} />
 
           <View style={s.section}>
             <View style={s.sectionHeader}>
-              <Text style={s.eyebrow}>PICK FLOW POWER</Text>
-              <Text
-                style={[
-                  s.eligible,
-                  { color: eligibleCount > 0 ? Colors.green : Colors.red },
-                ]}
-              >
-                {eligibleCount} ready
-              </Text>
+              <Text style={s.eyebrow}>SELECT PLANE</Text>
+              {eligibleCount > 0 && (
+                <Text style={[s.eligible, { color: Colors.green }]}>
+                  {eligibleCount} available
+                </Text>
+              )}
             </View>
-
-            {recommended && (
-              <TouchableOpacity
-                style={[s.recommendedBox, { borderColor: color + "55" }]}
-                onPress={() => {
-                  haptics.tap();
-                  setSelectedIds([recommended.plane.id]);
-                }}
-                activeOpacity={0.84}
-              >
-                <Ionicons name="sparkles-outline" size={16} color={color} />
-
-                <View style={{ flex: 1 }}>
-                  <Text style={s.recommendedTitle}>Recommended Start</Text>
-                  <Text style={s.recommendedSub}>
-                    {recommended.plane.plane_model.nickname} ·{" "}
-                    {fmtCash(recommended.revenue)} first reward
-                  </Text>
-                </View>
-
-                <Ionicons name="checkmark-circle" size={18} color={color} />
-              </TouchableOpacity>
-            )}
 
             {selectedCount > 0 && (
               <View style={[s.selectedSummary, { borderColor: color + "44" }]}>
@@ -1249,6 +1182,21 @@ const rush = StyleSheet.create({
     minWidth: 34,
     textAlign: "right",
   },
+  summaryRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingTop: Spacing.sm,
+    borderTopWidth: 0.5,
+    borderTopColor: Colors.border,
+    marginTop: Spacing.sm,
+  },
+  summaryTxt: {
+    fontSize: 11,
+    color: Colors.dim,
+    flex: 1,
+    lineHeight: 15,
+  },
   noteRow: {
     flexDirection: "row",
     alignItems: "flex-start",
@@ -1297,6 +1245,11 @@ const planeStyles = StyleSheet.create({
     fontSize: 14,
     color: Colors.text,
     fontWeight: "900",
+  },
+  rewardLine: {
+    fontSize: 11,
+    color: Colors.green,
+    marginTop: 3,
   },
   lockPill: {
     borderRadius: Radius.full,
@@ -1590,6 +1543,64 @@ const s = StyleSheet.create({
     fontSize: 11,
     color: Colors.dim,
     fontWeight: "500",
+  },
+  odBox: {
+    backgroundColor: "rgba(56,189,248,0.06)",
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: "rgba(56,189,248,0.2)",
+    padding: Spacing.md,
+    gap: Spacing.sm,
+    marginBottom: Spacing.sm,
+  },
+  odHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  odTitle: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: Colors.text,
+    flex: 1,
+  },
+  odLegs: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  odLeg: {
+    flex: 1,
+    alignItems: "center",
+    gap: 2,
+  },
+  odLegIata: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: Colors.text,
+  },
+  odLegDist: {
+    fontSize: 10,
+    color: Colors.muted,
+  },
+  odHint: {
+    fontSize: 10,
+    color: Colors.sky,
+    opacity: 0.8,
+  },
+  odWarn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: "rgba(245,158,11,0.08)",
+    borderRadius: 6,
+    padding: 6,
+  },
+  odWarnTxt: {
+    fontSize: 10,
+    color: Colors.amber,
+    flex: 1,
+    lineHeight: 14,
   },
   emptyPlanes: {
     alignItems: "center",
