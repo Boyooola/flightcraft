@@ -4,7 +4,8 @@ on:
   push:
     branches:
       - dev
-      - master
+    tags:
+      - "v*"
 
   workflow_dispatch:
 
@@ -37,87 +38,57 @@ jobs:
         run: npm install
 
       # ----------------------------
-      # 🔢 VERSION BUMP (MASTER ONLY)
-      # ----------------------------
-
-      - name: Bump versionCode
-        if: github.ref_name == 'master'
-        run: |
-          FILE=android/app/build.gradle
-
-          VERSION_CODE=$(grep versionCode $FILE | head -1 | awk '{print $2}')
-          NEW_VERSION_CODE=$((VERSION_CODE + 1))
-
-          sed -i "s/versionCode $VERSION_CODE/versionCode $NEW_VERSION_CODE/" $FILE
-
-          echo "versionCode updated: $NEW_VERSION_CODE"
-
-      - name: Bump versionName
-        if: github.ref_name == 'master'
-        run: |
-          FILE=android/app/build.gradle
-
-          VERSION_NAME=$(grep versionName $FILE | head -1 | awk '{print $2}' | tr -d '"')
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION_NAME"
-
-          PATCH=$((PATCH + 1))
-          NEW_VERSION_NAME="$MAJOR.$MINOR.$PATCH"
-
-          sed -i "s/versionName \"$VERSION_NAME\"/versionName \"$NEW_VERSION_NAME\"/" $FILE
-
-          echo "versionName updated: $NEW_VERSION_NAME"
-
-      # ----------------------------
       # 🔧 PERMISSIONS FIX
       # ----------------------------
-
       - name: Make gradlew executable
         run: chmod +x android/gradlew
 
       # ----------------------------
       # 📱 DEV BUILD (APK)
       # ----------------------------
-
       - name: Build Dev APK
-        if: github.ref_name == 'dev'
+        if: github.ref_type == 'branch'
         run: |
           cd android
           ./gradlew assembleRelease
 
       - name: Upload Dev APK
-        if: github.ref_name == 'dev'
+        if: github.ref_type == 'branch'
         uses: actions/upload-artifact@v4
         with:
           name: dev-apk
           path: android/app/build/outputs/apk/release/*.apk
 
       # ----------------------------
-      # 🚀 MASTER BUILD (AAB)
+      # 🔐 LOAD KEYSTORE (TAG ONLY)
       # ----------------------------
+      - name: Decode Keystore
+        if: github.ref_type == 'tag'
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > release-key.jks
 
+      - name: Move Keystore
+        if: github.ref_type == 'tag'
+        run: |
+          mkdir -p android/app
+          mv release-key.jks android/app/release-key.jks
+
+      # ----------------------------
+      # 🚀 RELEASE BUILD (AAB ONLY ON TAGS)
+      # ----------------------------
       - name: Build Release AAB
-        if: github.ref_name == 'master'
+        if: github.ref_type == 'tag'
         run: |
           cd android
           ./gradlew bundleRelease
+        env:
+          MYAPP_UPLOAD_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          MYAPP_UPLOAD_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          MYAPP_UPLOAD_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
 
       - name: Upload AAB
-        if: github.ref_name == 'master'
+        if: github.ref_type == 'tag'
         uses: actions/upload-artifact@v4
         with:
           name: release-aab
           path: android/app/build/outputs/bundle/release/*.aab
-
-      # ----------------------------
-      # 💾 COMMIT VERSION BUMP BACK
-      # ----------------------------
-
-      - name: Commit version bump
-        if: github.ref_name == 'master'
-        run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-
-          git add android/app/build.gradle
-          git commit -m "chore: bump version [skip ci]" || echo "No changes"
-          git push

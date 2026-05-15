@@ -1,0 +1,9 @@
+dependencies:
+  - "**/package.json"
+  - "**/package-lock.json"
+
+android:
+  - "android/**"
+
+expo:
+  - "expo*"

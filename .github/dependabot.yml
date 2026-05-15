@@ -8,15 +8,27 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 5
+
     groups:
       react-native:
         patterns:
-          - "react*"
-          - "expo*"
+          - "react"
+          - "react-native"
+          - "react-native-*"
+
+      expo:
+        patterns:
+          - "expo"
+          - "expo-*"
+
       mapbox:
         patterns:
           - "@rnmapbox/*"
           - "mapbox*"
+
+      navigation:
+        patterns:
+          - "@react-navigation/*"
 
   # 🤖 Android / Gradle dependencies
   - package-ecosystem: "gradle"
@@ -25,3 +37,8 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 3
+
+    groups:
+      android:
+        patterns:
+          - "*"
