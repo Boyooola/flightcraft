@@ -1,19 +1,22 @@
-name: Android Release Build
+name: Android CI/CD
 
 on:
   push:
     branches:
       - dev
-      - main
+      - master
+
+  workflow_dispatch:
 
 jobs:
-  build:
+  android-build:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Setup Node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -31,31 +34,31 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Expo prebuild
-        run: npx expo prebuild --platform android --non-interactive
+      - name: Ensure gradlew is executable
+        run: chmod +x android/gradlew
 
-      - name: Build APK (dev)
+      - name: Build Dev APK
         if: github.ref_name == 'dev'
         run: |
           cd android
           ./gradlew assembleRelease
 
-      - name: Build AAB (master)
+      - name: Upload Dev APK
+        if: github.ref_name == 'dev'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dev-apk
+          path: android/app/build/outputs/apk/release/*.apk
+
+      - name: Build Release AAB
         if: github.ref_name == 'master'
         run: |
           cd android
           ./gradlew bundleRelease
 
-      - name: Upload APK
-        if: github.ref_name == 'dev'
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-release-apk
-          path: android/app/build/outputs/apk/release/*.apk
-
-      - name: Upload AAB
+      - name: Upload Release AAB
         if: github.ref_name == 'master'
         uses: actions/upload-artifact@v4
         with:
-          name: app-release-aab
+          name: release-aab
           path: android/app/build/outputs/bundle/release/*.aab
