@@ -1,0 +1,27 @@
+version: 2
+
+updates:
+  # 📦 JavaScript / React Native dependencies
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      react-native:
+        patterns:
+          - "react*"
+          - "expo*"
+      mapbox:
+        patterns:
+          - "@rnmapbox/*"
+          - "mapbox*"
+
+  # 🤖 Android / Gradle dependencies
+  - package-ecosystem: "gradle"
+    directory: "/android"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
