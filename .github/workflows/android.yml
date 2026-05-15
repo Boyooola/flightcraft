@@ -34,9 +34,29 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Ensure gradlew is executable
+      # ----------------------------
+      # 🔐 KEYS SETUP (SECURE)
+      # ----------------------------
+      - name: Decode Keystore
+        if: github.ref_name == 'master'
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > release-key.jks
+
+      - name: Move Keystore to Android folder
+        if: github.ref_name == 'master'
+        run: |
+          mkdir -p android/app
+          mv release-key.jks android/app/release-key.jks
+
+      # ----------------------------
+      # 🔧 FIX PERMISSIONS
+      # ----------------------------
+      - name: Make gradlew executable
         run: chmod +x android/gradlew
 
+      # ----------------------------
+      # 📱 DEV BUILD (APK)
+      # ----------------------------
       - name: Build Dev APK
         if: github.ref_name == 'dev'
         run: |
@@ -50,13 +70,29 @@ jobs:
           name: dev-apk
           path: android/app/build/outputs/apk/release/*.apk
 
+      # ----------------------------
+      # 🚀 PRODUCTION BUILD (AAB)
+      # ----------------------------
+      - name: Inject signing env vars
+        if: github.ref_name == 'master'
+        run: echo "Preparing release build"
+
+        env:
+          MYAPP_UPLOAD_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          MYAPP_UPLOAD_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          MYAPP_UPLOAD_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+
       - name: Build Release AAB
         if: github.ref_name == 'master'
         run: |
           cd android
           ./gradlew bundleRelease
+        env:
+          MYAPP_UPLOAD_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          MYAPP_UPLOAD_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          MYAPP_UPLOAD_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
 
-      - name: Upload Release AAB
+      - name: Upload AAB
         if: github.ref_name == 'master'
         uses: actions/upload-artifact@v4
         with:
