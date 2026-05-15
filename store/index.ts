@@ -145,6 +145,8 @@ export interface Route {
   via_iata: string | null;
   total_dist_nm: number;
   via_pax_ratio: number | null; // O&D split: fraction of pax deplaning at via stop
+  leg1_dist_nm: number | null; // origin → via distance (nm)
+  leg2_dist_nm: number | null; // via → dest distance (nm)
   active: boolean;
   price_strategy?: PriceStrategy;
 }

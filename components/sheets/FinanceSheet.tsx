@@ -200,7 +200,7 @@ export default function FinanceSheet() {
           paxDay: r.demand.base_pax_day,
           costPerSector: p.cost_per_sector ?? 500,
           fuelPerNm: p.fuel_per_nm ?? 2,
-          priceStrategy: (r as any).price_strategy ?? "standard",
+          priceStrategy: r.price_strategy ?? "standard",
           priceElasticity: r.demand.price_elasticity ?? 1,
           businessPct: r.demand.business_pct ?? 0.25,
           leisurePct: r.demand.leisure_pct ?? 0.75,

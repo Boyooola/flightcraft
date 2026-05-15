@@ -528,7 +528,8 @@ export default function RoutesSheet() {
     const map = new Map<string, Route[]>();
 
     activeRoutes.forEach((route) => {
-      const key = route.demand.id;
+      // Include via_iata in key — same demand, different via = different group
+      const key = `${route.demand.id}__${route.via_iata ?? "direct"}`;
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(route);
     });
@@ -636,7 +637,7 @@ export default function RoutesSheet() {
         congestionMultiplier: congestionMul,
         routeId: first.id,
         currentPlaneId: first.plane.id,
-        viaPaxRatio: (first as any).via_pax_ratio ?? null,
+        viaPaxRatio: first.via_pax_ratio ?? null,
       };
     });
   }, [activeRoutes, liveDemands, dayProgress, hubs]);

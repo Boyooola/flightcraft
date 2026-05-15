@@ -335,21 +335,35 @@ export function calcInstantDeliveryReward(params: {
 
   // ── O&D via route — split revenue across two legs ──────────────
   if (viaPaxRatio != null && leg1DistNm != null && leg2DistNm != null) {
-    const { calcOdRevenue } = require("@/lib/od");
     const pricing = priceStrategyConfig(priceStrategy, priceElasticity);
-    const od = calcOdRevenue({
-      totalDeliveredPax: deliveredPax,
-      viaPaxRatio,
-      leg1DistNm,
-      leg2DistNm,
+    const THROUGH = 1.35; // through-fare premium
+    const MIN_RATIO = 0.15;
+    const MAX_RATIO = 0.7;
+    const ratio = Math.max(MIN_RATIO, Math.min(MAX_RATIO, viaPaxRatio));
+    const transitPax = Math.max(5, Math.round(deliveredPax * ratio));
+    const localPax = Math.max(0, deliveredPax - transitPax);
+
+    const leg1Ypp = yieldPerPax(
+      haulFromDistance(leg1DistNm),
       trustPct,
-      fareMultiplier: pricing.fareMultiplier,
-      businessPct,
-      leisurePct,
-    });
+      leg1DistNm,
+    );
+    const leg2Ypp = yieldPerPax(
+      haulFromDistance(leg2DistNm),
+      trustPct,
+      leg2DistNm,
+    );
+
+    const leg1Rev = Math.round(
+      (localPax + transitPax) * leg1Ypp * pricing.fareMultiplier,
+    );
+    const leg2Rev = Math.round(
+      transitPax * leg2Ypp * pricing.fareMultiplier * THROUGH,
+    );
+
     return Math.max(
       0,
-      Math.round(od.totalRevenue * crowdMultiplier * congestionMultiplier),
+      Math.round((leg1Rev + leg2Rev) * crowdMultiplier * congestionMultiplier),
     );
   }
 

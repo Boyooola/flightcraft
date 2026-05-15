@@ -12,6 +12,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useEffect, useRef, useState } from "react";
 import {
   Animated,
+  Linking,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -29,7 +30,11 @@ const FEATURES = [
 export default function AuthScreen() {
   const insets = useSafeAreaInsets();
   const { signIn, isLoading } = useAuth();
+  // failed = true only when player manually taps Sign In and it fails
+  // silent sign-in failure on mount is normal — just show the sign-in screen
   const [failed, setFailed] = useState(false);
+  const [ready, setReady] = useState(false);
+  const [silentDone, setSilentDone] = useState(false);
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(24)).current;
@@ -37,36 +42,44 @@ export default function AuthScreen() {
   // Attempt silent sign-in on mount
   useEffect(() => {
     signIn().then((result) => {
-      if (!result) setFailed(true);
+      setSilentDone(true);
+      if (!result) {
+        // Silent sign-in failed — totally normal for first-time users
+        // Do NOT set failed — just show the sign-in button cleanly
+        setReady(true);
+      }
+      // If result is truthy, game phase changes — screen unmounts naturally
     });
   }, []);
 
-  // Fade in once we know silent sign-in failed
+  // Fade in only when we are ready to show the full screen
   useEffect(() => {
-    if (failed || (!isLoading && !failed)) {
-      Animated.parallel([
-        Animated.timing(fadeAnim, {
-          toValue: 1,
-          duration: 500,
-          useNativeDriver: true,
-        }),
-        Animated.timing(slideAnim, {
-          toValue: 0,
-          duration: 450,
-          useNativeDriver: true,
-        }),
-      ]).start();
-    }
-  }, [failed, isLoading]);
+    if (!ready) return;
+    Animated.parallel([
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 500,
+        useNativeDriver: true,
+      }),
+      Animated.timing(slideAnim, {
+        toValue: 0,
+        duration: 450,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [ready]);
 
   const handleSignIn = async () => {
     setFailed(false);
     const result = await signIn();
-    if (!result) setFailed(true);
+    if (!result) {
+      // Player explicitly tapped Sign In and it failed — now show the error
+      setFailed(true);
+    }
   };
 
   // While silently signing in — minimal spinner, no flash of content
-  if (isLoading && !failed) {
+  if (!ready) {
     return (
       <View style={s.splashContainer}>
         <View style={s.logoWrap}>
@@ -124,6 +137,20 @@ export default function AuthScreen() {
                 again.
               </Text>
             </View>
+          )}
+
+          {failed && (
+            <TouchableOpacity
+              style={s.installBtn}
+              onPress={() =>
+                Linking.openURL(
+                  "https://play.google.com/store/apps/details?id=com.google.android.play.games",
+                )
+              }
+              activeOpacity={0.8}
+            >
+              <Text style={s.installTxt}>Get Google Play Games →</Text>
+            </TouchableOpacity>
           )}
 
           <TouchableOpacity
@@ -269,6 +296,18 @@ const s = StyleSheet.create({
     fontSize: 12,
     color: Colors.amber,
     lineHeight: 17,
+  },
+  installBtn: {
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: "rgba(56,189,248,0.3)",
+    paddingVertical: 10,
+    alignItems: "center",
+  },
+  installTxt: {
+    fontSize: 13,
+    color: Colors.sky,
+    fontWeight: "600",
   },
   signInBtn: {
     backgroundColor: "#1a73e8",

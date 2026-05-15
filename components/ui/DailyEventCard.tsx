@@ -10,7 +10,7 @@ import { Colors, Radius, Spacing } from "@/constants/theme";
 import { useHudHeight } from "@/hooks/useSheetLayout";
 import { useDailyEvent, useGameStore } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Animated,
   StyleSheet,
@@ -44,7 +44,7 @@ export default function DailyEventCard() {
 
   const top = hudH + Spacing.sm;
 
-  function dismiss() {
+  const dismiss = useCallback(() => {
     if (holdTimer.current) clearTimeout(holdTimer.current);
     if (progAnim.current) progAnim.current.stop();
 
@@ -74,7 +74,8 @@ export default function DailyEventCard() {
       scale.setValue(0.96);
       progress.setValue(1);
     });
-  }
+    // Animated values are stable refs — no closure staleness
+  }, [slideY, opacity, scale, progress]);
 
   useEffect(() => {
     if (!dailyEvent) return;

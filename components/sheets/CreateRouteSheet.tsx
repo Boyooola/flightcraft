@@ -824,8 +824,8 @@ export default function CreateRouteSheet() {
                 </View>
               </View>
               <Text style={s.odHint}>
-                ✈ Passengers continuing to {dest?.iata} pay more — they&apos;re
-                booking the full journey
+                ✈ Passengers continuing to {dest?.iata} pay more — booking the
+                full journey
               </Text>
               {paxDay > 0 && paxDay < 20 && (
                 <View style={s.odWarn}>
@@ -1144,38 +1144,6 @@ const rush = StyleSheet.create({
     flexDirection: "row",
     gap: Spacing.sm,
   },
-  statBox: {
-    flex: 1,
-    alignItems: "center",
-    borderRadius: Radius.lg,
-    backgroundColor: "rgba(255,255,255,.035)",
-    paddingVertical: Spacing.sm,
-  },
-  statValue: {
-    fontSize: 18,
-    fontWeight: "900",
-  },
-  statLabel: {
-    fontSize: 8,
-    color: Colors.dim,
-    fontWeight: "800",
-  },
-  progressRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.sm,
-  },
-  track: {
-    flex: 1,
-    height: 5,
-    backgroundColor: "rgba(255,255,255,.08)",
-    borderRadius: 999,
-    overflow: "hidden",
-  },
-  fill: {
-    height: "100%",
-    borderRadius: 999,
-  },
   progressText: {
     fontSize: 10,
     fontWeight: "900",
@@ -1201,12 +1169,6 @@ const rush = StyleSheet.create({
     flexDirection: "row",
     alignItems: "flex-start",
     gap: 6,
-  },
-  mixRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    marginBottom: 4,
   },
   mixTxt: { fontSize: 10, fontWeight: "700" },
   note: {
@@ -1266,10 +1228,6 @@ const planeStyles = StyleSheet.create({
     fontSize: 10,
     color: Colors.dim,
   },
-  flowRow: {
-    flexDirection: "row",
-    gap: Spacing.sm,
-  },
   flowBox: {
     flex: 1,
     alignItems: "center",
@@ -1284,21 +1242,6 @@ const planeStyles = StyleSheet.create({
   flowLabel: {
     fontSize: 8,
     color: Colors.dim,
-  },
-  barRow: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  track: {
-    flex: 1,
-    height: 4,
-    backgroundColor: "rgba(255,255,255,.08)",
-    borderRadius: 999,
-    overflow: "hidden",
-  },
-  fill: {
-    height: "100%",
-    borderRadius: 999,
   },
 });
 
@@ -1703,17 +1646,6 @@ const s = StyleSheet.create({
     color: Colors.dim,
     marginTop: 3,
     fontWeight: "700",
-  },
-
-  recommendedBox: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    backgroundColor: "rgba(255,255,255,.025)",
-    padding: Spacing.md,
-    marginBottom: Spacing.sm,
   },
 
   recommendedTitle: {

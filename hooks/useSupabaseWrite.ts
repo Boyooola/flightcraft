@@ -15,8 +15,7 @@ import { gameSounds } from "@/hooks/useGameSounds";
 import {
   generateDemands,
   generateOneDemand,
-  hubPurchaseCost,
-  simulatePaxDay,
+  hubPurchaseCost
 } from "@/lib/demands";
 import { fmtCash } from "@/lib/revenue";
 import { supabase } from "@/lib/supabase";
@@ -370,38 +369,61 @@ export function useCreateRoute() {
 
       const routeDistNm = totalDistNm ?? demand.dist_nm;
 
-      // Auto-compute via_pax_ratio for connecting routes
+      // Auto-compute via_pax_ratio and leg distances for connecting routes
       let computedViaPaxRatio = viaPaxRatio;
-      if (viaIata && !computedViaPaxRatio) {
+      let leg1DistNm: number | null = null;
+      let leg2DistNm: number | null = null;
+
+      if (viaIata) {
         try {
           const { computeViaPaxRatio } = await import("@/lib/od");
           const viaAirport = airports.find((a) => a.iata === viaIata);
           const destAirport = demand.dest;
-          if (viaAirport && destAirport && totalDistNm) {
-            // Approximate leg distances — origin→via and via→dest
-            const originAirport = demand.origin;
-            const leg1 =
-              originAirport && viaAirport
-                ? Math.round(
-                    Math.sqrt(
-                      Math.pow((originAirport.lat - viaAirport.lat) * 60, 2) +
-                        Math.pow(
-                          (originAirport.lng - viaAirport.lng) *
-                            60 *
-                            Math.cos((originAirport.lat * Math.PI) / 180),
-                          2,
-                        ),
-                    ),
-                  )
-                : totalDistNm * 0.5;
-            const leg2 = totalDistNm - leg1;
-            computedViaPaxRatio = computeViaPaxRatio({
-              leg1Nm: leg1,
-              leg2Nm: leg2,
-              viaAirport,
-              destAirport,
-              businessPct: demand.business_pct ?? 0.25,
-            });
+          const originAirport = demand.origin;
+
+          if (viaAirport && originAirport) {
+            // Haversine distance — accurate for any distance on earth
+            const haversine = (
+              lat1: number,
+              lng1: number,
+              lat2: number,
+              lng2: number,
+            ): number => {
+              const R = 3440.065; // Earth radius in nautical miles
+              const dLat = ((lat2 - lat1) * Math.PI) / 180;
+              const dLng = ((lng2 - lng1) * Math.PI) / 180;
+              const a =
+                Math.sin(dLat / 2) ** 2 +
+                Math.cos((lat1 * Math.PI) / 180) *
+                  Math.cos((lat2 * Math.PI) / 180) *
+                  Math.sin(dLng / 2) ** 2;
+              return Math.round(
+                R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)),
+              );
+            };
+
+            leg1DistNm = haversine(
+              originAirport.lat,
+              originAirport.lng,
+              viaAirport.lat,
+              viaAirport.lng,
+            );
+            leg2DistNm = haversine(
+              viaAirport.lat,
+              viaAirport.lng,
+              destAirport.lat,
+              destAirport.lng,
+            );
+
+            if (!computedViaPaxRatio) {
+              computedViaPaxRatio = computeViaPaxRatio({
+                leg1Nm: leg1DistNm,
+                leg2Nm: leg2DistNm,
+                viaAirport,
+                destAirport,
+                businessPct: demand.business_pct ?? 0.25,
+              });
+            }
           }
         } catch {}
       }
@@ -433,6 +455,8 @@ export function useCreateRoute() {
         total_dist_nm: routeDistNm,
         active: true,
         via_pax_ratio: computedViaPaxRatio,
+        leg1_dist_nm: leg1DistNm,
+        leg2_dist_nm: leg2DistNm,
         price_strategy: "standard",
       });
 
@@ -451,6 +475,9 @@ export function useCreateRoute() {
             via_iata: viaIata,
             total_dist_nm: routeDistNm,
             active: true,
+            via_pax_ratio: computedViaPaxRatio,
+            leg1_dist_nm: leg1DistNm,
+            leg2_dist_nm: leg2DistNm,
           })
           .select()
           .single();
@@ -479,6 +506,8 @@ export function useCreateRoute() {
           total_dist_nm: routeDistNm,
           active: true,
           via_pax_ratio: computedViaPaxRatio,
+          leg1_dist_nm: leg1DistNm,
+          leg2_dist_nm: leg2DistNm,
         });
 
         setOwnedPlanes(
@@ -933,14 +962,41 @@ export function useCreateCustomRoute() {
       );
 
       let viaPaxRatio: number | null = null;
+      let leg1DistNmC: number | null = null;
+      let leg2DistNmC: number | null = null;
+
       if (via) {
-        const legDemand = demands.find(
-          (d) => d.origin.iata === origin.iata && d.dest.iata === via.iata,
-        );
-        const legPaxDay =
-          legDemand?.base_pax_day ?? simulatePaxDay(origin, via, distNm);
-        const throughPaxDay = paxDay;
-        viaPaxRatio = legPaxDay / Math.max(1, legPaxDay + throughPaxDay);
+        // Haversine — proper great-circle distance
+        const haversineC = (
+          lat1: number,
+          lng1: number,
+          lat2: number,
+          lng2: number,
+        ): number => {
+          const R = 3440.065;
+          const dLat = ((lat2 - lat1) * Math.PI) / 180;
+          const dLng = ((lng2 - lng1) * Math.PI) / 180;
+          const a =
+            Math.sin(dLat / 2) ** 2 +
+            Math.cos((lat1 * Math.PI) / 180) *
+              Math.cos((lat2 * Math.PI) / 180) *
+              Math.sin(dLng / 2) ** 2;
+          return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+        };
+
+        leg1DistNmC = haversineC(origin.lat, origin.lng, via.lat, via.lng);
+        leg2DistNmC = haversineC(via.lat, via.lng, dest.lat, dest.lng);
+
+        try {
+          const { computeViaPaxRatio } = await import("@/lib/od");
+          viaPaxRatio = computeViaPaxRatio({
+            leg1Nm: leg1DistNmC,
+            leg2Nm: leg2DistNmC,
+            viaAirport: via,
+            destAirport: dest,
+            businessPct: 0.25,
+          });
+        } catch {}
       }
 
       const tempRouteId = `custom-route-${Date.now()}-${plane.id}`;
@@ -963,6 +1019,8 @@ export function useCreateCustomRoute() {
           via_iata: via?.iata ?? null,
           total_dist_nm: totalDist,
           via_pax_ratio: viaPaxRatio,
+          leg1_dist_nm: leg1DistNmC,
+          leg2_dist_nm: leg2DistNmC,
           active: true,
           price_strategy: "standard",
         });
@@ -991,6 +1049,8 @@ export function useCreateCustomRoute() {
           via_iata: via?.iata ?? null,
           total_dist_nm: totalDist,
           via_pax_ratio: viaPaxRatio,
+          leg1_dist_nm: leg1DistNmC,
+          leg2_dist_nm: leg2DistNmC,
           active: true,
           price_strategy: "standard",
         });
@@ -1058,6 +1118,9 @@ export function useCreateCustomRoute() {
             via_iata: via?.iata ?? null,
             total_dist_nm: totalDist,
             active: true,
+            via_pax_ratio: viaPaxRatio,
+            leg1_dist_nm: leg1DistNmC,
+            leg2_dist_nm: leg2DistNmC,
           })
           .select()
           .single();
@@ -1093,6 +1156,8 @@ export function useCreateCustomRoute() {
           via_iata: via?.iata ?? null,
           total_dist_nm: totalDist,
           via_pax_ratio: viaPaxRatio,
+          leg1_dist_nm: leg1DistNmC,
+          leg2_dist_nm: leg2DistNmC,
           active: true,
         });
 

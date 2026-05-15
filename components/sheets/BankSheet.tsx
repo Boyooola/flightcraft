@@ -215,7 +215,7 @@ function LoanCard({
           <Text style={[lc.statVal, { color: Colors.red }]}>
             -{fmtCash(dailyDrag)}
           </Text>
-          <Text style={lc.statLbl}>DAILY DRAG</Text>
+          <Text style={lc.statLbl}>Daily interest</Text>
         </View>
         <View style={lc.stat}>
           <Text style={lc.statVal}>{pkg.minRoutes}</Text>
@@ -334,8 +334,8 @@ export default function BankSheet() {
 
     setSuccess(
       loan - amount <= 0
-        ? "Debt cleared. Daily drag removed."
-        : `${fmtCash(amount)} repaid. Daily drag reduced.`,
+        ? "Loan fully repaid — no more interest charges."
+        : `${fmtCash(amount)} repaid — interest reduced.`,
     );
     haptics.success();
   };
@@ -421,7 +421,7 @@ export default function BankSheet() {
 
       {loan > 0 && (
         <View style={s.repayCard}>
-          <Text style={s.eyebrow}>CLEAR DAILY DRAG</Text>
+          <Text style={s.eyebrow}>REPAY LOAN</Text>
           <Text style={s.repayHint}>
             Repay loans to keep more cash from every passenger rush.
           </Text>
@@ -492,7 +492,7 @@ export default function BankSheet() {
         />
         <Text style={s.infoTxt}>
           Boosts are useful when they help you open routes, buy planes, and
-          clear demand faster than the daily drag costs you.
+          clear demand faster than the daily interest costs you.
         </Text>
       </View>
     </BottomSheetScrollView>

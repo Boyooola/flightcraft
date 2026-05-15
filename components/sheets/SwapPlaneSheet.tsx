@@ -13,6 +13,7 @@ import { Colors, Spacing } from "@/constants/theme";
 import { useTabBarHeight } from "@/hooks/useSheetLayout";
 import { useSwapPlane } from "@/hooks/useSwapPlane";
 import { computeAircraftUtilization } from "@/lib/revenue";
+import type { Route } from "@/store";
 import { useOwnedPlanes, useRoutes } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
 import type { BottomSheetBackdropProps } from "@gorhom/bottom-sheet";
@@ -23,27 +24,18 @@ import BottomSheet, {
 import { useCallback, useMemo, useRef, useState } from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
+// SwapRouteGroup maps directly to what RoutesSheet's RouteGroup provides
 export interface SwapRouteGroup {
   routeId: string;
   currentPlaneId: string;
   total_dist_nm: number;
+  via_iata?: string | null;
   demand: {
     origin: { iata: string };
     dest: { iata: string };
     base_pax_day: number;
   };
-  routes: {
-    id: string;
-    plane: {
-      id: string;
-      plane_model: {
-        nickname: string;
-        pax_capacity: number;
-        range_nm: number;
-        speed_kts: number;
-      };
-    };
-  }[];
+  routes: Route[];
 }
 
 interface Props {

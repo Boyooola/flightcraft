@@ -10,7 +10,7 @@ import type { DaySummaryToastData } from "@/hooks/useToast";
 import { useToastListener } from "@/hooks/useToast";
 import { fmtCash } from "@/lib/revenue";
 import { Ionicons } from "@expo/vector-icons";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Animated,
   StyleSheet,
@@ -56,7 +56,7 @@ export default function DaySummaryCard() {
       (toast): toast is DaySummaryToastData => toast.type === "day-summary",
     ) ?? null;
 
-  const dismissCurrent = () => {
+  const dismissCurrent = useCallback(() => {
     if (holdTimer.current) clearTimeout(holdTimer.current);
     if (progAnim.current) progAnim.current.stop();
 
@@ -87,7 +87,8 @@ export default function DaySummaryCard() {
       scale.setValue(0.98);
       progress.setValue(1);
     });
-  };
+    // Refs are stable — no deps needed. dismiss reads currentRef not state.
+  }, [dismiss, slideY, opacity, scale, progress]);
 
   useEffect(() => {
     if (!next || currentRef.current) return;
@@ -146,7 +147,6 @@ export default function DaySummaryCard() {
   const waitingPax = current.waitingPax ?? 0;
   const stalledRoutes = current.stalledRoutes ?? 0;
   const aiLostPax = current.aiStolenPax ?? 0;
-  const busyHubs = current.busyHubs ?? 0;
   const overcrowdedHubs = current.overcrowdedHubs ?? 0;
   const crisisHubs = current.crisisHubs ?? 0;
 
@@ -200,7 +200,7 @@ export default function DaySummaryCard() {
             </View>
 
             <View style={s.center}>
-              <Text style={s.label}>DAILY RESULT</Text>
+              <Text style={s.label}>Today&apos;s result</Text>
               <Text
                 style={[s.net, { color: netPositive ? GREEN : RED }]}
                 numberOfLines={1}
@@ -268,8 +268,8 @@ export default function DaySummaryCard() {
 
           <View style={s.footer}>
             <Text style={s.footerText} numberOfLines={1}>
-              Rewards {fmtCash(revenue)}
-              {interest > 0 ? ` · Loan -${fmtCash(interest)}` : ""}
+              Earned {fmtCash(revenue)}
+              {interest > 0 ? ` · Interest -${fmtCash(interest)}` : ""}
             </Text>
 
             <Text

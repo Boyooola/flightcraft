@@ -35,10 +35,10 @@ const MIN_TRANSIT_PAX = 5;
 const TIER_APPEAL: Record<AirportTier, number> = {
   mega: 1.0, // mega hub — LHR, DXB, SIN → lots of through pax
   large: 0.75, // large hub
-  major: 0.55, // medium airport
-  regional: 0.35, // small airport
-  minor: 0.2,
-  local: 0,
+  major: 0.55, // major airport
+  minor: 0.35, // small airport
+  regional: 0.2, // regional
+  local: 0.1, // local airport — mostly origin/destination, few connections
 };
 
 export interface OdSplit {
@@ -194,7 +194,14 @@ export function calcOdRevenue(params: {
 /**
  * Format split for display in RoutesSheet.
  * e.g. "42 local · 18 transit"
+ * Returns null if demand is too low to show a meaningful split.
  */
-export function formatOdSplit(localPax: number, transitPax: number): string {
+export function formatOdSplit(
+  localPax: number,
+  transitPax: number,
+  totalPax: number,
+): string | null {
+  // Don't show split if total demand is too low to be meaningful
+  if (totalPax < 8) return null;
   return `${localPax} local · ${transitPax} transit`;
 }
