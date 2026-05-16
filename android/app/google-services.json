@@ -14,6 +14,14 @@
       },
       "oauth_client": [
         {
+          "client_id": "364325398732-dqqmbq8ijh2gi740geukt91iiflg246m.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.stratoslabs.flightcraft",
+            "certificate_hash": "3c4c787da1844105029ca28a97a543e324b35c76"
+          }
+        },
+        {
           "client_id": "364325398732-smb7fk719t96vai07k8qub1vpmrm4jtt.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
