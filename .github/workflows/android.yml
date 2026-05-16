@@ -65,13 +65,20 @@ jobs:
       - name: Decode Keystore
         if: github.ref_type == 'tag'
         run: |
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > release-key.jks
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > android/app/release-key.jks
 
       - name: Move Keystore
         if: github.ref_type == 'tag'
         run: |
           mkdir -p android/app
           mv release-key.jks android/app/release-key.jks
+
+      - name: Set Gradle signing properties
+        if: github.ref_type == 'tag'
+        run: |
+          echo "MYAPP_UPLOAD_STORE_PASSWORD=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" >> android/gradle.properties
+          echo "MYAPP_UPLOAD_KEY_PASSWORD=${{ secrets.ANDROID_KEY_PASSWORD }}" >> android/gradle.properties
+          echo "MYAPP_UPLOAD_KEY_ALIAS=${{ secrets.ANDROID_KEY_ALIAS }}" >> android/gradle.properties
 
       # ----------------------------
       # 🚀 RELEASE BUILD (AAB ONLY ON TAGS)
