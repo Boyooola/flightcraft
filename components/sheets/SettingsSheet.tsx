@@ -333,13 +333,13 @@ export default function SettingsSheet() {
         <SettingRow
           icon="information-circle-outline"
           label="Version"
-          sublabel="0.4.0"
+          sublabel="0.4.1"
           color={Colors.dim}
         />
         <Divider />
         <SettingRow
           icon="star-outline"
-          label="Rate FlightCraft"
+          label="Rate Flightcraft"
           sublabel="Leave a review on the Play Store"
           onPress={() => openPlayStorePage()}
           color={Colors.amber}
