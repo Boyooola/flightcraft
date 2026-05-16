@@ -1,147 +1,113 @@
 package com.stratoslabs.flightcraft
 
-import android.app.Activity
+import android.util.Log
 import com.facebook.react.bridge.*
+import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.games.PlayGames
 
 class PlayGamesModule(
     private val reactContext: ReactApplicationContext
 ) : ReactContextBaseJavaModule(reactContext) {
 
-    override fun getName(): String {
-        return "PlayGamesModule"
-    }
+    override fun getName(): String = "PlayGamesModule"
 
-    // ─────────────────────────────────────────────
-    // Auto Sign-In
-    // ─────────────────────────────────────────────
+    private val TAG = "PlayGamesModule"
+
+    // ── Sign In ───────────────────────────────────────────────────
     @ReactMethod
     fun signIn(promise: Promise) {
-        val activity = reactApplicationContext.currentActivity ?: return
-
+        val activity = currentActivity
         if (activity == null) {
-            promise.reject("NO_ACTIVITY", "Activity doesn't exist")
+            Log.e(TAG, "signIn: no activity")
+            promise.reject("NO_ACTIVITY", "No activity available")
             return
         }
+
+        Log.d(TAG, "signIn: checking isAuthenticated...")
 
         PlayGames.getGamesSignInClient(activity)
             .isAuthenticated()
             .addOnSuccessListener { authResult ->
+                Log.d(TAG, "isAuthenticated result: ${authResult.isAuthenticated}")
 
                 if (authResult.isAuthenticated) {
-
-                    PlayGames.getPlayersClient(activity)
-                        .currentPlayer
-                        .addOnSuccessListener { player ->
-
-                            val map = Arguments.createMap()
-
-                            map.putString("playerId", player.playerId)
-                            map.putString("displayName", player.displayName)
-
-                            if (player.iconImageUri != null) {
-                                map.putString(
-                                    "avatarUrl",
-                                    player.iconImageUri.toString()
-                                )
-                            }
-
-                            promise.resolve(map)
-                        }
-                        .addOnFailureListener {
-                            promise.reject("PLAYER_ERROR", it)
-                        }
-
+                    fetchPlayer(activity, promise)
                 } else {
-
+                    Log.d(TAG, "Not authenticated — calling signIn()...")
                     PlayGames.getGamesSignInClient(activity)
                         .signIn()
                         .addOnSuccessListener {
-
-                            PlayGames.getPlayersClient(activity)
-                                .currentPlayer
-                                .addOnSuccessListener { player ->
-
-                                    val map = Arguments.createMap()
-
-                                    map.putString("playerId", player.playerId)
-                                    map.putString("displayName", player.displayName)
-
-                                    if (player.iconImageUri != null) {
-                                        map.putString(
-                                            "avatarUrl",
-                                            player.iconImageUri.toString()
-                                        )
-                                    }
-
-                                    promise.resolve(map)
-                                }
-                                .addOnFailureListener {
-                                    promise.reject("PLAYER_ERROR", it)
-                                }
+                            Log.d(TAG, "signIn() succeeded — fetching player...")
+                            fetchPlayer(activity, promise)
                         }
-                        .addOnFailureListener {
-                            promise.reject("SIGN_IN_FAILED", it)
+                        .addOnFailureListener { e ->
+                            val code = (e as? ApiException)?.statusCode
+                            Log.e(TAG, "signIn() failed — statusCode: $code message: ${e.message}")
+                            promise.reject("SIGN_IN_FAILED", "statusCode=$code: ${e.message}", e)
                         }
                 }
             }
-            .addOnFailureListener {
-                promise.reject("AUTH_ERROR", it)
+            .addOnFailureListener { e ->
+                val code = (e as? ApiException)?.statusCode
+                Log.e(TAG, "isAuthenticated failed — statusCode: $code message: ${e.message}")
+                promise.reject("AUTH_ERROR", "statusCode=$code: ${e.message}", e)
             }
     }
 
-    // ─────────────────────────────────────────────
-    // Achievements
-    // ─────────────────────────────────────────────
-    @ReactMethod
-    fun unlockAchievement(achievementId: String) {
-        val activity = reactApplicationContext.currentActivity ?: return
-
-        PlayGames.getAchievementsClient(activity)
-            .unlock(achievementId)
+    private fun fetchPlayer(activity: android.app.Activity, promise: Promise) {
+        Log.d(TAG, "fetchPlayer: getting currentPlayer...")
+        PlayGames.getPlayersClient(activity)
+            .currentPlayer
+            .addOnSuccessListener { player ->
+                Log.d(TAG, "fetchPlayer: got player ${player.playerId}")
+                val map = Arguments.createMap().apply {
+                    putString("playerId",    player.playerId)
+                    putString("displayName", player.displayName)
+                    player.iconImageUri?.let { putString("avatarUrl", it.toString()) }
+                }
+                promise.resolve(map)
+            }
+            .addOnFailureListener { e ->
+                val code = (e as? ApiException)?.statusCode
+                Log.e(TAG, "fetchPlayer failed — statusCode: $code message: ${e.message}")
+                promise.reject("PLAYER_ERROR", "statusCode=$code: ${e.message}", e)
+            }
     }
 
-    // ─────────────────────────────────────────────
-    // Leaderboards
-    // ─────────────────────────────────────────────
+    // ── Achievements ──────────────────────────────────────────────
+    @ReactMethod
+    fun unlockAchievement(achievementId: String) {
+        val activity = currentActivity ?: return
+        PlayGames.getAchievementsClient(activity).unlock(achievementId)
+    }
+
+    @ReactMethod
+    fun setAchievementSteps(achievementId: String, steps: Int) {
+        val activity = currentActivity ?: return
+        PlayGames.getAchievementsClient(activity).setSteps(achievementId, steps)
+    }
+
+    @ReactMethod
+    fun showAchievements() {
+        val activity = currentActivity ?: return
+        PlayGames.getAchievementsClient(activity)
+            .achievementsIntent
+            .addOnSuccessListener { activity.startActivityForResult(it, 9003) }
+    }
+
+    // ── Leaderboard ───────────────────────────────────────────────
     @ReactMethod
     fun submitScore(leaderboardId: String, score: Double) {
-        val activity = reactApplicationContext.currentActivity ?: return
-
+        val activity = currentActivity ?: return
         PlayGames.getLeaderboardsClient(activity)
             .submitScore(leaderboardId, score.toLong())
     }
 
     @ReactMethod
-    fun showAchievements() {
-        val activity = reactApplicationContext.currentActivity ?: return
-
-        PlayGames.getAchievementsClient(activity)
-            .achievementsIntent
-            .addOnSuccessListener {
-                activity.startActivityForResult(it, 9003)
-            }
-    }
-
-    @ReactMethod
     fun showLeaderboard(leaderboardId: String) {
-        val activity = reactApplicationContext.currentActivity ?: return
-
+        val activity = currentActivity ?: return
         PlayGames.getLeaderboardsClient(activity)
             .getLeaderboardIntent(leaderboardId)
-            .addOnSuccessListener {
-                activity.startActivityForResult(it, 9004)
-            }
-    }
-
-    @ReactMethod
-    fun setAchievementSteps(
-        achievementId: String,
-        steps: Int
-    ) {
-         val activity = reactApplicationContext.currentActivity ?: return
-
-        PlayGames.getAchievementsClient(activity)
-            .setSteps(achievementId, steps)
+            .addOnSuccessListener { activity.startActivityForResult(it, 9004) }
     }
 }

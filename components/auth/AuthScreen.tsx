@@ -85,7 +85,7 @@ export default function AuthScreen() {
         <View style={s.logoWrap}>
           <Ionicons name="airplane" size={40} color={Colors.sky} />
         </View>
-        <Text style={s.splashName}>FlightCraft</Text>
+        <Text style={s.splashName}>Flightcraft</Text>
       </View>
     );
   }
@@ -109,7 +109,7 @@ export default function AuthScreen() {
           <View style={s.logoWrap}>
             <Ionicons name="airplane" size={44} color={Colors.sky} />
           </View>
-          <Text style={s.appName}>FlightCraft</Text>
+          <Text style={s.appName}>Flightcraft</Text>
           <Text style={s.tagline}>
             Run your own airline.{"\n"}Compete. Expand. Dominate.
           </Text>
