@@ -58,7 +58,15 @@ jobs:
         run: chmod +x android/gradlew
 
       # ----------------------------
-      # 🔐 VERIFY KEYSTORE (MASTER ONLY)
+      # 🧹 CLEAN (IMPORTANT)
+      # ----------------------------
+      - name: Clean Android build
+        run: |
+          cd android
+          ./gradlew clean
+
+      # ----------------------------
+      # 🔐 VERIFY KEYSTORE
       # ----------------------------
       - name: Verify keystore
         run: |
@@ -69,11 +77,11 @@ jobs:
       # ----------------------------
       # 🔐 SET SIGNING PROPERTIES
       # ----------------------------
-      # - name: Set Gradle signing properties
-      #   run: |
-      #     echo "MYAPP_UPLOAD_STORE_PASSWORD=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" >> android/gradle.properties
-      #     echo "MYAPP_UPLOAD_KEY_PASSWORD=${{ secrets.ANDROID_KEY_PASSWORD }}" >> android/gradle.properties
-      #     echo "MYAPP_UPLOAD_KEY_ALIAS=${{ secrets.ANDROID_KEY_ALIAS }}" >> android/gradle.properties
+      - name: Set Gradle signing properties
+        run: |
+          echo "MYAPP_UPLOAD_STORE_PASSWORD=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" >> android/gradle.properties
+          echo "MYAPP_UPLOAD_KEY_PASSWORD=${{ secrets.ANDROID_KEY_PASSWORD }}" >> android/gradle.properties
+          echo "MYAPP_UPLOAD_KEY_ALIAS=${{ secrets.ANDROID_KEY_ALIAS }}" >> android/gradle.properties
 
       # ----------------------------
       # 📱 DEV BUILD (DEBUG APK)
