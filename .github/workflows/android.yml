@@ -5,8 +5,6 @@ on:
     branches:
       - dev
       - master
-    tags:
-      - "v*"
 
   workflow_dispatch:
 
@@ -15,81 +13,97 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # ----------------------------
+      # 📥 CHECKOUT
+      # ----------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      # ----------------------------
+      # 🟢 NODE.JS
+      # ----------------------------
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
 
+      # ----------------------------
+      # ☕ JAVA 17
+      # ----------------------------
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
 
+      # ----------------------------
+      # 🤖 ANDROID SDK
+      # ----------------------------
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      # ----------------------------
+      # 📦 INSTALL DEPENDENCIES
+      # ----------------------------
       - name: Install dependencies
         run: npm install
 
       # ----------------------------
-      # 🔧 PERMISSIONS FIX
+      # 🔧 GRADLE PERMISSIONS
       # ----------------------------
       - name: Make gradlew executable
         run: chmod +x android/gradlew
 
       # ----------------------------
-      # 🔐 LOAD KEYSTORE (TAG ONLY)
+      # 🔐 VERIFY KEYSTORE (MASTER ONLY)
       # ----------------------------
       - name: Verify keystore
+        if: github.ref_name == 'master'
         run: |
           keytool -list -v \
             -keystore android/app/release-key.jks \
             -storepass "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}"
 
-      - name: Decode Keystore
-        run: |
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > android/app/release-key.jks
-
+      # ----------------------------
+      # 🔐 SET SIGNING PROPERTIES
+      # ----------------------------
       - name: Set Gradle signing properties
+        if: github.ref_name == 'master'
         run: |
           echo "MYAPP_UPLOAD_STORE_PASSWORD=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" >> android/gradle.properties
           echo "MYAPP_UPLOAD_KEY_PASSWORD=${{ secrets.ANDROID_KEY_PASSWORD }}" >> android/gradle.properties
           echo "MYAPP_UPLOAD_KEY_ALIAS=${{ secrets.ANDROID_KEY_ALIAS }}" >> android/gradle.properties
 
       # ----------------------------
-      # 📱 DEV BUILD (APK)
+      # 📱 DEV BUILD (DEBUG APK)
       # ----------------------------
       - name: Build Dev APK
-        if: github.ref_type == 'branch'
+        if: github.ref_name == 'dev'
         run: |
           cd android
-          ./gradlew assembleRelease
+          ./gradlew assembleDebug
 
       - name: Upload Dev APK
-        if: github.ref_type == 'branch'
+        if: github.ref_name == 'dev'
         uses: actions/upload-artifact@v4
         with:
           name: dev-apk
-          path: android/app/build/outputs/apk/release/*.apk
+          path: android/app/build/outputs/apk/debug/*.apk
 
       # ----------------------------
-      # 🚀 RELEASE BUILD (AAB ONLY ON TAGS)
+      # 🚀 PRODUCTION BUILD (AAB)
       # ----------------------------
       - name: Build Release AAB
-        if: github.ref_type == 'tag'
+        if: github.ref_name == 'master'
         run: |
           cd android
           ./gradlew bundleRelease
 
       - name: Upload AAB
-        if: github.ref_type == 'tag'
+        if: github.ref_name == 'master'
         uses: actions/upload-artifact@v4
         with:
           name: release-aab
