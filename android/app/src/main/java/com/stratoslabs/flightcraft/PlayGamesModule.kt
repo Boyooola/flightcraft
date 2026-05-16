@@ -16,7 +16,7 @@ class PlayGamesModule(
     // ── Sign In ───────────────────────────────────────────────────
     @ReactMethod
     fun signIn(promise: Promise) {
-        val activity = currentActivity
+        val activity = reactApplicationContext.currentActivity
         if (activity == null) {
             Log.e(TAG, "signIn: no activity")
             promise.reject("NO_ACTIVITY", "No activity available")
@@ -77,19 +77,19 @@ class PlayGamesModule(
     // ── Achievements ──────────────────────────────────────────────
     @ReactMethod
     fun unlockAchievement(achievementId: String) {
-        val activity = currentActivity ?: return
+        val activity = reactApplicationContext.currentActivity ?: return
         PlayGames.getAchievementsClient(activity).unlock(achievementId)
     }
 
     @ReactMethod
     fun setAchievementSteps(achievementId: String, steps: Int) {
-        val activity = currentActivity ?: return
+        val activity = reactApplicationContext.currentActivity ?: return
         PlayGames.getAchievementsClient(activity).setSteps(achievementId, steps)
     }
 
     @ReactMethod
     fun showAchievements() {
-        val activity = currentActivity ?: return
+        val activity = reactApplicationContext.currentActivity ?: return
         PlayGames.getAchievementsClient(activity)
             .achievementsIntent
             .addOnSuccessListener { activity.startActivityForResult(it, 9003) }
@@ -98,14 +98,14 @@ class PlayGamesModule(
     // ── Leaderboard ───────────────────────────────────────────────
     @ReactMethod
     fun submitScore(leaderboardId: String, score: Double) {
-        val activity = currentActivity ?: return
+        val activity = reactApplicationContext.currentActivity ?: return
         PlayGames.getLeaderboardsClient(activity)
             .submitScore(leaderboardId, score.toLong())
     }
 
     @ReactMethod
     fun showLeaderboard(leaderboardId: String) {
-        val activity = currentActivity ?: return
+        val activity = reactApplicationContext.currentActivity ?: return
         PlayGames.getLeaderboardsClient(activity)
             .getLeaderboardIntent(leaderboardId)
             .addOnSuccessListener { activity.startActivityForResult(it, 9004) }
