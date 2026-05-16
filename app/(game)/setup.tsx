@@ -25,6 +25,7 @@ import {
   Dimensions,
   KeyboardAvoidingView,
   Platform,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -210,7 +211,12 @@ export default function SetupScreen() {
             style={[s.slides, { transform: [{ translateX: slideAnim }] }]}
           >
             {/* ── Step 0: Name ── */}
-            <View style={s.slide}>
+            <ScrollView
+              style={s.slide}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={{ paddingBottom: Spacing.xl }}
+            >
               <Text style={s.slideTitle}>Name your airline</Text>
               <Text style={s.slideDesc}>
                 This is how you&apos;ll appear on the leaderboard.
@@ -252,10 +258,15 @@ export default function SetupScreen() {
                   </TouchableOpacity>
                 ))}
               </View>
-            </View>
+            </ScrollView>
 
             {/* ── Step 1: Color ── */}
-            <View style={s.slide}>
+            <ScrollView
+              style={s.slide}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={{ paddingBottom: Spacing.xl }}
+            >
               <Text style={s.slideTitle}>Choose your color</Text>
               <Text style={s.slideDesc}>
                 Your brand color appears on hubs and routes.
@@ -327,10 +338,15 @@ export default function SetupScreen() {
                   </TouchableOpacity>
                 ))}
               </View>
-            </View>
+            </ScrollView>
 
             {/* ── Step 2: Difficulty ── */}
-            <View style={s.slide}>
+            <ScrollView
+              style={s.slide}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={{ paddingBottom: Spacing.xl }}
+            >
               <Text style={s.slideTitle}>Choose difficulty</Text>
               <Text style={s.slideDesc}>
                 This affects your starting cash and loan interest rate.
@@ -558,7 +574,7 @@ export default function SetupScreen() {
                   <Text style={s.errorText}>{error}</Text>
                 </View>
               )}
-            </View>
+            </ScrollView>
 
             {/* Advanced section — inside difficulty step, hidden by default */}
           </Animated.View>
@@ -639,11 +655,10 @@ const s = StyleSheet.create({
   slideWrap: { flex: 1, overflow: "hidden" },
   slides: {
     flexDirection: "row",
-    width: CONTENT_W * 4,
+    width: CONTENT_W * 3,
   },
   slide: {
     width: CONTENT_W,
-    flex: 1,
     paddingRight: Spacing.xs ?? 4,
   },
   slideTitle: {
