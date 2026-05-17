@@ -29,6 +29,9 @@ import {
   View,
 } from "react-native";
 
+// Exported so SeasonPill can position itself directly below
+export const SURGE_PILL_HEIGHT = 42;
+
 const WAVE_COLORS: Record<string, string> = {
   holiday: "#f59e0b",
   business: "#3b82f6",

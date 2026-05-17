@@ -10,7 +10,6 @@ import TabBar from "@/components/hud/TabBar";
 import TopHUD from "@/components/hud/TopHUD";
 import GameMap from "@/components/map/GameMap";
 import SheetManager from "@/components/sheets/SheetManager";
-import AwayEarningsCard from "@/components/ui/AwayEarningsCard";
 import BankruptScreen from "@/components/ui/BankruptScreen";
 import DailyEventCard from "@/components/ui/DailyEventCard";
 import DaySummaryCard from "@/components/ui/DaySummaryCard";
@@ -18,6 +17,7 @@ import GoalsOverlay from "@/components/ui/GoalsOverlay";
 import LoadingScreen from "@/components/ui/LoadingScreen";
 import MissionsPill from "@/components/ui/MissionsPill";
 import RouteCreationBanner from "@/components/ui/RouteCreationBanner";
+import SeasonPill from "@/components/ui/SeasonPill";
 import SurgeIndicator from "@/components/ui/SurgeIndicator";
 import ToastStack from "@/components/ui/ToastStack";
 import { useAICompetition } from "@/hooks/useAICompetition";
@@ -91,9 +91,9 @@ function GameContent() {
       {phase === "playing" && <GoalsOverlay />}
       {phase === "playing" && <DailyEventCard />}
       {phase === "playing" && <SurgeIndicator />}
+      {phase === "playing" && <SeasonPill />}
       {phase === "playing" && <DaySummaryCard />}
       {phase === "playing" && <ToastStack />}
-      {phase === "playing" && <AwayEarningsCard />}
       {(phase === "playing" || phase === "tutorial") && <RouteCreationBanner />}
       {phase === "tutorial" && mapReady && <TutorialScreen />}
       {phase === "bankrupt" && <BankruptScreen />}

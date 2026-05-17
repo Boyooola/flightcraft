@@ -13,17 +13,17 @@
  */
 
 export type SeasonRegion =
-  | "north_europe" // UK, Germany, Scandinavia, France
-  | "mediterranean" // Spain, Italy, Greece, Turkey
-  | "north_america" // USA, Canada
-  | "east_asia" // China, Japan, Korea, Taiwan
-  | "southeast_asia" // Philippines, Thailand, Singapore, Indonesia
-  | "south_asia" // India, Pakistan, Bangladesh
-  | "middle_east" // UAE, Saudi, Qatar
-  | "australia" // Australia, New Zealand
-  | "latin_america" // Brazil, Mexico, Colombia
-  | "africa" // General Africa
-  | "global"; // Catch-all
+  | "north_europe"
+  | "mediterranean"
+  | "north_america"
+  | "latin_america"
+  | "east_asia"
+  | "southeast_asia"
+  | "south_asia"
+  | "middle_east"
+  | "africa"
+  | "oceania"
+  | "global";
 
 export interface SeasonEffect {
   region: SeasonRegion;
@@ -50,417 +50,428 @@ export function getMonth(dayOfYear: number): number {
 // ── Seasonal multiplier table ─────────────────────────────────────
 // Month 0=Jan, 1=Feb, ..., 11=Dec
 const SEASONAL_EFFECTS: Record<number, SeasonEffect[]> = {
-  // January — post-holiday slump in West, Lunar New Year prep in Asia
+  // January
   0: [
     {
       region: "north_europe",
       multiplier: 0.82,
-      label: "Winter lull",
+      label: "Winter weather keeps travelers home",
       icon: "snow-outline",
     },
     {
       region: "north_america",
       multiplier: 0.85,
-      label: "Post-holiday dip",
+      label: "Post-holiday travel demand cools",
       icon: "trending-down-outline",
     },
     {
       region: "east_asia",
       multiplier: 1.18,
-      label: "Lunar New Year",
+      label: "Lunar New Year travel surges",
       icon: "star-outline",
     },
     {
       region: "southeast_asia",
       multiplier: 1.12,
-      label: "Lunar New Year",
+      label: "Holiday crowds flood regional airports",
       icon: "star-outline",
     },
     {
-      region: "australia",
+      region: "oceania",
       multiplier: 1.15,
-      label: "Summer peak",
+      label: "Summer vacation traffic climbs",
       icon: "sunny-outline",
     },
     {
       region: "middle_east",
       multiplier: 0.9,
-      label: "Quiet season",
+      label: "Tourism demand remains soft",
       icon: "remove-outline",
     },
   ],
-  // February — Lunar New Year peak, Valentine's travel
+
+  // February
   1: [
     {
       region: "east_asia",
       multiplier: 1.28,
-      label: "Lunar New Year peak",
+      label: "Lunar New Year triggers massive travel wave",
       icon: "star-outline",
     },
     {
       region: "southeast_asia",
       multiplier: 1.22,
-      label: "Lunar New Year peak",
+      label: "Regional holiday travel hits peak levels",
       icon: "star-outline",
     },
     {
       region: "north_america",
       multiplier: 0.88,
-      label: "Winter dip",
+      label: "Winter slowdown weakens demand",
       icon: "snow-outline",
     },
     {
       region: "north_europe",
       multiplier: 0.8,
-      label: "Winter lull",
+      label: "Cold season suppresses tourism",
       icon: "snow-outline",
     },
     {
-      region: "australia",
+      region: "oceania",
       multiplier: 1.1,
-      label: "Late summer",
+      label: "Late-summer tourism stays strong",
       icon: "sunny-outline",
     },
   ],
-  // March — Spring break, school holidays begin
+
+  // March
   2: [
     {
       region: "north_america",
       multiplier: 1.12,
-      label: "Spring break",
+      label: "Spring break crowds pack airports",
       icon: "airplane-outline",
     },
     {
       region: "mediterranean",
       multiplier: 1.08,
-      label: "Early season",
+      label: "Tourists return as warmer weather arrives",
       icon: "partly-sunny-outline",
     },
     {
       region: "north_europe",
       multiplier: 0.9,
-      label: "Pre-season",
+      label: "Travel demand remains below seasonal norms",
       icon: "partly-sunny-outline",
     },
     {
       region: "middle_east",
       multiplier: 0.88,
-      label: "Ramadan quiet",
+      label: "Ramadan slows regional travel activity",
       icon: "moon-outline",
     },
   ],
-  // April — Easter travel, spring peak begins
+
+  // April
   3: [
     {
       region: "north_europe",
       multiplier: 1.1,
-      label: "Easter travel",
+      label: "Easter holiday traffic lifts demand",
       icon: "airplane-outline",
     },
     {
       region: "mediterranean",
       multiplier: 1.15,
-      label: "Spring surge",
+      label: "Beach destinations begin filling up",
       icon: "sunny-outline",
     },
     {
       region: "north_america",
       multiplier: 1.08,
-      label: "Spring travel",
+      label: "Spring travelers return to the skies",
       icon: "partly-sunny-outline",
     },
     {
       region: "middle_east",
       multiplier: 0.85,
-      label: "Ramadan dip",
+      label: "Ramadan continues to reduce travel volume",
       icon: "moon-outline",
     },
   ],
-  // May — Strong leisure demand building worldwide
+
+  // May
   4: [
     {
       region: "north_europe",
       multiplier: 1.12,
-      label: "Spring peak",
+      label: "European leisure travel accelerates",
       icon: "sunny-outline",
     },
     {
       region: "mediterranean",
       multiplier: 1.18,
-      label: "Pre-summer surge",
+      label: "Resort destinations see heavy bookings",
       icon: "sunny-outline",
     },
     {
       region: "north_america",
       multiplier: 1.1,
-      label: "Memorial Day",
+      label: "Holiday weekend drives passenger growth",
       icon: "airplane-outline",
     },
     {
       region: "east_asia",
       multiplier: 1.08,
-      label: "Golden Week",
+      label: "Golden Week crowds overwhelm airports",
       icon: "star-outline",
     },
     {
       region: "south_asia",
       multiplier: 0.85,
-      label: "Monsoon slowdown",
+      label: "Early monsoon weather disrupts travel",
       icon: "rainy-outline",
     },
   ],
-  // June — Summer peak in Northern Hemisphere
+
+  // June
   5: [
     {
       region: "north_europe",
       multiplier: 1.22,
-      label: "Summer peak",
+      label: "Summer tourists flood European cities",
       icon: "sunny-outline",
     },
     {
       region: "mediterranean",
       multiplier: 1.3,
-      label: "Peak summer",
+      label: "Mediterranean beaches enter peak season",
       icon: "sunny-outline",
     },
     {
       region: "north_america",
       multiplier: 1.18,
-      label: "Summer peak",
+      label: "Families begin summer vacation travel",
       icon: "sunny-outline",
     },
     {
-      region: "australia",
+      region: "oceania",
       multiplier: 0.88,
-      label: "Winter dip",
+      label: "Winter season slows domestic tourism",
       icon: "snow-outline",
     },
     {
       region: "south_asia",
       multiplier: 0.8,
-      label: "Monsoon season",
+      label: "Monsoon rains heavily impact flights",
       icon: "rainy-outline",
     },
   ],
-  // July — Peak summer globally
+
+  // July
   6: [
     {
       region: "north_europe",
       multiplier: 1.28,
-      label: "Peak summer",
+      label: "Summer travel demand reaches yearly highs",
       icon: "sunny-outline",
     },
     {
       region: "mediterranean",
       multiplier: 1.35,
-      label: "Peak summer",
+      label: "Tourists pack Mediterranean resorts",
       icon: "sunny-outline",
     },
     {
       region: "north_america",
       multiplier: 1.25,
-      label: "Peak summer",
+      label: "Airports struggle with summer crowds",
       icon: "sunny-outline",
     },
     {
       region: "east_asia",
       multiplier: 1.12,
-      label: "Summer holidays",
+      label: "School holidays boost regional tourism",
       icon: "sunny-outline",
     },
     {
-      region: "australia",
+      region: "oceania",
       multiplier: 0.85,
-      label: "Winter dip",
+      label: "Winter travel demand remains weak",
       icon: "snow-outline",
     },
     {
       region: "south_asia",
       multiplier: 0.78,
-      label: "Monsoon peak",
+      label: "Severe monsoons disrupt regional travel",
       icon: "rainy-outline",
     },
     {
       region: "middle_east",
       multiplier: 0.82,
-      label: "Heat season",
+      label: "Extreme heat reduces tourism demand",
       icon: "thermometer-outline",
     },
   ],
-  // August — Peak continues, back-to-school late month
+
+  // August
   7: [
     {
       region: "north_europe",
       multiplier: 1.25,
-      label: "Late summer peak",
+      label: "Late-summer tourism remains strong",
       icon: "sunny-outline",
     },
     {
       region: "mediterranean",
       multiplier: 1.32,
-      label: "Late summer peak",
+      label: "Beach destinations remain fully booked",
       icon: "sunny-outline",
     },
     {
       region: "north_america",
       multiplier: 1.2,
-      label: "Late summer",
+      label: "Vacation season continues at full speed",
       icon: "sunny-outline",
     },
     {
       region: "east_asia",
       multiplier: 1.08,
-      label: "Summer holidays",
+      label: "Holidaymakers keep regional flights busy",
       icon: "sunny-outline",
     },
     {
-      region: "australia",
+      region: "oceania",
       multiplier: 0.88,
-      label: "Late winter",
+      label: "Winter conditions limit tourism activity",
       icon: "snow-outline",
     },
   ],
-  // September — Post-summer drop, business travel rises
+
+  // September
   8: [
     {
       region: "north_europe",
       multiplier: 0.95,
-      label: "Post-summer",
+      label: "Summer tourism rapidly fades",
       icon: "partly-sunny-outline",
     },
     {
       region: "mediterranean",
       multiplier: 1.08,
-      label: "Shoulder season",
+      label: "Shoulder-season travel remains steady",
       icon: "partly-sunny-outline",
     },
     {
       region: "north_america",
       multiplier: 0.92,
-      label: "Post-summer dip",
+      label: "Post-vacation travel demand weakens",
       icon: "trending-down-outline",
     },
     {
-      region: "australia",
+      region: "oceania",
       multiplier: 1.05,
-      label: "Spring warming",
+      label: "Spring weather boosts tourism activity",
       icon: "partly-sunny-outline",
     },
     {
       region: "east_asia",
-      multiplier: 1.1,
-      label: "Golden Week",
-      icon: "star-outline",
+      multiplier: 1.02,
+      label: "Business travelers return to the skies",
+      icon: "briefcase-outline",
     },
   ],
-  // October — Autumn travel, Golden Week Japan, festivals
+
+  // October
   9: [
     {
       region: "east_asia",
       multiplier: 1.2,
-      label: "Golden Week",
+      label: "Golden Week sparks massive travel demand",
       icon: "star-outline",
     },
     {
       region: "north_america",
       multiplier: 1.05,
-      label: "Fall travel",
+      label: "Autumn travel demand picks up",
       icon: "leaf-outline",
     },
     {
       region: "mediterranean",
       multiplier: 0.95,
-      label: "Off-season begins",
+      label: "Tourist season begins winding down",
       icon: "partly-sunny-outline",
     },
     {
-      region: "australia",
+      region: "oceania",
       multiplier: 1.1,
-      label: "Spring surge",
+      label: "Spring tourism gains momentum",
       icon: "sunny-outline",
     },
     {
       region: "south_asia",
       multiplier: 1.15,
-      label: "Diwali travel",
+      label: "Festival travel crowds regional airports",
       icon: "star-outline",
     },
   ],
-  // November — Pre-holiday building, Diwali
+
+  // November
   10: [
     {
       region: "north_america",
       multiplier: 1.18,
-      label: "Thanksgiving",
+      label: "Thanksgiving travel fills airports nationwide",
       icon: "airplane-outline",
     },
     {
       region: "south_asia",
       multiplier: 1.12,
-      label: "Festival season",
+      label: "Festival season drives strong passenger growth",
       icon: "star-outline",
     },
     {
       region: "north_europe",
       multiplier: 0.88,
-      label: "Autumn lull",
+      label: "Cold weather slows tourism demand",
       icon: "cloudy-outline",
     },
     {
       region: "middle_east",
       multiplier: 1.08,
-      label: "Cooler season",
+      label: "Cooler temperatures revive tourism",
       icon: "partly-sunny-outline",
     },
     {
-      region: "australia",
+      region: "oceania",
       multiplier: 1.12,
-      label: "Summer approaching",
+      label: "Summer travel bookings rise sharply",
       icon: "sunny-outline",
     },
   ],
-  // December — Christmas/holiday peak everywhere
+
+  // December
   11: [
     {
       region: "north_europe",
       multiplier: 1.22,
-      label: "Christmas peak",
+      label: "Christmas markets attract huge crowds",
       icon: "snow-outline",
     },
     {
       region: "north_america",
       multiplier: 1.28,
-      label: "Holiday peak",
+      label: "Holiday travel frenzy overwhelms airports",
       icon: "snow-outline",
     },
     {
-      region: "australia",
+      region: "oceania",
       multiplier: 1.2,
-      label: "Summer + Christmas",
+      label: "Summer holidays drive record travel demand",
       icon: "sunny-outline",
     },
     {
       region: "latin_america",
       multiplier: 1.15,
-      label: "Holiday season",
+      label: "Holidaymakers fuel tourism surge",
       icon: "airplane-outline",
     },
     {
       region: "southeast_asia",
       multiplier: 1.1,
-      label: "Holiday rush",
+      label: "Year-end travel crowds regional hubs",
       icon: "airplane-outline",
     },
     {
       region: "middle_east",
       multiplier: 1.05,
-      label: "Holiday travel",
+      label: "International holiday traffic increases",
       icon: "airplane-outline",
     },
     {
       region: "east_asia",
       multiplier: 0.92,
-      label: "Quiet season",
+      label: "Travel demand softens after autumn peak",
       icon: "remove-outline",
     },
   ],
@@ -468,21 +479,34 @@ const SEASONAL_EFFECTS: Record<number, SeasonEffect[]> = {
 
 // ── Continent → base region ───────────────────────────────────────
 // Primary lookup — every airport has a continent code (AF/AS/EU/NA/OC/SA).
-const CONTINENT_REGION: Record<string, SeasonRegion> = {
-  EU: "north_europe", // refined by country override below
+export const CONTINENT_REGION: Record<string, SeasonRegion> = {
+  // Europe defaults to northern/central Europe.
+  // Southern countries overridden below.
+  EU: "north_europe",
+
+  // USA + Canada style travel demand.
+  // Mexico overridden separately.
   NA: "north_america",
+
+  // South America + tourism-heavy Caribbean behavior.
   SA: "latin_america",
-  AS: "east_asia", // refined by country override below
+
+  // Asia is too diverse to map cleanly.
+  // Use a neutral fallback and rely on country overrides heavily.
+  AS: "middle_east",
+
+  // Mostly neutral for now unless specifically overridden.
   AF: "africa",
-  OC: "australia",
+
+  // Australia + NZ + Pacific islands.
+  OC: "oceania",
 };
 
 // ── Country overrides ─────────────────────────────────────────────
-// Only where continent is too broad.
-// EU → splits into north_europe vs mediterranean.
-// AS → splits into east_asia / southeast_asia / south_asia / middle_east.
-const COUNTRY_OVERRIDE: Record<string, SeasonRegion> = {
-  // Mediterranean (EU continent, different seasonality)
+// ── Country overrides ─────────────────────────────────────────────
+// Used where continent-level seasonality is inaccurate.
+export const COUNTRY_OVERRIDE: Record<string, SeasonRegion> = {
+  // ── Mediterranean Europe ───────────────────────────────────────
   ES: "mediterranean",
   IT: "mediterranean",
   GR: "mediterranean",
@@ -490,12 +514,25 @@ const COUNTRY_OVERRIDE: Record<string, SeasonRegion> = {
   HR: "mediterranean",
   MT: "mediterranean",
   CY: "mediterranean",
-  MK: "mediterranean",
   AL: "mediterranean",
-  BA: "mediterranean",
   ME: "mediterranean",
-  RS: "mediterranean",
-  // Southeast Asia (AS continent)
+
+  // ── Mediterranean North Africa ────────────────────────────────
+  MA: "mediterranean",
+  TN: "mediterranean",
+  DZ: "mediterranean",
+  LY: "mediterranean",
+
+  // ── East Asia ─────────────────────────────────────────────────
+  JP: "east_asia",
+  KR: "east_asia",
+  CN: "east_asia",
+  TW: "east_asia",
+  HK: "east_asia",
+  MO: "east_asia",
+  MN: "east_asia",
+
+  // ── Southeast Asia ────────────────────────────────────────────
   PH: "southeast_asia",
   TH: "southeast_asia",
   SG: "southeast_asia",
@@ -507,7 +544,8 @@ const COUNTRY_OVERRIDE: Record<string, SeasonRegion> = {
   LA: "southeast_asia",
   BN: "southeast_asia",
   TL: "southeast_asia",
-  // South Asia (AS continent)
+
+  // ── South Asia ────────────────────────────────────────────────
   IN: "south_asia",
   PK: "south_asia",
   BD: "south_asia",
@@ -515,7 +553,8 @@ const COUNTRY_OVERRIDE: Record<string, SeasonRegion> = {
   NP: "south_asia",
   MV: "south_asia",
   BT: "south_asia",
-  // Middle East (AS continent)
+
+  // ── Middle East ───────────────────────────────────────────────
   AE: "middle_east",
   SA: "middle_east",
   QA: "middle_east",
@@ -529,9 +568,36 @@ const COUNTRY_OVERRIDE: Record<string, SeasonRegion> = {
   IL: "middle_east",
   LB: "middle_east",
   SY: "middle_east",
-  // Mexico — latin_america seasonality despite NA continent
+  EG: "middle_east",
+
+  // ── Central Asia ──────────────────────────────────────────────
+  KZ: "middle_east",
+  UZ: "middle_east",
+  KG: "middle_east",
+  TM: "middle_east",
+  TJ: "middle_east",
+
+  // ── Latin America Overrides ──────────────────────────────────
   MX: "latin_america",
+
+  // ── Caribbean Tourism Markets ────────────────────────────────
+  CU: "latin_america",
+  DO: "latin_america",
+  JM: "latin_america",
+  BS: "latin_america",
+  TT: "latin_america",
+  BB: "latin_america",
+  PR: "latin_america",
 };
+
+export function getSeasonRegion(
+  continent: string,
+  country: string,
+): SeasonRegion {
+  return (
+    COUNTRY_OVERRIDE[country] ?? CONTINENT_REGION[continent] ?? "north_america"
+  );
+}
 
 export function getRegionForAirport(params: {
   country?: string | null;
@@ -608,4 +674,37 @@ export function getSeasonLabel(gameDay: number): string | null {
   if (Math.abs(top.multiplier - 1.0) < 0.05) return null; // too small to mention
 
   return top.label;
+}
+
+/**
+ * Get seasonal badge data for a route card.
+ * Returns null if effect is too small to show (<5%).
+ */
+export function getSeasonForRoute(
+  gameDay: number,
+  destCountry?: string | null,
+  destContinent?: string | null,
+): { label: string; icon: string; color: string; pctLabel: string } | null {
+  const doy = getDayOfYear(gameDay);
+  const month = getMonth(doy);
+  const region = getRegionForAirport({
+    country: destCountry,
+    continent: destContinent,
+  });
+  const effects = SEASONAL_EFFECTS[month] ?? [];
+  const match = effects.find((e) => e.region === region);
+
+  if (!match) return null;
+  const diff = match.multiplier - 1.0;
+  if (Math.abs(diff) < 0.05) return null; // too small to show
+
+  const pct = Math.round(Math.abs(diff) * 100);
+  const positive = diff > 0;
+
+  return {
+    label: match.label,
+    icon: match.icon,
+    color: positive ? "#22c55e" : "#f59e0b",
+    pctLabel: positive ? `+${pct}%` : `-${pct}%`,
+  };
 }

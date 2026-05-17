@@ -18,6 +18,7 @@ import {
   computePriceElasticity,
   fmtCash,
 } from "@/lib/revenue";
+import { getSeasonForRoute } from "@/lib/seasons";
 import { supabase } from "@/lib/supabase";
 import type { Demand, OwnedHub, Route } from "@/store";
 import {
@@ -26,7 +27,7 @@ import {
   useDemands,
   useGameStore,
   useHubs,
-  useRoutes,
+  useRoutes
 } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
 import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
@@ -307,6 +308,23 @@ function RouteGroupRow({
   const growth = routeGrowthLabel(group.demand);
   const pricingColor = PRICING_COLOR[group.priceStrategy] ?? Colors.green;
   const quality = routeQuality(group.demand.popularity ?? 0);
+  const day = useGameStore((s) => s.airline?.day ?? 1);
+  const season = getSeasonForRoute(
+    day,
+    group.demand.dest?.country,
+    group.demand.dest?.continent,
+  );
+
+  // Worst plane condition in group — warn if worn or critical
+  const minCondition = Math.min(
+    ...group.routes.map((r) => r.plane.condition ?? 100),
+  );
+  const condBadge =
+    minCondition <= 15
+      ? { color: Colors.red, txt: `🔧 ${minCondition}%` }
+      : minCondition <= 40
+        ? { color: Colors.amber, txt: `🔧 ${minCondition}%` }
+        : null;
 
   return (
     <TouchableOpacity
@@ -365,6 +383,11 @@ function RouteGroupRow({
           <Text style={rr.meta} numberOfLines={1}>
             {group.planeLabel}
           </Text>
+          {condBadge && (
+            <Text style={[rr.condBadge, { color: condBadge.color }]}>
+              {condBadge.txt}
+            </Text>
+          )}
           {group.routes.length > 1 && (
             <Text style={[rr.moved, { color: accent }]}>
               ×{group.routes.length}
@@ -395,6 +418,21 @@ function RouteGroupRow({
           <Text style={[rr.percent, { color: accent }]}>{group.movedPct}%</Text>
 
           <StarRating stars={quality.stars} color={quality.color} />
+
+          {season && (
+            <View
+              style={[rr.seasonBadge, { backgroundColor: season.color + "18" }]}
+            >
+              <Ionicons
+                name={season.icon as any}
+                size={9}
+                color={season.color}
+              />
+              <Text style={[rr.seasonTxt, { color: season.color }]}>
+                {season.pctLabel}
+              </Text>
+            </View>
+          )}
 
           <Text
             style={[
@@ -1244,6 +1282,10 @@ const rr = StyleSheet.create({
     color: Colors.muted,
     fontWeight: "700",
   },
+  condBadge: {
+    fontSize: 9,
+    fontWeight: "800",
+  },
   dot: {
     fontSize: 10,
     color: Colors.dim,
@@ -1374,6 +1416,18 @@ const rr = StyleSheet.create({
     fontSize: 10,
     fontWeight: "900",
     flexShrink: 0,
+  },
+  seasonBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
+    borderRadius: Radius.sm ?? 4,
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+  },
+  seasonTxt: {
+    fontSize: 8,
+    fontWeight: "800",
   },
   qualityWrap: {
     flexDirection: "row",

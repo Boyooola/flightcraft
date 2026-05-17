@@ -18,6 +18,7 @@ import {
 import { congestionPenaltyPct } from "@/lib/hubCongestion";
 import { waitingPaxForDemand } from "@/lib/passengerFlow";
 import { calcRouteRevenue, fmtCash } from "@/lib/revenue";
+import { getSeasonForRoute } from "@/lib/seasons";
 import type { Airport, Demand, OwnedHub, Route } from "@/store";
 import {
   useAIAirlines,
@@ -187,6 +188,7 @@ function DepartureRow({
   dayProgress,
   onCreateRoute,
   maxPlaneRange,
+  day,
 }: {
   demand: Demand;
   routes: Route[];
@@ -195,6 +197,7 @@ function DepartureRow({
   dayProgress: number;
   onCreateRoute: (d: Demand) => void;
   maxPlaneRange: number;
+  day: number;
 }) {
   const activeRoutes = routes.filter(
     (route) => route.active && route.demand.id === demand.id,
@@ -241,6 +244,12 @@ function DepartureRow({
       ? `${activeRoutes.length} aircraft`
       : firstRoute?.plane.plane_model.nickname;
 
+  const season = getSeasonForRoute(
+    day,
+    demand.dest?.country,
+    demand.dest?.continent,
+  );
+
   return (
     <View style={dep.row}>
       <View
@@ -255,7 +264,28 @@ function DepartureRow({
           <View style={dep.dest}>
             <CountryFlag isoCode={demand.dest.country} size={17} />
             <View style={{ flex: 1, minWidth: 0 }}>
-              <Text style={dep.iata}>{demand.dest.iata}</Text>
+              <View
+                style={{ flexDirection: "row", alignItems: "center", gap: 4 }}
+              >
+                <Text style={dep.iata}>{demand.dest.iata}</Text>
+                {season && (
+                  <View
+                    style={[
+                      dep.seasonBadge,
+                      { backgroundColor: season.color + "18" },
+                    ]}
+                  >
+                    <Ionicons
+                      name={season.icon as any}
+                      size={8}
+                      color={season.color}
+                    />
+                    <Text style={[dep.seasonTxt, { color: season.color }]}>
+                      {season.pctLabel}
+                    </Text>
+                  </View>
+                )}
+              </View>
               <Text style={dep.city} numberOfLines={1}>
                 {demand.dest.city || demand.dest.name}
               </Text>
@@ -691,7 +721,7 @@ export default function AirportSheet() {
   const tierColor = TIER_COLORS[classification.label] ?? Colors.dim;
   const cost = hubPurchaseCost(airport);
   // eslint-disable-next-line react-hooks/rules-of-hooks
-  const day = useGameStore((s) => s.airline?.day ?? 1);
+  const day = useGameStore((s) => s.airline?.day ?? 1); // already exists
   const trustLocked =
     day >= 3 &&
     aiCompetitors.length > 0 &&
@@ -1101,6 +1131,7 @@ export default function AirportSheet() {
             dayProgress={dayProgress}
             onCreateRoute={handleCreateRoute}
             maxPlaneRange={maxPlaneRange}
+            day={day}
           />
         ))
       )}
@@ -1317,6 +1348,18 @@ const dep = StyleSheet.create({
     fontSize: 10,
     color: Colors.green,
     fontWeight: "900",
+  },
+  seasonBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
+    borderRadius: 4,
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+  },
+  seasonTxt: {
+    fontSize: 8,
+    fontWeight: "800",
   },
   meta: {
     fontSize: 10,

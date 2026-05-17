@@ -9,6 +9,7 @@ import { gameSounds } from "@/hooks/useGameSounds";
 import type { DaySummaryToastData } from "@/hooks/useToast";
 import { useToastListener } from "@/hooks/useToast";
 import { fmtCash } from "@/lib/revenue";
+import { getActiveSeason, getDayOfYear, getMonth } from "@/lib/seasons";
 import { Ionicons } from "@expo/vector-icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -154,6 +155,28 @@ export default function DaySummaryCard() {
   const allMissions = missionsToday === missionsTotal && missionsTotal > 0;
   const nwDelta = netWorth - prevNetWorth;
 
+  // Show season note when a new month just started (day % 30 ≈ 0)
+  const prevMonth = getMonth(getDayOfYear(Math.max(1, day - 1)));
+  const currMonth = getMonth(getDayOfYear(day));
+  const monthTurned = currMonth !== prevMonth;
+  const seasonNote = monthTurned
+    ? (() => {
+        const { effects } = getActiveSeason(day);
+        const top = effects[0];
+        if (!top || Math.abs(top.multiplier - 1.0) < 0.05) return null;
+        const pct = Math.round(Math.abs(top.multiplier - 1.0) * 100);
+        const up = top.multiplier > 1;
+        return {
+          label: top.label,
+          icon: top.icon,
+          color: up ? "#22c55e" : "#f59e0b",
+          txt: up
+            ? `+${pct}% on ${top.region.replace(/_/g, " ")} routes`
+            : `-${pct}% on ${top.region.replace(/_/g, " ")} routes`,
+        };
+      })()
+    : null;
+
   const flowColor =
     crisisHubs > 0
       ? RED
@@ -265,6 +288,22 @@ export default function DaySummaryCard() {
               </>
             )}
           </View>
+
+          {seasonNote && (
+            <View style={s.seasonRow}>
+              <Ionicons
+                name={seasonNote.icon as any}
+                size={10}
+                color={seasonNote.color}
+              />
+              <Text
+                style={[s.seasonTxt, { color: seasonNote.color }]}
+                numberOfLines={1}
+              >
+                {seasonNote.label} · {seasonNote.txt}
+              </Text>
+            </View>
+          )}
 
           <View style={s.footer}>
             <Text style={s.footerText} numberOfLines={1}>
@@ -410,6 +449,16 @@ const s = StyleSheet.create({
     backgroundColor: Colors.border,
   },
 
+  seasonRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  seasonTxt: {
+    fontSize: 9,
+    fontWeight: "700",
+    flex: 1,
+  },
   footer: {
     flexDirection: "row",
     alignItems: "center",
