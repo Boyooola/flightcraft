@@ -36,6 +36,7 @@ export default function DemandWaveBanner() {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    console.log("Active wave changed:", wave?.wave.title ?? "none");
     if (wave && wave.wave.id !== prevId.current) {
       prevId.current = wave.wave.id;
       setExpanded(false);
@@ -57,7 +58,7 @@ export default function DemandWaveBanner() {
     return () => {
       if (timer.current) clearTimeout(timer.current);
     };
-  }, [wave?.wave.id]);
+  }, [wave, wave?.wave.id]);
 
   function dismiss() {
     Animated.timing(slideY, {

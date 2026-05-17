@@ -333,7 +333,7 @@ export default function SettingsSheet() {
         <SettingRow
           icon="information-circle-outline"
           label="Version"
-          sublabel="0.4.2"
+          sublabel="0.5.0"
           color={Colors.dim}
         />
         <Divider />

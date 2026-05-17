@@ -23,6 +23,7 @@
  *   - Later demand grows with progression.
  */
 
+import { getSeasonalMultiplier } from "@/lib/seasons";
 import type { Airport, Demand, HaulClass } from "@/store";
 import { passengerMixFromDistance } from "./passengerTypes";
 import { seedHash } from "./seed";
@@ -293,6 +294,7 @@ export function simulatePaxDay(
   dest: Airport,
   distNm: number,
   demandScore: number = 0,
+  gameDay: number = 1,
 ): number {
   const strength = routeMarketStrength(origin, dest, distNm);
   const roll = seededPassengerRoll(origin.iata, dest.iata);
@@ -321,9 +323,16 @@ export function simulatePaxDay(
 
   const haul = haulClass(distNm);
 
-  if (haul === "short") return Math.max(8, Math.round(pax));
-  if (haul === "medium") return Math.max(20, Math.round(pax * 1.15));
-  return Math.max(60, Math.round(pax * 1.35));
+  const seasonalMul = getSeasonalMultiplier(
+    gameDay,
+    dest.country,
+    dest.continent,
+  );
+  const seasonal = Math.round(pax * seasonalMul);
+
+  if (haul === "short") return Math.max(8, Math.round(seasonal));
+  if (haul === "medium") return Math.max(20, Math.round(seasonal * 1.15));
+  return Math.max(60, Math.round(seasonal * 1.35));
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -368,6 +377,7 @@ export function generateDemands(
   existingDests: string[] = [],
   demandScore: number = 0,
   forceShort: boolean = false,
+  gameDay: number = 1,
 ): Omit<Demand, "id" | "airline_id">[] {
   const maxRange = forceShort
     ? TIER1_MAX_RANGE_NM
@@ -377,13 +387,13 @@ export function generateDemands(
   const pool = buildPool(hub, allAirports, exclude, maxRange);
 
   if (pool.length > 0) {
-    return generateFromPool(hub, pool, count, demandScore);
+    return generateFromPool(hub, pool, count, demandScore, gameDay);
   }
 
   const fallbackPool = buildPool(hub, allAirports, exclude, 99_999);
   if (fallbackPool.length === 0) return [];
 
-  return generateFromPool(hub, fallbackPool, count, demandScore);
+  return generateFromPool(hub, fallbackPool, count, demandScore, gameDay);
 }
 
 function generateFromPool(
@@ -391,6 +401,7 @@ function generateFromPool(
   pool: Airport[],
   count: number,
   demandScore: number,
+  gameDay: number = 1,
 ): Omit<Demand, "id" | "airline_id">[] {
   const used = new Set<string>();
   const demands: Omit<Demand, "id" | "airline_id">[] = [];
@@ -421,7 +432,7 @@ function generateFromPool(
       delivered_pax_today: 0,
       business_pct: mix.businessPct,
       leisure_pct: mix.leisurePct,
-      base_pax_day: simulatePaxDay(hub, dest, dist, demandScore),
+      base_pax_day: simulatePaxDay(hub, dest, dist, demandScore, gameDay),
       popularity: 0,
     });
   }
@@ -439,6 +450,7 @@ export function generateOneDemand(
   existingDests: string[],
   demandScore: number = 0,
   currentCount: number = 0,
+  gameDay: number = 1,
 ): Omit<Demand, "id" | "airline_id"> | null {
   if (currentCount >= MAX_DEMANDS_PER_HUB) return null;
 
@@ -449,6 +461,7 @@ export function generateOneDemand(
     existingDests,
     demandScore,
     false,
+    gameDay,
   );
 
   return result[0] ?? null;
@@ -504,8 +517,15 @@ export function refillDemandSlots(
 export function allDemandsServed(hubIata: string, demands: Demand[]): boolean {
   const hubDemands = demands.filter((d) => d.hub_iata === hubIata);
   if (hubDemands.length === 0) return false;
-
-  return hubDemands.every((d) => d.status === "served");
+  console.log(
+    "Checking if all demands served for hub",
+    hubDemands.every(
+      (d) => (d.delivered_pax_today ?? 0) >= (d.base_pax_day ?? 1),
+    ),
+  );
+  return hubDemands.every(
+    (d) => (d.delivered_pax_today ?? 0) >= (d.base_pax_day ?? 1),
+  );
 }
 
 export function pendingDemandCount(hubIata: string, demands: Demand[]): number {

@@ -78,7 +78,13 @@ export default function DailyEventCard() {
   }, [slideY, opacity, scale, progress]);
 
   useEffect(() => {
+    console.log("Daily event changed:", dailyEvent?.title ?? "none");
     if (!dailyEvent) return;
+    console.log(
+      "Current day:",
+      day,
+      shownForDay.current === day ? "(already shown)" : "(new event)",
+    );
     // Show once per day — track by day number not by event id
     if (shownForDay.current === day) return;
     shownForDay.current = day;
@@ -112,7 +118,7 @@ export default function DailyEventCard() {
 
     progAnim.current.start();
     holdTimer.current = setTimeout(dismiss, HOLD_MS);
-  }, [dailyEvent?.id]);
+  }, [dailyEvent, dailyEvent?.id]);
 
   if (!dailyEvent || !shown) return null;
 

@@ -19,7 +19,7 @@ import {
   fmtCash,
 } from "@/lib/revenue";
 import { supabase } from "@/lib/supabase";
-import type { Demand, Route } from "@/store";
+import type { Demand, OwnedHub, Route } from "@/store";
 import {
   useAirline,
   useDayProgress,
@@ -247,6 +247,38 @@ function routeGrowthLabel(demand: Demand) {
   };
 }
 
+// ── Route quality rating ──────────────────────────────────────────
+// Derived from demand.popularity (-40 → +80 range).
+// No DB column needed — purely a display layer.
+function routeQuality(popularity: number): {
+  stars: number;
+  label: string;
+  color: string;
+} {
+  if (popularity >= 40)
+    return { stars: 5, label: "Excellent", color: "#22c55e" };
+  if (popularity >= 15) return { stars: 4, label: "Strong", color: "#4ade80" };
+  if (popularity >= 0) return { stars: 3, label: "Solid", color: "#94a3b8" };
+  if (popularity >= -10)
+    return { stars: 2, label: "Developing", color: "#f59e0b" };
+  return { stars: 1, label: "Struggling", color: "#ef4444" };
+}
+
+function StarRating({ stars, color }: { stars: number; color: string }) {
+  return (
+    <View style={{ flexDirection: "row", gap: 1 }}>
+      {Array.from({ length: 5 }).map((_, i) => (
+        <Ionicons
+          key={i}
+          name={i < stars ? "star" : "star-outline"}
+          size={9}
+          color={i < stars ? color : Colors.dim}
+        />
+      ))}
+    </View>
+  );
+}
+
 function RouteGroupRow({
   group,
   deactivating,
@@ -274,6 +306,7 @@ function RouteGroupRow({
   const accent = group.status.color;
   const growth = routeGrowthLabel(group.demand);
   const pricingColor = PRICING_COLOR[group.priceStrategy] ?? Colors.green;
+  const quality = routeQuality(group.demand.popularity ?? 0);
 
   return (
     <TouchableOpacity
@@ -361,6 +394,8 @@ function RouteGroupRow({
 
           <Text style={[rr.percent, { color: accent }]}>{group.movedPct}%</Text>
 
+          <StarRating stars={quality.stars} color={quality.color} />
+
           <Text
             style={[
               rr.cash,
@@ -386,6 +421,12 @@ function RouteGroupRow({
               <Ionicons name={growth.icon} size={11} color={growth.color} />
               <Text style={[rr.growth, { color: growth.color }]}>
                 {growth.text}
+              </Text>
+            </View>
+
+            <View style={rr.qualityWrap}>
+              <Text style={[rr.qualityLabel, { color: quality.color }]}>
+                {quality.label}
               </Text>
             </View>
           </View>
@@ -506,6 +547,100 @@ function RouteGroupRow({
   );
 }
 
+// ── Hub row for Hubs tab ──────────────────────────────────────────
+function HubRow({
+  hub,
+  demands,
+  dayProgress,
+  onPress,
+  color,
+}: {
+  hub: OwnedHub;
+  demands: Demand[];
+  dayProgress: number;
+  onPress: () => void;
+  color: string;
+}) {
+  const hubDemands = demands.filter((d) => d.hub_iata === hub.airport.iata);
+  const active = hubDemands; // all demands for this hub
+  const waiting = active.reduce(
+    (sum, d) => sum + waitingPaxForDemand(d, dayProgress),
+    0,
+  );
+  const moved = active.reduce(
+    (sum, d) => sum + (d.delivered_pax_today ?? 0),
+    0,
+  );
+  const total = active.reduce((sum, d) => sum + (d.base_pax_day ?? 0), 0);
+  const flowPct =
+    total > 0 ? Math.min(100, Math.round((moved / total) * 100)) : 0;
+  const trustColor =
+    hub.trust >= 70
+      ? Colors.green
+      : hub.trust >= 40
+        ? Colors.amber
+        : Colors.red;
+  const crowding = hubCrowdingLevel(hub.airport.iata, demands, hub.airport);
+  const isBusy = crowding?.level !== "normal";
+
+  return (
+    <TouchableOpacity style={hr.row} onPress={onPress} activeOpacity={0.88}>
+      <View style={[hr.stripe, { backgroundColor: color }]} />
+      <View style={hr.body}>
+        <View style={hr.top}>
+          <View style={hr.left}>
+            <Text style={hr.iata}>{hub.airport.iata}</Text>
+            <Text style={hr.city} numberOfLines={1}>
+              {hub.airport.city}
+            </Text>
+          </View>
+          <View style={hr.right}>
+            <Text style={[hr.trust, { color: trustColor }]}>{hub.trust}%</Text>
+            <Text style={hr.trustLbl}>trust</Text>
+          </View>
+        </View>
+
+        <View style={hr.stats}>
+          <Text style={hr.stat}>
+            <Text style={{ color: Colors.sky }}>
+              {waiting.toLocaleString()}
+            </Text>
+            {" waiting"}
+          </Text>
+          <Text style={hr.dot}>·</Text>
+          <Text style={hr.stat}>
+            {active.length} slot{active.length !== 1 ? "s" : ""}
+          </Text>
+          {isBusy && (
+            <>
+              <Text style={hr.dot}>·</Text>
+              <Text style={[hr.stat, { color: Colors.amber }]}>Hub busy</Text>
+            </>
+          )}
+        </View>
+
+        <View style={hr.barRow}>
+          <View style={hr.track}>
+            <View
+              style={[
+                hr.fill,
+                { width: `${flowPct}%` as any, backgroundColor: color },
+              ]}
+            />
+          </View>
+          <Text style={[hr.pct, { color }]}>{flowPct}%</Text>
+        </View>
+      </View>
+      <Ionicons
+        name="chevron-forward"
+        size={14}
+        color={Colors.dim}
+        style={{ marginRight: Spacing.sm }}
+      />
+    </TouchableOpacity>
+  );
+}
+
 export default function RoutesSheet() {
   const routes = useRoutes();
   const hubs = useHubs();
@@ -514,6 +649,7 @@ export default function RoutesSheet() {
   const dayProgress = useDayProgress();
   const tabBarH = useTabBarHeight();
   const closeSheet = useGameStore((s) => s.closeSheet);
+  const openSheet = useGameStore((s) => s.openSheet);
   const startCreation = useGameStore((s) => s.startRouteCreation);
   const haptics = useHaptics();
   const deactivate = useDeactivateRoute();
@@ -691,6 +827,7 @@ export default function RoutesSheet() {
     setTimeout(() => startCreation(), 120);
   }, [closeSheet, haptics, startCreation]);
 
+  const [activeTab, setActiveTab] = useState<"routes" | "hubs">("routes");
   const [swapGroup, setSwapGroup] = useState<RouteGroup | null>(null);
 
   const handleSwap = useCallback((group: RouteGroup) => {
@@ -797,8 +934,7 @@ export default function RoutesSheet() {
           <View style={s.hdrL}>
             <Ionicons name="flash-outline" size={21} color={color} />
             <View>
-              <Text style={s.title}>Routes</Text>
-              <Text style={s.subtitle}>All active routes</Text>
+              <Text style={s.title}>Operations</Text>
             </View>
 
             {activeRoutes.length > 0 && (
@@ -829,7 +965,41 @@ export default function RoutesSheet() {
           </TouchableOpacity>
         </View>
 
-        {activeRoutes.length > 0 && (
+        {/* Segmented control */}
+        <View style={s.segWrap}>
+          <TouchableOpacity
+            style={[
+              s.seg,
+              activeTab === "routes" && {
+                backgroundColor: color + "18",
+                borderColor: color + "55",
+              },
+            ]}
+            onPress={() => setActiveTab("routes")}
+            activeOpacity={0.8}
+          >
+            <Text style={[s.segTxt, activeTab === "routes" && { color }]}>
+              Routes
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              s.seg,
+              activeTab === "hubs" && {
+                backgroundColor: color + "18",
+                borderColor: color + "55",
+              },
+            ]}
+            onPress={() => setActiveTab("hubs")}
+            activeOpacity={0.8}
+          >
+            <Text style={[s.segTxt, activeTab === "hubs" && { color }]}>
+              Hubs
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {activeTab === "routes" && activeRoutes.length > 0 && (
           <>
             <View style={[s.rushStats, { borderColor: summaryBorder }]}>
               <View style={s.rushStat}>
@@ -863,7 +1033,7 @@ export default function RoutesSheet() {
           </>
         )}
 
-        {stalledCount > 0 && (
+        {activeTab === "routes" && stalledCount > 0 && (
           <View style={s.alertBanner}>
             <Ionicons name="warning-outline" size={16} color={Colors.red} />
             <View style={{ flex: 1 }}>
@@ -879,7 +1049,7 @@ export default function RoutesSheet() {
           </View>
         )}
 
-        {activeRoutes.length === 0 && (
+        {activeTab === "routes" && activeRoutes.length === 0 && (
           <View style={s.empty}>
             <Ionicons name="git-network-outline" size={48} color={Colors.dim} />
             <Text style={s.emptyTitle}>No routes yet</Text>
@@ -899,7 +1069,7 @@ export default function RoutesSheet() {
           </View>
         )}
 
-        {activeRoutes.length > 0 && (
+        {activeTab === "routes" && activeRoutes.length > 0 && (
           <>
             <Text style={s.eyebrow}>YOUR ROUTES</Text>
             <Text style={s.eyebrowSub}>
@@ -921,6 +1091,41 @@ export default function RoutesSheet() {
           </>
         )}
 
+        {/* ── Hubs Tab ── */}
+        {activeTab === "hubs" && (
+          <>
+            {hubs.length === 0 ? (
+              <View style={s.empty}>
+                <Ionicons
+                  name="location-outline"
+                  size={48}
+                  color={Colors.dim}
+                />
+                <Text style={s.emptyTitle}>No hubs yet</Text>
+                <Text style={s.emptySub}>
+                  Tap an airport on the map to buy your first hub.
+                </Text>
+              </View>
+            ) : (
+              <View style={s.section}>
+                {hubs.map((hub) => (
+                  <HubRow
+                    key={hub.id}
+                    hub={hub}
+                    demands={liveDemands}
+                    dayProgress={dayProgress}
+                    color={color}
+                    onPress={() => {
+                      closeSheet();
+                      setTimeout(() => openSheet("airport", hub.airport), 120);
+                    }}
+                  />
+                ))}
+              </View>
+            )}
+          </>
+        )}
+
         <View style={{ height: 36 }} />
         <GameAlert ref={gameAlert.ref} />
       </BottomSheetScrollView>
@@ -931,6 +1136,45 @@ export default function RoutesSheet() {
     </>
   );
 }
+
+const hr = StyleSheet.create({
+  row: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    overflow: "hidden",
+    marginBottom: Spacing.sm,
+    backgroundColor: "rgba(255,255,255,.025)",
+  },
+  stripe: { width: 4, alignSelf: "stretch" },
+  body: { flex: 1, padding: Spacing.md, gap: 5 },
+  top: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+  },
+  left: { gap: 2 },
+  right: { alignItems: "flex-end" },
+  iata: { fontSize: 16, fontWeight: "900", color: Colors.text },
+  city: { fontSize: 10, color: Colors.dim },
+  trust: { fontSize: 14, fontWeight: "900" },
+  trustLbl: { fontSize: 8, color: Colors.dim },
+  stats: { flexDirection: "row", alignItems: "center", gap: 5 },
+  stat: { fontSize: 10, color: Colors.muted },
+  dot: { fontSize: 10, color: Colors.dim },
+  barRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  track: {
+    flex: 1,
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: "rgba(255,255,255,.08)",
+    overflow: "hidden",
+  },
+  fill: { height: "100%" as any, borderRadius: 2 },
+  pct: { fontSize: 9, fontWeight: "700", minWidth: 24 },
+});
 
 const rr = StyleSheet.create({
   card: {
@@ -1130,6 +1374,15 @@ const rr = StyleSheet.create({
     fontSize: 10,
     fontWeight: "900",
     flexShrink: 0,
+  },
+  qualityWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+  },
+  qualityLabel: {
+    fontSize: 9,
+    fontWeight: "700",
   },
   growthWrap: {
     flexDirection: "row",
@@ -1378,6 +1631,26 @@ const s = StyleSheet.create({
   section: {
     paddingHorizontal: Spacing.lg,
     marginBottom: Spacing.sm,
+  },
+  segWrap: {
+    flexDirection: "row",
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.md,
+    gap: Spacing.xs ?? 4,
+  },
+  seg: {
+    flex: 1,
+    alignItems: "center",
+    paddingVertical: Spacing.sm,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: "rgba(255,255,255,.025)",
+  },
+  segTxt: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: Colors.dim,
   },
   empty: {
     alignItems: "center",

@@ -17,7 +17,7 @@ import {
   useRouteCreationActive,
   useRoutes,
 } from "@/store";
-import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { Ionicons } from "@expo/vector-icons";
 import { useEffect, useRef } from "react";
 import {
   Animated,
@@ -37,9 +37,9 @@ interface TabDef {
 const LEFT_TABS: TabDef[] = [
   {
     id: "routes",
-    label: "Routes",
+    label: "Operations",
     Icon: ({ color, size }) => (
-      <MaterialCommunityIcons name="routes" size={size} color={color} />
+      <Ionicons name="flash-outline" size={size} color={color} />
     ),
   },
   {

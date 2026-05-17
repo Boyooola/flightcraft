@@ -80,30 +80,54 @@ async function cancelNotifications() {
 // ─────────────────────────────────────────────────────────────────
 
 function estimateDailyNetRevenue(): number {
-  const { routes, demands, hubs, airline } = useGameStore.getState();
+  const { routes, demands, hubs, airline, ownedPlanes } =
+    useGameStore.getState();
   const activeRoutes = routes.filter((r) => r.active);
-  if (activeRoutes.length === 0 || !airline) return 0;
+  const activePlaneIds = new Set(activeRoutes.map((r) => r.plane.id));
+  if (!airline) return 0;
 
-  return activeRoutes.reduce((total, route) => {
+  // Revenue from active routes
+  const grossRevenue = activeRoutes.reduce((total, route) => {
     const demand =
       demands.find((d) => d.id === route.demand.id) ?? route.demand;
     const hub = hubs.find((h) => h.airport.iata === route.hub_iata);
     const p = route.plane.plane_model;
     const dist = route.total_dist_nm ?? demand.dist_nm;
+    const paxDay = demand.base_pax_day ?? 0; // fixed: was demand.pax_day
+
+    if (paxDay <= 0) return total;
+
+    // Condition penalty — worn planes earn less while away too
+    const condition = route.plane.condition ?? 100;
+    const conditionMul = condition <= 15 ? 0.7 : condition <= 40 ? 0.85 : 1.0;
 
     const res = calcRouteRevenue({
       distNm: dist,
       speedKts: p.speed_kts,
       trustPct: hub?.trust ?? 0,
-      deliveredPax: demand.base_pax_day, // assume full delivery while away
-      paxDay: demand.base_pax_day,
+      deliveredPax: paxDay, // assume full delivery each away day
+      paxDay,
       costPerSector: p.cost_per_sector ?? 500,
       fuelPerNm: p.fuel_per_nm ?? 2.0,
       businessPct: demand.business_pct ?? 0.25,
       leisurePct: demand.leisure_pct ?? 0.75,
     });
-    return total + res.net;
+
+    return total + Math.round(res.net * conditionMul);
   }, 0);
+
+  // Idle plane maintenance cost — same as live game
+  const idlePlanes = (ownedPlanes ?? []).filter(
+    (p) => !activePlaneIds.has(p.id),
+  );
+  const maintenanceCost = idlePlanes.reduce((sum, p) => {
+    const dailyOps =
+      (p.plane_model.cost_per_sector ?? 500) * 2 +
+      (p.plane_model.fuel_per_nm ?? 2) * 500;
+    return sum + Math.round(dailyOps * 0.15);
+  }, 0);
+
+  return grossRevenue - maintenanceCost;
 }
 
 async function applyAwayEarnings(bgTimestamp: number, bgSpeed: number) {
@@ -113,21 +137,23 @@ async function applyAwayEarnings(bgTimestamp: number, bgSpeed: number) {
   const msPerDay = BASE_DAY_MS / Math.max(1, bgSpeed);
   const daysElapsed = Math.floor(elapsedMs / msPerDay);
 
-  if (daysElapsed <= 0) return;
+  if (daysElapsed <= 0) {
+    useGameStore.getState().setIsApplyingAway(false);
+    return;
+  }
 
   const cappedDays = Math.min(daysElapsed, MAX_AWAY_DAYS);
   const dailyNet = estimateDailyNetRevenue();
-  const totalEarnings = Math.round(dailyNet * cappedDays);
 
-  if (totalEarnings === 0 && cappedDays === 0) return;
+  // dailyNet can be negative (e.g. idle fleet, heavy loan)
+  const totalEarnings = Math.round(dailyNet * cappedDays);
 
   const { earnCash, advanceDay, addLedgerEntries, airline } =
     useGameStore.getState();
 
-  // Advance days
+  // Advance days in store
   for (let i = 0; i < cappedDays; i++) advanceDay();
 
-  // Credit earnings
   // Apply loan interest for away days
   const { airline: latestAirline } = useGameStore.getState();
   if (latestAirline && latestAirline.loan > 0) {
@@ -152,26 +178,28 @@ async function applyAwayEarnings(bgTimestamp: number, bgSpeed: number) {
     }
   }
 
+  // Credit or debit net earnings (can be negative)
   if (totalEarnings !== 0) {
     earnCash(totalEarnings);
-    // Store for in-app toast display
-    useGameStore
-      .getState()
-      .setAwayEarnings({ days: cappedDays, amount: totalEarnings });
+    useGameStore.getState().setAwayEarnings({
+      days: cappedDays,
+      amount: totalEarnings,
+    });
     addLedgerEntries([
       {
         id: `away-earnings-${Date.now()}`,
         day: (airline?.day ?? 1) + cappedDays,
-        type: totalEarnings >= 0 ? "revenue" : "purchase",
-        label: `Away earnings (${cappedDays} day${cappedDays !== 1 ? "s" : ""})`,
+        type: totalEarnings >= 0 ? "revenue" : "interest",
+        label: `Away ${totalEarnings >= 0 ? "earnings" : "loss"} (${cappedDays} day${cappedDays !== 1 ? "s" : ""})`,
         amount: totalEarnings,
         route_id: null,
       },
     ]);
+  } else if (cappedDays > 0) {
+    // Show the modal even if net is zero so player knows days passed
+    useGameStore.getState().setAwayEarnings({ days: cappedDays, amount: 0 });
   }
 
-  // In-app toast handled by AwayEarningsCard component
-  // Small delay then clear flag so useRevenueTick resumes normally
   setTimeout(() => useGameStore.getState().setIsApplyingAway(false), 500);
 }
 

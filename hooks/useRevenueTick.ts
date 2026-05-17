@@ -30,6 +30,8 @@ import {
 } from "@/lib/globalContracts";
 import { hubOutboundWaitingPax } from "@/lib/passengerFlow";
 import { calcRouteRevenue, dailyInterest } from "@/lib/revenue";
+import { getActiveSeason, getSeasonLabel } from "@/lib/seasons";
+import { supabase } from "@/lib/supabase";
 import type { Demand, LedgerEntry } from "@/store";
 import { useGameStore } from "@/store";
 import { useEffect, useRef } from "react";
@@ -317,6 +319,87 @@ export function useRevenueTick() {
     }
     if (entries.length) addLedgerEntries(entries);
 
+    // ── Plane wear — condition decreases daily with use ───────────
+    // Active planes lose 2–4 condition/day. Idle planes recover 1/day.
+    // Player triggers full restoration via FleetSheet maintenance button.
+    {
+      const { ownedPlanes, updateOwnedPlane } = useGameStore.getState();
+      const wearUpdates: {
+        id: string;
+        condition: number;
+        days_active: number;
+      }[] = [];
+
+      ownedPlanes.forEach((plane) => {
+        const isActive = activePlaneIds.has(plane.id);
+        const condition = plane.condition ?? 100;
+        const daysActive = plane.days_active ?? 0;
+
+        if (isActive) {
+          // Long-haul planes wear faster
+          const wearRate = plane.plane_model.range_nm > 4000 ? 3 : 2;
+          const newCondition = Math.max(0, condition - wearRate);
+          const newDaysActive = daysActive + 1;
+
+          updateOwnedPlane(plane.id, {
+            condition: newCondition,
+            days_active: newDaysActive,
+          });
+          wearUpdates.push({
+            id: plane.id,
+            condition: newCondition,
+            days_active: newDaysActive,
+          });
+
+          // Warn at 40% — first time crossing threshold
+          if (newCondition <= 40 && condition > 40) {
+            emitWarningToast({
+              id: `wear-warn-${plane.id}-${airline.day}`,
+              level: "low",
+              cash: airline.cash,
+              message: `✈ ${plane.plane_model.nickname} is getting worn — consider maintenance soon.`,
+            });
+          }
+          // Critical at 15%
+          if (newCondition <= 15 && condition > 15) {
+            emitWarningToast({
+              id: `wear-crit-${plane.id}-${airline.day}`,
+              level: "critical",
+              cash: airline.cash,
+              message: `⚠ ${plane.plane_model.nickname} is in critical condition — revenue is reduced.`,
+            });
+          }
+        } else {
+          // Idle — slow natural recovery (1/day)
+          const recovered = Math.min(100, condition + 5); // ~2 week rest = full recovery
+          const newDaysActive = 0;
+          if (recovered !== condition || daysActive !== 0) {
+            updateOwnedPlane(plane.id, {
+              condition: recovered,
+              days_active: newDaysActive,
+            });
+            wearUpdates.push({
+              id: plane.id,
+              condition: recovered,
+              days_active: newDaysActive,
+            });
+          }
+        }
+      });
+
+      // Batch DB write — fire and forget
+      if (wearUpdates.length > 0) {
+        Promise.all(
+          wearUpdates.map(({ id, condition, days_active }) =>
+            supabase
+              .from("owned_planes")
+              .update({ condition, days_active })
+              .eq("id", id),
+          ),
+        ).catch(() => {}); // Silent fail — corrects on next tick
+      }
+    }
+
     // Weekly progress accumulation.
     {
       const {
@@ -439,6 +522,26 @@ export function useRevenueTick() {
       overcrowdedHubs: overcrowdedCount,
       crisisHubs: crisisHubs,
     });
+
+    // Seasonal note — shown once at start of each new month (every ~30 days)
+    const nextDay = airline.day + 1;
+    const seasonLabel = getSeasonLabel(nextDay);
+    const prevSeason = getSeasonLabel(airline.day);
+    if (seasonLabel && seasonLabel !== prevSeason) {
+      const { effects } = getActiveSeason(nextDay);
+      const top = effects[0];
+      if (top) {
+        emitWarningToast({
+          id: `season-${nextDay}`,
+          level: top.multiplier > 1 ? "low" : "low",
+          cash: airline.cash,
+          message:
+            top.multiplier > 1
+              ? `✈ ${seasonLabel} — ${top.region.replace(/_/g, " ")} routes are busier this season.`
+              : `✈ ${seasonLabel} — ${top.region.replace(/_/g, " ")} routes are quieter this season.`,
+        });
+      }
+    }
 
     hubs.forEach((hub) => {
       const hubIata = hub.airport.iata;

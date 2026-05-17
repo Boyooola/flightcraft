@@ -10,6 +10,7 @@ import TabBar from "@/components/hud/TabBar";
 import TopHUD from "@/components/hud/TopHUD";
 import GameMap from "@/components/map/GameMap";
 import SheetManager from "@/components/sheets/SheetManager";
+import AwayEarningsCard from "@/components/ui/AwayEarningsCard";
 import BankruptScreen from "@/components/ui/BankruptScreen";
 import DailyEventCard from "@/components/ui/DailyEventCard";
 import DaySummaryCard from "@/components/ui/DaySummaryCard";
@@ -92,6 +93,7 @@ function GameContent() {
       {phase === "playing" && <SurgeIndicator />}
       {phase === "playing" && <DaySummaryCard />}
       {phase === "playing" && <ToastStack />}
+      {phase === "playing" && <AwayEarningsCard />}
       {(phase === "playing" || phase === "tutorial") && <RouteCreationBanner />}
       {phase === "tutorial" && mapReady && <TutorialScreen />}
       {phase === "bankrupt" && <BankruptScreen />}

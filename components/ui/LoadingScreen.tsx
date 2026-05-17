@@ -1,10 +1,10 @@
 /**
  * components/ui/LoadingScreen.tsx
  *
- * WorldWide Rush-style loading screen.
+ * FlightCraft loading screen — clean and minimal.
  */
 
-import { Colors, Radius, Spacing } from "@/constants/theme";
+import { Colors, Spacing } from "@/constants/theme";
 import type { LoadStep } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
 import { useEffect, useRef } from "react";
@@ -18,73 +18,6 @@ interface LoadingScreenProps {
   overlay?: boolean;
 }
 
-function StepRow({ step }: { step: LoadStep }) {
-  const pulse = useRef(new Animated.Value(1)).current;
-
-  useEffect(() => {
-    if (step.status !== "loading") {
-      pulse.setValue(1);
-      return;
-    }
-
-    const anim = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, {
-          toValue: 0.35,
-          duration: 520,
-          useNativeDriver: true,
-        }),
-        Animated.timing(pulse, {
-          toValue: 1,
-          duration: 520,
-          useNativeDriver: true,
-        }),
-      ]),
-    );
-
-    anim.start();
-    return () => anim.stop();
-  }, [pulse, step.status]);
-
-  const color =
-    step.status === "done"
-      ? Colors.green
-      : step.status === "loading"
-        ? Colors.sky
-        : step.status === "error"
-          ? Colors.red
-          : Colors.dim;
-
-  const icon =
-    step.status === "done"
-      ? "checkmark"
-      : step.status === "error"
-        ? "close"
-        : step.status === "loading"
-          ? "flash-outline"
-          : "ellipse-outline";
-
-  return (
-    <View style={s.stepRow}>
-      <Animated.View
-        style={[s.stepIcon, { backgroundColor: color + "18", opacity: pulse }]}
-      >
-        <Ionicons name={icon as any} size={12} color={color} />
-      </Animated.View>
-
-      <Text
-        style={[
-          s.stepLabel,
-          { color: step.status === "loading" ? Colors.text : color },
-        ]}
-        numberOfLines={1}
-      >
-        {step.label}
-      </Text>
-    </View>
-  );
-}
-
 export default function LoadingScreen({
   steps,
   message,
@@ -93,54 +26,68 @@ export default function LoadingScreen({
 }: LoadingScreenProps) {
   const insets = useSafeAreaInsets();
   const fade = useRef(new Animated.Value(0)).current;
-  const rise = useRef(new Animated.Value(14)).current;
-  const planePulse = useRef(new Animated.Value(1)).current;
+  const rise = useRef(new Animated.Value(20)).current;
+  const planeBob = useRef(new Animated.Value(0)).current;
+  const barWidth = useRef(new Animated.Value(0)).current;
 
+  const done = steps?.filter((s) => s.status === "done").length ?? 0;
+  const total = steps?.length ?? 1;
+  const pct = Math.round((done / total) * 100);
+
+  const hasError = !!error || steps?.some((s) => s.status === "error");
+  const accentColor = hasError ? Colors.red : Colors.sky;
+
+  const currentStep = steps?.find((s) => s.status === "loading");
+  const statusText = hasError
+    ? (error ??
+      steps?.find((s) => s.status === "error")?.error ??
+      "Something went wrong")
+    : (currentStep?.label ?? message ?? "Getting ready…");
+
+  // Fade + rise on mount
   useEffect(() => {
     Animated.parallel([
       Animated.timing(fade, {
         toValue: 1,
-        duration: 360,
+        duration: 400,
         useNativeDriver: true,
       }),
       Animated.timing(rise, {
         toValue: 0,
-        duration: 360,
+        duration: 400,
         useNativeDriver: true,
       }),
     ]).start();
+  }, []);
 
+  // Plane gentle bob
+  useEffect(() => {
     const anim = Animated.loop(
       Animated.sequence([
-        Animated.timing(planePulse, {
-          toValue: 1.08,
-          duration: 700,
+        Animated.timing(planeBob, {
+          toValue: -6,
+          duration: 900,
           useNativeDriver: true,
         }),
-        Animated.timing(planePulse, {
-          toValue: 1,
-          duration: 700,
+        Animated.timing(planeBob, {
+          toValue: 0,
+          duration: 900,
           useNativeDriver: true,
         }),
       ]),
     );
-
     anim.start();
     return () => anim.stop();
-  }, [fade, rise, planePulse]);
+  }, []);
 
-  const done = steps?.filter((step) => step.status === "done").length ?? 0;
-  const total = steps?.length ?? 1;
-  const pct = Math.round((done / total) * 100);
-  const hasError = !!error || steps?.some((step) => step.status === "error");
-
-  const statusText = hasError
-    ? (error ??
-      steps?.find((step) => step.status === "error")?.error ??
-      "Loading error")
-    : (steps?.find((step) => step.status === "loading")?.label ??
-      message ??
-      "Building your route map…");
+  // Animate progress bar width
+  useEffect(() => {
+    Animated.timing(barWidth, {
+      toValue: pct,
+      duration: 300,
+      useNativeDriver: false,
+    }).start();
+  }, [pct]);
 
   return (
     <Animated.View
@@ -149,63 +96,84 @@ export default function LoadingScreen({
         overlay && s.overlay,
         {
           paddingTop: insets.top + Spacing.xxl,
-          paddingBottom: insets.bottom + Spacing.lg,
+          paddingBottom: insets.bottom + Spacing.xl,
           opacity: fade,
         },
       ]}
     >
       <Animated.View style={[s.content, { transform: [{ translateY: rise }] }]}>
+        {/* Plane icon */}
         <Animated.View
           style={[
-            s.logo,
+            s.iconWrap,
             {
-              borderColor: hasError ? Colors.red + "44" : Colors.sky + "44",
-              transform: [{ scale: planePulse }],
+              borderColor: accentColor + "33",
+              transform: [{ translateY: planeBob }],
             },
           ]}
         >
           <Ionicons
             name={hasError ? "warning-outline" : "airplane"}
-            size={34}
-            color={hasError ? Colors.red : Colors.sky}
+            size={36}
+            color={accentColor}
           />
         </Animated.View>
 
-        <Text style={s.wordmark}>FLIGHTCRAFT</Text>
-        <Text style={s.tagline}>PASSENGER RUSH TYCOON</Text>
+        {/* Wordmark */}
+        <Text style={s.wordmark}>Flightcraft</Text>
+        <Text style={[s.tagline, { color: accentColor }]}>Airline Tycoon</Text>
 
-        <View style={s.statusCard}>
-          <View style={s.statusTop}>
-            <Text style={[s.statusText, hasError && { color: Colors.red }]}>
+        {/* Progress area */}
+        <View style={s.progressArea}>
+          {/* Status text + percentage */}
+          <View style={s.statusRow}>
+            <Text
+              style={[s.statusTxt, hasError && { color: Colors.red }]}
+              numberOfLines={1}
+            >
               {statusText}
             </Text>
-            <Text
-              style={[s.pct, { color: hasError ? Colors.red : Colors.sky }]}
-            >
-              {pct}%
-            </Text>
+            <Text style={[s.pct, { color: accentColor }]}>{pct}%</Text>
           </View>
 
+          {/* Progress bar */}
           <View style={s.track}>
-            <View
+            <Animated.View
               style={[
                 s.fill,
                 {
-                  width: `${pct}%` as any,
-                  backgroundColor: hasError ? Colors.red : Colors.sky,
+                  backgroundColor: accentColor,
+                  width: barWidth.interpolate({
+                    inputRange: [0, 100],
+                    outputRange: ["0%", "100%"],
+                  }),
                 },
               ]}
             />
           </View>
-        </View>
 
-        {!!steps && (
-          <View style={s.steps}>
-            {steps.map((step) => (
-              <StepRow key={step.key} step={step} />
-            ))}
-          </View>
-        )}
+          {/* Step dots — compact, no labels */}
+          {!!steps && steps.length > 0 && (
+            <View style={s.dots}>
+              {steps.map((step) => {
+                const dotColor =
+                  step.status === "done"
+                    ? Colors.green
+                    : step.status === "loading"
+                      ? Colors.sky
+                      : step.status === "error"
+                        ? Colors.red
+                        : Colors.dim + "44";
+                return (
+                  <View
+                    key={step.key}
+                    style={[s.dot, { backgroundColor: dotColor }]}
+                  />
+                );
+              })}
+            </View>
+          )}
+        </View>
       </Animated.View>
     </Animated.View>
   );
@@ -226,89 +194,81 @@ const s = StyleSheet.create({
   },
   content: {
     width: "100%",
-    maxWidth: 340,
+    maxWidth: 320,
     alignItems: "center",
+    gap: Spacing.sm,
   },
-  logo: {
-    width: 76,
-    height: 76,
+
+  // Icon
+  iconWrap: {
+    width: 80,
+    height: 80,
     borderRadius: 24,
     borderWidth: 1,
-    backgroundColor: "rgba(56,189,248,0.08)",
+    backgroundColor: "rgba(56,189,248,0.07)",
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: Spacing.lg,
-  },
-  wordmark: {
-    fontSize: 34,
-    color: Colors.text,
-    letterSpacing: 7,
-    fontWeight: "900",
-  },
-  tagline: {
-    fontSize: 9,
-    color: Colors.sky,
-    letterSpacing: 3.4,
-    fontWeight: "800",
-    marginTop: 4,
-    marginBottom: Spacing.xl,
-    opacity: 0.75,
-  },
-  statusCard: {
-    width: "100%",
-    borderRadius: Radius.xl,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: "rgba(255,255,255,.03)",
-    padding: Spacing.md,
     marginBottom: Spacing.md,
   },
-  statusTop: {
+
+  // Wordmark
+  wordmark: {
+    fontSize: 30,
+    color: Colors.text,
+    fontWeight: "900",
+    letterSpacing: -0.5,
+  },
+  tagline: {
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 2,
+    opacity: 0.7,
+    marginBottom: Spacing.xl,
+    textTransform: "uppercase" as const,
+  },
+
+  // Progress
+  progressArea: {
+    width: "100%",
+    gap: Spacing.sm,
+  },
+  statusRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     gap: Spacing.sm,
-    marginBottom: Spacing.sm,
   },
-  statusText: {
+  statusTxt: {
     flex: 1,
     fontSize: 11,
     color: Colors.muted,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   pct: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: "900",
   },
   track: {
-    height: 5,
-    backgroundColor: "rgba(255,255,255,.08)",
+    height: 4,
+    backgroundColor: "rgba(255,255,255,.07)",
     borderRadius: 999,
     overflow: "hidden",
   },
   fill: {
-    height: "100%",
+    height: "100%" as any,
     borderRadius: 999,
   },
-  steps: {
-    width: "100%",
-    gap: Spacing.sm,
-  },
-  stepRow: {
+
+  // Step dots
+  dots: {
     flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.sm,
-  },
-  stepIcon: {
-    width: 24,
-    height: 24,
-    borderRadius: 999,
-    alignItems: "center",
+    gap: 5,
     justifyContent: "center",
+    marginTop: Spacing.xs ?? 4,
   },
-  stepLabel: {
-    flex: 1,
-    fontSize: 11,
-    fontWeight: "700",
+  dot: {
+    width: 6,
+    height: 6,
+    borderRadius: 999,
   },
 });

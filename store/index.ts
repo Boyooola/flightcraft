@@ -135,6 +135,8 @@ export interface OwnedPlane {
   id: string;
   plane_model: PlaneModel;
   route_id: string | null;
+  condition: number; // 0–100. 100=new, decreases with daily use
+  days_active: number; // consecutive days on an active route
 }
 
 export interface Route {
@@ -282,6 +284,7 @@ export interface GameStore {
   // Fleet
   setOwnedPlanes: (planes: OwnedPlane[]) => void;
   addOwnedPlane: (plane: OwnedPlane) => void;
+  updateOwnedPlane: (id: string, patch: Partial<OwnedPlane>) => void;
 
   // Routes
   setRoutes: (routes: Route[]) => void;
@@ -591,7 +594,7 @@ export const useGameStore = create<GameStore>()(
             // If not cleared → demand can only stay or shrink (computed may drop due to popularity).
             const didClear = delivered >= d.base_pax_day;
             const newPax = didClear
-              ? Math.max(floor, computed) // cleared → grow freely
+              ? Math.max(floor, Math.min(computed, Math.round(base * 1.05))) // cleared → grow max 5%/day
               : Math.max(
                   floor,
                   Math.min(
@@ -653,6 +656,17 @@ export const useGameStore = create<GameStore>()(
           (s) => ({ ownedPlanes: [...s.ownedPlanes, plane] }),
           false,
           "addOwnedPlane",
+        ),
+
+      updateOwnedPlane: (id, patch) =>
+        set(
+          (s) => ({
+            ownedPlanes: s.ownedPlanes.map((p) =>
+              p.id === id ? { ...p, ...patch } : p,
+            ),
+          }),
+          false,
+          "updateOwnedPlane",
         ),
 
       // ── Routes ───────────────────────────────────────────────────

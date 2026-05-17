@@ -15,7 +15,7 @@ import { gameSounds } from "@/hooks/useGameSounds";
 import {
   generateDemands,
   generateOneDemand,
-  hubPurchaseCost
+  hubPurchaseCost,
 } from "@/lib/demands";
 import { fmtCash } from "@/lib/revenue";
 import { supabase } from "@/lib/supabase";
@@ -604,8 +604,13 @@ export function useSpawnDailyDemand() {
     if (!hub) return;
 
     const hubDemands = demands.filter((d) => d.hub_iata === hubIata);
-    const hasPending = hubDemands.some((d) => d.status === "pending");
-    if (hasPending) return;
+
+    // Block spawn if any demand still has undelivered passengers today
+    // (status is always "pending" so we check delivery ratio instead)
+    const hasUnserved = hubDemands.some(
+      (d) => (d.delivered_pax_today ?? 0) < (d.base_pax_day ?? 1),
+    );
+    if (hasUnserved) return;
 
     const existingDests = hubDemands.map((d) => d.dest.iata);
     const newDemand = generateOneDemand(
@@ -614,6 +619,7 @@ export function useSpawnDailyDemand() {
       existingDests,
       airline.demand_score,
       hubDemands.length,
+      airline.day ?? 1,
     );
 
     if (!newDemand) return;
@@ -659,6 +665,73 @@ export function useSpawnDailyDemand() {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// PLANE MAINTENANCE
+// ─────────────────────────────────────────────────────────────────
+
+export function useMaintenancePlane() {
+  const store = useGameStore.getState;
+
+  return useCallback(
+    async (planeId: string): Promise<{ error: string | null }> => {
+      const {
+        airline,
+        ownedPlanes,
+        updateOwnedPlane,
+        spendCash,
+        addLedgerEntries,
+      } = store();
+      if (!airline) return { error: "No airline found" };
+
+      const plane = ownedPlanes.find((p) => p.id === planeId);
+      if (!plane) return { error: "Plane not found" };
+
+      // Cost: $5K base + $50 per seat — affordable but meaningful
+      const cost = Math.round(5_000 + plane.plane_model.pax_capacity * 50);
+      if (airline.cash < cost) {
+        return { error: `Need ${fmtCash(cost)} for maintenance` };
+      }
+
+      // Optimistic update
+      updateOwnedPlane(planeId, { condition: 100, days_active: 0 });
+      spendCash(cost);
+      addLedgerEntries([
+        {
+          id: `maint-${planeId}-${Date.now()}`,
+          day: airline.day,
+          type: "purchase" as const,
+          label: `Maintenance — ${plane.plane_model.nickname}`,
+          amount: -cost,
+          route_id: null,
+        },
+      ]);
+
+      try {
+        await supabase
+          .from("owned_planes")
+          .update({ condition: 100, days_active: 0 })
+          .eq("id", planeId);
+
+        await supabase
+          .from("airlines")
+          .update({ cash: store().airline?.cash })
+          .eq("id", airline.id);
+
+        return { error: null };
+      } catch (err) {
+        // Rollback
+        updateOwnedPlane(planeId, {
+          condition: plane.condition,
+          days_active: plane.days_active,
+        });
+        spendCash(-cost);
+        return { error: "Maintenance failed — please try again" };
+      }
+    },
+    [],
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────
 // BUY PLANE
 // ─────────────────────────────────────────────────────────────────
 
@@ -688,7 +761,13 @@ export function useBuyPlane() {
 
       const tempId = `temp-plane-${Date.now()}`;
       spendCash(planeModel.price);
-      addOwnedPlane({ id: tempId, plane_model: planeModel, route_id: null });
+      addOwnedPlane({
+        id: tempId,
+        plane_model: planeModel,
+        route_id: null,
+        condition: 100,
+        days_active: 0,
+      });
       store().setBoughtPlaneToday(true);
 
       addLedgerEntries([
@@ -705,7 +784,12 @@ export function useBuyPlane() {
       try {
         const { data, error } = await supabase
           .from("owned_planes")
-          .insert({ airline_id: airline.id, plane_id: planeModel.id })
+          .insert({
+            airline_id: airline.id,
+            plane_id: planeModel.id,
+            condition: 100,
+            days_active: 0,
+          })
           .select()
           .single();
 
@@ -713,7 +797,14 @@ export function useBuyPlane() {
 
         store().setOwnedPlanes(
           store().ownedPlanes.map((p) =>
-            p.id === tempId ? { ...p, id: data.id } : p,
+            p.id === tempId
+              ? {
+                  ...p,
+                  id: data.id,
+                  condition: data.condition ?? 100,
+                  days_active: data.days_active ?? 0,
+                }
+              : p,
           ),
         );
 

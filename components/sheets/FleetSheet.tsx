@@ -14,7 +14,7 @@ import { Colors, Radius, Spacing } from "@/constants/theme";
 import { useGameSounds } from "@/hooks/useGameSounds";
 import { useHaptics } from "@/hooks/useHaptics";
 import { useTabBarHeight } from "@/hooks/useSheetLayout";
-import { useBuyPlane } from "@/hooks/useSupabaseWrite";
+import { useBuyPlane, useMaintenancePlane } from "@/hooks/useSupabaseWrite";
 import { fmtCash } from "@/lib/revenue";
 import type { OwnedPlane, PlaneModel } from "@/store";
 import {
@@ -103,13 +103,13 @@ const OwnedPlaneGroup = React.memo(function OwnedPlaneGroup({
   group: { model: PlaneModel; planes: OwnedPlane[] };
   planeRouteMap: Map<string, string>;
   onAssign: () => void;
+  day: number;
 }) {
   const fc = FAMILY_COLOR[group.model.family] ?? Colors.sky;
 
   const total = group.planes.length;
   const active = group.planes.filter((p) => planeRouteMap.has(p.id)).length;
   const idle = total - active;
-
   return (
     <View style={g.row}>
       <View style={[g.stripe, { backgroundColor: fc }]} />
@@ -131,15 +131,17 @@ const OwnedPlaneGroup = React.memo(function OwnedPlaneGroup({
         </Text>
       </View>
 
-      {idle > 0 && (
-        <TouchableOpacity
-          style={[g.assignBtn, { backgroundColor: fc }]}
-          onPress={onAssign}
-        >
-          <Ionicons name="flash-outline" size={13} color={Colors.bg} />
-          <Text style={g.assignTxt}>Assign</Text>
-        </TouchableOpacity>
-      )}
+      <View style={g.actions}>
+        {idle > 0 && (
+          <TouchableOpacity
+            style={[g.assignBtn, { backgroundColor: fc }]}
+            onPress={onAssign}
+          >
+            <Ionicons name="flash-outline" size={13} color={Colors.bg} />
+            <Text style={g.assignTxt}>Assign</Text>
+          </TouchableOpacity>
+        )}
+      </View>
     </View>
   );
 });
@@ -320,6 +322,7 @@ function PlaneCard({
 }
 
 export default function FleetSheet() {
+  const [activeTab, setActiveTab] = useState<"planes" | "store">("planes");
   const ownedPlanes = useOwnedPlanes();
   const planes = usePlanes();
   const routes = useRoutes();
@@ -333,6 +336,7 @@ export default function FleetSheet() {
 
   const color = airline?.color ?? Colors.sky;
   const demandScore = airline?.demand_score ?? 0;
+  const day = airline?.day ?? 0;
 
   const planeRouteMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -401,6 +405,14 @@ export default function FleetSheet() {
     return Array.from(map.values());
   }, [ownedPlanes]);
 
+  const maintenancePlane = useMaintenancePlane();
+  const handleMaintain = useCallback(
+    (planeId: string) => {
+      maintenancePlane(planeId);
+    },
+    [maintenancePlane],
+  );
+
   const handleAssign = useCallback(() => {
     haptics.confirm();
     closeSheet();
@@ -421,7 +433,6 @@ export default function FleetSheet() {
           <Ionicons name="flash-outline" size={21} color={color} />
           <View>
             <Text style={s.title}>Fleet</Text>
-            <Text style={s.subtitle}>Your aircraft</Text>
           </View>
         </View>
 
@@ -430,6 +441,40 @@ export default function FleetSheet() {
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
         >
           <Ionicons name="close" size={22} color={Colors.dim} />
+        </TouchableOpacity>
+      </View>
+
+      {/* Segmented control */}
+      <View style={s.segWrap}>
+        <TouchableOpacity
+          style={[
+            s.seg,
+            activeTab === "planes" && {
+              backgroundColor: color + "18",
+              borderColor: color + "55",
+            },
+          ]}
+          onPress={() => setActiveTab("planes")}
+          activeOpacity={0.8}
+        >
+          <Text style={[s.segTxt, activeTab === "planes" && { color }]}>
+            My Planes
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[
+            s.seg,
+            activeTab === "store" && {
+              backgroundColor: color + "18",
+              borderColor: color + "55",
+            },
+          ]}
+          onPress={() => setActiveTab("store")}
+          activeOpacity={0.8}
+        >
+          <Text style={[s.segTxt, activeTab === "store" && { color }]}>
+            Store
+          </Text>
         </TouchableOpacity>
       </View>
 
@@ -468,74 +513,275 @@ export default function FleetSheet() {
         </View>
       </View>
 
-      {idlePlanes.length > 0 && pendingDemands.length > 0 && (
-        <TouchableOpacity
-          style={[s.actionBanner, { borderColor: color + "44" }]}
-          onPress={handleAssign}
-        >
-          <Ionicons name="airplane-outline" size={17} color={color} />
-          <View style={{ flex: 1 }}>
-            <Text style={s.actionTitle}>Idle planes can clear demand</Text>
-            <Text style={s.actionSub}>
-              Assign a plane to start moving waiting passengers.
-            </Text>
-          </View>
-          <Ionicons name="chevron-forward" size={18} color={Colors.dim} />
-        </TouchableOpacity>
-      )}
-      {ownedPlanes.length > 0 && (
+      {/* ── My Planes Tab ── */}
+      {activeTab === "planes" && (
         <>
-          <Text style={s.eyebrow}>YOUR FLEET</Text>
-          <View style={s.section}>
-            {groupedOwned.map((group) => (
-              <OwnedPlaneGroup
-                key={group.model.id}
-                group={group}
-                planeRouteMap={planeRouteMap}
-                onAssign={handleAssign}
-              />
-            ))}
-          </View>
-          <View style={s.divider} />
+          {ownedPlanes.length === 0 ? (
+            <View style={s.emptyState}>
+              <Ionicons name="airplane-outline" size={48} color={Colors.dim} />
+              <Text style={s.emptyTitle}>No planes yet</Text>
+              <Text style={s.emptySub}>
+                Go to the Store tab to buy your first aircraft.
+              </Text>
+              <TouchableOpacity
+                style={[s.emptyBtn, { borderColor: color + "55" }]}
+                onPress={() => setActiveTab("store")}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="storefront-outline" size={15} color={color} />
+                <Text style={[s.emptyBtnTxt, { color }]}>Open Store</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <>
+              {/* Assign banner */}
+              {idlePlanes.length > 0 && pendingDemands.length > 0 && (
+                <TouchableOpacity
+                  style={[s.actionBanner, { borderColor: color + "44" }]}
+                  onPress={handleAssign}
+                >
+                  <Ionicons name="airplane-outline" size={17} color={color} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.actionTitle}>
+                      {idlePlanes.length} idle plane
+                      {idlePlanes.length !== 1 ? "s" : ""} ready to assign
+                    </Text>
+                    <Text style={s.actionSub}>Tap to open route creation.</Text>
+                  </View>
+                  <Ionicons
+                    name="chevron-forward"
+                    size={18}
+                    color={Colors.dim}
+                  />
+                </TouchableOpacity>
+              )}
+
+              {/* ── Needs Attention section ── */}
+              {(() => {
+                const worn = ownedPlanes.filter(
+                  (p) => (p.condition ?? 100) <= 40,
+                );
+                if (worn.length === 0) return null;
+                return (
+                  <>
+                    <Text style={s.eyebrow}>NEEDS ATTENTION</Text>
+                    <View style={s.section}>
+                      {worn.map((plane) => {
+                        const cond = plane.condition ?? 100;
+                        const condColor =
+                          cond <= 15 ? Colors.red : Colors.amber;
+                        const maintCost =
+                          5_000 + plane.plane_model.pax_capacity * 50;
+                        const fc =
+                          FAMILY_COLOR[plane.plane_model.family] ?? Colors.sky;
+                        return (
+                          <View key={plane.id} style={m.row}>
+                            <View
+                              style={[m.stripe, { backgroundColor: condColor }]}
+                            />
+                            <View style={m.body}>
+                              <Text style={m.name} numberOfLines={1}>
+                                {plane.plane_model.nickname}
+                              </Text>
+                              <View style={m.barRow}>
+                                <View style={m.track}>
+                                  <View
+                                    style={[
+                                      m.fill,
+                                      {
+                                        width: `${cond}%` as any,
+                                        backgroundColor: condColor,
+                                      },
+                                    ]}
+                                  />
+                                </View>
+                                <Text style={[m.pct, { color: condColor }]}>
+                                  {cond}%
+                                </Text>
+                              </View>
+                            </View>
+                            <TouchableOpacity
+                              style={m.btn}
+                              onPress={() => handleMaintain(plane.id)}
+                            >
+                              <Ionicons
+                                name="construct-outline"
+                                size={13}
+                                color={Colors.amber}
+                              />
+                              <Text style={m.btnTxt}>
+                                ${Math.round(maintCost / 1000)}K
+                              </Text>
+                            </TouchableOpacity>
+                          </View>
+                        );
+                      })}
+                    </View>
+                  </>
+                );
+              })()}
+
+              {/* ── Fleet grouped by model ── */}
+              <Text style={s.eyebrow}>YOUR FLEET</Text>
+              <View style={s.section}>
+                {groupedOwned.map((group) => (
+                  <OwnedPlaneGroup
+                    key={group.model.id}
+                    group={group}
+                    planeRouteMap={planeRouteMap}
+                    onAssign={handleAssign}
+                    day={day}
+                  />
+                ))}
+              </View>
+            </>
+          )}
         </>
       )}
 
-      <Text style={s.eyebrow}>ADD AIRCRAFT</Text>
-      <Text style={s.eyebrowSub}>
-        {fmtCash(cash)} available · serve more routes to unlock larger aircraft
-      </Text>
-
-      {grouped.map(({ family, label, color: fc, planes: familyPlanes }) => (
-        <View key={family} style={s.section}>
-          <View style={s.familyHeader}>
-            <View style={[s.familyDot, { backgroundColor: fc }]} />
-            <Text style={[s.familyLabel, { color: fc }]}>{label}</Text>
-          </View>
-
-          {familyPlanes.map((model) => (
-            <PlaneCard
-              key={model.id}
-              model={model}
-              demandScore={demandScore}
-              cash={cash}
-            />
-          ))}
-        </View>
-      ))}
-
-      {ownedPlanes.length === 0 && (
-        <View style={s.emptyState}>
-          <Ionicons name="airplane-outline" size={48} color={Colors.dim} />
-          <Text style={s.emptyTitle}>No planes yet</Text>
-          <Text style={s.emptySub}>
-            Buy your first aircraft below to start moving passengers and earning
-            revenue.
+      {/* ── Store Tab ── */}
+      {activeTab === "store" && (
+        <>
+          <Text style={s.eyebrow}>ADD AIRCRAFT</Text>
+          <Text style={s.eyebrowSub}>
+            {fmtCash(cash)} available · serve more routes to unlock larger
+            aircraft
           </Text>
-        </View>
+
+          {grouped.map(({ family, label, color: fc, planes: familyPlanes }) => (
+            <View key={family} style={s.section}>
+              <View style={s.familyHeader}>
+                <View style={[s.familyDot, { backgroundColor: fc }]} />
+                <Text style={[s.familyLabel, { color: fc }]}>{label}</Text>
+              </View>
+
+              {familyPlanes.map((model) => (
+                <PlaneCard
+                  key={model.id}
+                  model={model}
+                  demandScore={demandScore}
+                  cash={cash}
+                />
+              ))}
+            </View>
+          ))}
+        </>
       )}
     </BottomSheetScrollView>
   );
 }
+
+const m = StyleSheet.create({
+  row: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.amber + "44",
+    overflow: "hidden",
+    marginBottom: Spacing.sm,
+    backgroundColor: Colors.amber + "08",
+  },
+  stripe: { width: 4, alignSelf: "stretch", backgroundColor: Colors.amber },
+  body: { flex: 1, padding: Spacing.md, gap: 5 },
+  name: { fontSize: 12, fontWeight: "700", color: Colors.text },
+  barRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  track: {
+    flex: 1,
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: "rgba(255,255,255,.08)",
+    overflow: "hidden",
+  },
+  fill: { height: "100%" as any, borderRadius: 2 },
+  pct: { fontSize: 9, fontWeight: "700", minWidth: 24 },
+  btn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    marginRight: Spacing.md,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 8,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.amber + "55",
+    backgroundColor: Colors.amber + "12",
+  },
+  btnTxt: { fontSize: 11, fontWeight: "700", color: Colors.amber },
+});
+
+const pr = StyleSheet.create({
+  row: {
+    flexDirection: "row",
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    overflow: "hidden",
+    marginBottom: Spacing.sm,
+    backgroundColor: "rgba(255,255,255,.025)",
+  },
+  stripe: { width: 4, alignSelf: "stretch" },
+  body: { flex: 1, padding: Spacing.md, gap: 4 },
+  top: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  name: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: Colors.text,
+    flex: 1,
+    marginRight: 8,
+  },
+  statusPill: {
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  statusTxt: { fontSize: 9, fontWeight: "700" },
+  meta: { fontSize: 11, color: Colors.muted },
+  condRow: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 2 },
+  condTrack: {
+    flex: 1,
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: "rgba(255,255,255,.08)",
+    overflow: "hidden",
+  },
+  condFill: { height: "100%" as any, borderRadius: 2 },
+  condPct: { fontSize: 9, fontWeight: "700", minWidth: 24 },
+  days: { fontSize: 9, color: Colors.dim },
+  actions: {
+    flexDirection: "column",
+    justifyContent: "center",
+    gap: 5,
+    padding: Spacing.sm,
+    flexShrink: 0,
+  },
+  assignBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 6,
+    borderRadius: Radius.md,
+  },
+  assignTxt: { fontSize: 11, fontWeight: "700", color: Colors.bg },
+  maintBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 6,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.amber + "55",
+    backgroundColor: Colors.amber + "12",
+  },
+  maintTxt: { fontSize: 11, fontWeight: "700", color: Colors.amber },
+});
 
 const qs = StyleSheet.create({
   wrap: { flexDirection: "row", alignItems: "center", gap: 4 },
@@ -575,6 +821,64 @@ const g = StyleSheet.create({
   count: { fontSize: 13, fontWeight: "900", color: Colors.muted },
   meta: { fontSize: 11, color: Colors.muted },
   specs: { fontSize: 10, color: Colors.dim },
+  condRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 3,
+  },
+  condTrack: {
+    flex: 1,
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: "rgba(255,255,255,.08)",
+    overflow: "hidden",
+  },
+  condFill: {
+    height: "100%" as any,
+    borderRadius: 2,
+  },
+  condPct: {
+    fontSize: 8,
+    fontWeight: "700",
+    minWidth: 24,
+    textAlign: "right",
+  },
+  actions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginRight: Spacing.sm,
+  },
+  maintBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 6,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.amber + "55",
+    backgroundColor: Colors.amber + "12",
+  },
+  maintTxt: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: Colors.amber,
+  },
+  wearBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    borderRadius: 4,
+    borderWidth: 1,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+  },
+  wearTxt: {
+    fontSize: 8,
+    fontWeight: "700",
+  },
   assignBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -635,6 +939,41 @@ const pc = StyleSheet.create({
 const s = StyleSheet.create({
   root: { flex: 1 },
   content: { paddingTop: Spacing.sm },
+
+  segWrap: {
+    flexDirection: "row",
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.md,
+    gap: Spacing.xs ?? 4,
+  },
+  seg: {
+    flex: 1,
+    alignItems: "center",
+    paddingVertical: Spacing.sm,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: "rgba(255,255,255,.025)",
+  },
+  segTxt: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: Colors.dim,
+  },
+  emptyBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.lg,
+    marginTop: Spacing.sm,
+  },
+  emptyBtnTxt: {
+    fontSize: 13,
+    fontWeight: "700",
+  },
 
   header: {
     flexDirection: "row",

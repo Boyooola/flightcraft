@@ -100,9 +100,35 @@ export default function SurgeIndicator() {
     };
   }, [activeDemandWave, dailyEvent]);
 
-  // Slide in when effect appears, slide out when it clears
+  // Single unified animation effect — prevents race between day advance and new event
   useEffect(() => {
+    const dayChanged = prevDay.current !== -1 && day !== prevDay.current;
+    prevDay.current = day;
+
+    if (dayChanged && !hasEffect) {
+      // Day advanced and no new effect — slide out
+      Animated.parallel([
+        Animated.timing(slideY, {
+          toValue: 40,
+          duration: 220,
+          useNativeDriver: true,
+        }),
+        Animated.timing(opacity, {
+          toValue: 0,
+          duration: 180,
+          useNativeDriver: true,
+        }),
+      ]).start();
+      return;
+    }
+
     if (hasEffect) {
+      // New effect active — always show, even after a day change
+      // Reset position first if we're coming from dismissed state
+      if (dayChanged) {
+        slideY.setValue(40);
+        opacity.setValue(0);
+      }
       Animated.parallel([
         Animated.spring(slideY, {
           toValue: 0,
@@ -117,6 +143,7 @@ export default function SurgeIndicator() {
         }),
       ]).start();
     } else {
+      // No effect — slide out
       Animated.parallel([
         Animated.timing(slideY, {
           toValue: 40,
@@ -130,26 +157,7 @@ export default function SurgeIndicator() {
         }),
       ]).start();
     }
-  }, [hasEffect, opacity, slideY]);
-
-  // Slide out when day advances (store clears event + wave on new day)
-  useEffect(() => {
-    if (prevDay.current !== -1 && day !== prevDay.current) {
-      Animated.parallel([
-        Animated.timing(slideY, {
-          toValue: 40,
-          duration: 220,
-          useNativeDriver: true,
-        }),
-        Animated.timing(opacity, {
-          toValue: 0,
-          duration: 200,
-          useNativeDriver: true,
-        }),
-      ]).start();
-    }
-    prevDay.current = day;
-  }, [day, opacity, slideY]);
+  }, [day, hasEffect, slideY, opacity]);
 
   // Never return null — let opacity handle visibility.
   // Returning null while hasEffect is true kills the animation.

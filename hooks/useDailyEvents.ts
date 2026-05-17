@@ -183,55 +183,6 @@ export function generateDailyEvent(
   };
 }
 
-const AI_POSITIVE_EVENTS: Omit<DailyEvent, "id">[] = [
-  {
-    type: "positive",
-    icon: "trending-down-outline",
-    title: "{ai} Jammed Up",
-    desc: "{ai} is overloaded. Their passengers are switching to you.",
-    effect: "+20% revenue today",
-    revenueMultiplier: 1.2,
-  },
-  {
-    type: "positive",
-    icon: "people-outline",
-    title: "{ai} Missed the Rush",
-    desc: "{ai} failed to clear demand. Your routes are filling fast.",
-    effect: "+25% revenue today",
-    revenueMultiplier: 1.25,
-  },
-];
-
-const AI_NEGATIVE_EVENTS: Omit<DailyEvent, "id">[] = [
-  {
-    type: "negative",
-    icon: "flash-outline",
-    title: "{ai} Expands Fast",
-    desc: "{ai} opened new routes near your hubs.",
-    effect: "-12% revenue today",
-    revenueMultiplier: 0.88,
-  },
-  {
-    type: "negative",
-    icon: "pricetag-outline",
-    title: "{ai} Fare War",
-    desc: "{ai} is pulling passengers away with cheap tickets.",
-    effect: "-15% revenue today",
-    revenueMultiplier: 0.85,
-  },
-];
-
-function injectAIName(
-  base: Omit<DailyEvent, "id">,
-  aiName: string,
-): Omit<DailyEvent, "id"> {
-  return {
-    ...base,
-    title: base.title.replace("{ai}", aiName),
-    desc: base.desc.replace(/{ai}/g, aiName),
-  };
-}
-
 function buildDemandWaveEvent(day: number): DailyEvent | null {
   const store = useGameStore.getState();
   const gameSeed = store.airline?.seed ?? "DEFAULT";
@@ -300,7 +251,6 @@ export function useDailyEvents() {
 
         const store = useGameStore.getState();
         const gameSeed = store.airline?.seed ?? "DEFAULT";
-        const aiAirlines = store.aiAirlines;
 
         // Clear previous day's event first
         store.setDailyEvent(null);
@@ -308,29 +258,7 @@ export function useDailyEvents() {
         let event: DailyEvent | null = buildDemandWaveEvent(day);
 
         if (!event) {
-          const hasAI = aiAirlines.length > 0;
-          const aiRoll = seedHash(gameSeed, "rush-ai-event-roll", day) % 100;
-
-          if (hasAI && aiRoll < 30) {
-            const ai =
-              aiAirlines[
-                seedHash(gameSeed, "rush-ai-pick", day) % aiAirlines.length
-              ];
-
-            const isPositive =
-              seedHash(gameSeed, "rush-ai-event-type", day) % 100 < 50;
-
-            const pool = isPositive ? AI_POSITIVE_EVENTS : AI_NEGATIVE_EVENTS;
-            const base =
-              pool[seedHash(gameSeed, "rush-ai-event-idx", day) % pool.length];
-
-            event = {
-              ...injectAIName(base, ai.name),
-              id: `event-day-${day}`,
-            };
-          } else {
-            event = generateDailyEvent(day, gameSeed);
-          }
+          event = generateDailyEvent(day, gameSeed);
         }
 
         const ledgerEntry: any = {

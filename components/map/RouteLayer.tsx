@@ -13,8 +13,9 @@
 import { computePlayerMarketShare } from "@/lib/AIAirline";
 import { boardPassengers } from "@/lib/passengerFlow";
 import { calcInstantDeliveryReward } from "@/lib/revenue";
+import { getSeasonalMultiplier } from "@/lib/seasons";
 import type { Airport, Route } from "@/store";
-import { useDayProgress, useGameStore, useRoutes } from "@/store";
+import { useDay, useDayProgress, useGameStore, useRoutes } from "@/store";
 import MapboxGL from "@rnmapbox/maps";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -121,6 +122,7 @@ export default function RouteLayer({
   paused?: boolean;
 }) {
   const routes = useRoutes();
+  const day = useDay();
   const airports = useGameStore((s) => s.airports);
   const dayProgress = useDayProgress();
   const updateDemand = useGameStore((s) => s.updateDemand);
@@ -252,13 +254,29 @@ export default function RouteLayer({
                 });
               }
 
+              // Seasonal multiplier — continent-first, country override
+              const seasonalMul = getSeasonalMultiplier(
+                day,
+                liveDemand.dest?.country,
+                liveDemand.dest?.continent,
+              );
+
+              // Condition penalty — worn planes earn less
+              const condition = route.plane.condition ?? 100;
+              const conditionMul =
+                condition <= 15
+                  ? 0.7 // critical — -30%
+                  : condition <= 40
+                    ? 0.85 // worn     — -15%
+                    : 1.0; // good     — no penalty
+
               const reward = calcInstantDeliveryReward({
                 distNm: route.total_dist_nm ?? liveDemand.dist_nm,
                 trustPct: hub?.trust ?? 0,
                 deliveredPax: delieveredPax,
-                priceStrategy: (route as any).price_strategy ?? "standard",
+                priceStrategy: route.price_strategy ?? "standard",
                 priceElasticity: liveDemand.price_elasticity ?? 1,
-                crowdMultiplier: globalRevMul,
+                crowdMultiplier: globalRevMul * seasonalMul * conditionMul,
                 businessPct: liveDemand.business_pct ?? 0.25,
                 leisurePct: liveDemand.leisure_pct ?? 0.75,
                 // O&D via route split — leg distances now typed on Route
