@@ -196,13 +196,13 @@ export function useRevenueTick() {
         Math.min(100, hub.trust + trustDelta),
       );
 
-      // Increment days_owned each game-day
-      const newDaysOwned = (hub.days_owned ?? 0) + 1;
+      // Accumulate pax moved through this hub today
+      const newHubPax = (hub.hub_pax ?? 0) + movedPax;
 
       const patch: Partial<typeof hub> = {};
       if (Math.round(newTrust) !== Math.round(hub.trust))
         patch.trust = newTrust;
-      if (newDaysOwned !== hub.days_owned) patch.days_owned = newDaysOwned;
+      if (movedPax > 0) patch.hub_pax = newHubPax;
       if (Object.keys(patch).length > 0) updateHub(hub.id, patch);
     });
 

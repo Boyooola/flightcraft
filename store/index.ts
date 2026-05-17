@@ -112,8 +112,9 @@ export interface OwnedHub {
   airport: Airport;
   tier: HubTier;
   trust: number;
-  days_owned: number; // incremented each game-day; resets to 0 on upgrade
+  hub_pax: number; // cumulative pax moved through this hub; resets to 0 on upgrade
   trust_floor: number; // minimum trust enforced by tier (set on buy/upgrade)
+  nickname?: string; // player-defined hub name, max 20 chars
 }
 
 export interface Demand {

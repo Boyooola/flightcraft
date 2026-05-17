@@ -10,7 +10,7 @@ import { SURGE_PILL_HEIGHT } from "@/components/ui/SurgeIndicator";
 import { Radius, Spacing } from "@/constants/theme";
 import { useSheetLayout } from "@/hooks/useSheetLayout";
 import { getActiveSeason } from "@/lib/seasons";
-import { useGameStore } from "@/store";
+import { useActiveDemandWave, useGameStore } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
 import { useMemo } from "react";
 import { StyleSheet, Text, View } from "react-native";
@@ -19,6 +19,7 @@ import { StyleSheet, Text, View } from "react-native";
 const GAP = Spacing.xs ?? 4;
 
 export default function SeasonPill() {
+  const activeDemandWave = useActiveDemandWave();
   const { tabBarHeight } = useSheetLayout();
   const day = useGameStore((s) => s.airline?.day ?? 1);
 
@@ -46,7 +47,9 @@ export default function SeasonPill() {
     <View
       style={[
         s.wrap,
-        { bottom: tabBarHeight + Spacing.xxl + SURGE_PILL_HEIGHT + GAP + 8 },
+        {
+          bottom: tabBarHeight + Spacing.xxl + SURGE_PILL_HEIGHT + GAP + 8,
+        },
       ]}
       pointerEvents="none"
     >

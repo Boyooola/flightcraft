@@ -51,19 +51,21 @@ export function useBuyHub() {
         addLedgerEntries,
       } = store();
 
-      if (!airline) return { error: "No airline found" };
+      if (!airline)
+        return { error: "Something went wrong. Try restarting the app." };
 
       if (hubs.find((h) => h.airport.iata === airport.iata)) {
-        return { error: "You already own this hub" };
+        return { error: "You already have a hub here!" };
       }
 
       const cost = hubPurchaseCost(airport);
       const isFirstHub = hubs.length === 0;
 
       if (isFirstHub) {
-        // First hub — cash only, no presence required
         if (airline.cash < cost) {
-          return { error: `Insufficient funds. Need ${fmtCash(cost)}` };
+          return {
+            error: `You need ${fmtCash(cost)} to open your first hub. Keep flying!`,
+          };
         }
       } else {
         // ── Presence gate ──────────────────────────────────────────
@@ -77,14 +79,14 @@ export function useBuyHub() {
         if (paxDelivered < paxNeeded) {
           const remaining = paxNeeded - paxDelivered;
           return {
-            error: `Fly ${remaining.toLocaleString()} more pax to ${airport.iata} to unlock`,
+            error: `Fly ${remaining.toLocaleString()} more passengers to ${airport.iata} before opening a hub here.`,
           };
         }
 
         // ── Cash reserve gate ──────────────────────────────────────
         if (airline.cash < cost + CASH_RESERVE_AFTER_BUY) {
           return {
-            error: `Need ${fmtCash(cost)} + ${fmtCash(CASH_RESERVE_AFTER_BUY)} reserve`,
+            error: `You'll need ${fmtCash(cost)} for the hub, plus ${fmtCash(CASH_RESERVE_AFTER_BUY)} kept in reserve.`,
           };
         }
       }
@@ -95,8 +97,8 @@ export function useBuyHub() {
         id: tempHubId,
         airport,
         tier: 1,
-        trust: 0,
-        days_owned: 0,
+        trust: 20,
+        hub_pax: 0,
         trust_floor: 0,
       });
       addLedgerEntries([
@@ -129,8 +131,8 @@ export function useBuyHub() {
             airline_id: airline.id,
             iata: airport.iata,
             tier: 1,
-            trust: 0,
-            days_owned: 0,
+            trust: 20,
+            hub_pax: 0,
             trust_floor: 0,
           })
           .select()
@@ -190,7 +192,10 @@ export function useBuyHub() {
         setHubs(store().hubs.filter((h) => h.id !== tempHubId));
         earnCash(cost);
         return {
-          error: err instanceof Error ? err.message : "Failed to purchase hub",
+          error:
+            err instanceof Error
+              ? err.message
+              : "Something went wrong opening this hub. Please try again.",
         };
       }
     },
@@ -222,10 +227,14 @@ export function useSellHub() {
         addLedgerEntries,
       } = store();
 
-      if (!airline) return { error: "No airline", refund: 0 };
+      if (!airline)
+        return {
+          error: "Something went wrong. Try restarting the app.",
+          refund: 0,
+        };
 
       const hub = hubs.find((h) => h.id === hubId);
-      if (!hub) return { error: "Hub not found", refund: 0 };
+      if (!hub) return { error: "Couldn't find this hub.", refund: 0 };
 
       const refund = Math.round(hubPurchaseCost(hub.airport) * 0.5);
 
@@ -284,7 +293,10 @@ export function useSellHub() {
         return { error: null, refund };
       } catch (err) {
         return {
-          error: err instanceof Error ? err.message : "Failed to sell hub",
+          error:
+            err instanceof Error
+              ? err.message
+              : "Something went wrong selling this hub. Please try again.",
           refund: 0,
         };
       }
@@ -321,34 +333,38 @@ export function useUpgradeHub() {
         addLedgerEntries,
       } = store();
 
-      if (!airline) return { error: "No airline found" };
+      if (!airline)
+        return { error: "Something went wrong. Try restarting the app." };
 
       const hub = hubs.find((h) => h.id === hubId);
-      if (!hub) return { error: "Hub not found" };
+      if (!hub) return { error: "Couldn't find this hub." };
 
       const currentTier = hub.tier as number;
-      if (currentTier >= 6) return { error: "Hub is already at max tier" };
+      if (currentTier >= 6)
+        return { error: "This hub is already at the highest tier!" };
 
       const cfg = HUB_TIER_CONFIG[currentTier];
-      if (!cfg) return { error: "Invalid tier" };
+      if (!cfg)
+        return { error: "Something went wrong. Try restarting the app." };
 
       // Eligibility checks
       if (hub.trust < cfg.upgradeTrust) {
         return {
-          error: `Need ${cfg.upgradeTrust}% trust to upgrade (currently ${Math.round(hub.trust)}%)`,
+          error: `Your passengers don't trust this hub enough yet. Reach ${cfg.upgradeTrust}% trust to upgrade.`,
         };
       }
-      if ((hub.days_owned ?? 0) < cfg.upgradeDays) {
-        const remaining = cfg.upgradeDays - (hub.days_owned ?? 0);
+      if ((hub.hub_pax ?? 0) < cfg.upgradePax) {
+        const remaining = cfg.upgradePax - (hub.hub_pax ?? 0);
         return {
-          error: `Need ${cfg.upgradeDays} days at this hub (${remaining} more day${remaining !== 1 ? "s" : ""} to go)`,
+          error: `Keep flying! You need ${remaining.toLocaleString()} more passengers through this hub before it's ready to grow.`,
         };
       }
 
       const cost = HUB_UPGRADE_COSTS[currentTier] ?? 500_000;
       if (airline.cash < cost) {
+        const shortfall = cost - airline.cash;
         return {
-          error: `Upgrade costs $${(cost / 1_000).toFixed(0)}K — need $${((cost - airline.cash) / 1_000).toFixed(0)}K more`,
+          error: `You're ${fmtCash(shortfall)} short. Keep earning and come back!`,
         };
       }
 
@@ -360,8 +376,7 @@ export function useUpgradeHub() {
       updateHub(hubId, {
         tier: nextTier,
         trust_floor: nextFloor,
-        days_owned: 0,
-        // Clamp trust to new floor if it somehow dropped below
+        hub_pax: 0, // reset on upgrade
         trust: Math.max(hub.trust, nextFloor),
       });
       addLedgerEntries([
@@ -381,7 +396,7 @@ export function useUpgradeHub() {
           .update({
             tier: nextTier,
             trust_floor: nextFloor,
-            days_owned: 0,
+            hub_pax: 0,
             trust: Math.max(hub.trust, nextFloor),
           })
           .eq("id", hubId);
@@ -399,14 +414,56 @@ export function useUpgradeHub() {
         updateHub(hubId, {
           tier: currentTier as HubTier,
           trust_floor: hub.trust_floor,
-          days_owned: hub.days_owned,
+          hub_pax: hub.hub_pax,
           trust: hub.trust,
         });
         earnCash(cost);
         return {
-          error: err instanceof Error ? err.message : "Failed to upgrade hub",
+          error:
+            err instanceof Error
+              ? err.message
+              : "Something went wrong upgrading this hub. Please try again.",
         };
       }
+    },
+    [],
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────
+// UPDATE HUB NICKNAME
+// ─────────────────────────────────────────────────────────────────
+
+export function useUpdateHubNickname() {
+  const store = useGameStore.getState;
+
+  return useCallback(
+    async (
+      hubId: string,
+      nickname: string,
+    ): Promise<{ error: string | null }> => {
+      const { hubs, updateHub } = store();
+
+      const hub = hubs.find((h) => h.id === hubId);
+      if (!hub) return { error: "Hub not found" };
+
+      const trimmed = nickname.trim().slice(0, 20);
+
+      // Optimistic update
+      updateHub(hubId, { nickname: trimmed || undefined });
+
+      const { error } = await supabase
+        .from("hubs")
+        .update({ nickname: trimmed || null })
+        .eq("id", hubId);
+
+      if (error) {
+        // Rollback
+        updateHub(hubId, { nickname: hub.nickname });
+        return { error: error.message };
+      }
+
+      return { error: null };
     },
     [],
   );
@@ -728,7 +785,12 @@ export function useSaveAirlineDay() {
       .map((h) =>
         supabase
           .from("hubs")
-          .update({ trust: Math.round(h.trust * 10) / 10 })
+          .update({
+            trust: Math.round(h.trust * 10) / 10,
+            hub_pax: h.hub_pax ?? 0,
+            trust_floor: h.trust_floor ?? 0,
+            nickname: h.nickname ?? null,
+          })
           .eq("id", h.id),
       );
 
@@ -821,8 +883,11 @@ export function useSpawnDailyDemand() {
 
     const hubDemands = demands.filter((d) => d.hub_iata === hubIata);
 
+    // Enforce tier slot cap — never spawn beyond what the tier allows
+    const tierCap = maxRoutesForTier(hub.tier);
+    if (hubDemands.length >= tierCap) return;
+
     // Block spawn if any demand still has undelivered passengers today
-    // (status is always "pending" so we check delivery ratio instead)
     const hasUnserved = hubDemands.some(
       (d) => (d.delivered_pax_today ?? 0) < (d.base_pax_day ?? 1),
     );

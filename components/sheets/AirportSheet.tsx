@@ -7,12 +7,13 @@ import {
   HUB_UPGRADE_COSTS,
   useBuyHub,
   useSellHub,
+  useUpdateHubNickname,
   useUpgradeHub,
 } from "@/hooks/useSupabaseWrite";
+import { buildAIRoutes } from "@/lib/AIAirline";
 import {
   CASH_RESERVE_AFTER_BUY,
   HUB_TIER_CONFIG,
-  airportClassification,
   generateDemands,
   hubCrowdingLevel,
   hubPurchaseCost,
@@ -44,6 +45,7 @@ import {
   ActivityIndicator,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
@@ -275,20 +277,33 @@ function DepartureRow({
 // ─────────────────────────────────────────────────────────────────
 
 function ArrivalsSummary({
-  arrivals,
+  playerArrivals,
+  connectingRoutes,
+  aiArrivals,
   demands,
   color,
+  dayProgress,
 }: {
-  arrivals: Route[];
+  playerArrivals: Route[];
+  connectingRoutes: Route[];
+  aiArrivals: {
+    iata: string;
+    city: string;
+    country: string;
+    airlineName: string;
+    aiColor: string;
+  }[];
   demands: Demand[];
   color: string;
+  dayProgress: number;
 }) {
-  const grouped = useMemo(() => {
+  // Group player direct arrivals by origin
+  const playerGrouped = useMemo(() => {
     const map = new Map<
       string,
       { iata: string; city: string; country: string; paxToday: number }
     >();
-    arrivals.forEach((route) => {
+    playerArrivals.forEach((route) => {
       const demand =
         demands.find((d) => d.id === route.demand.id) ?? route.demand;
       const key = demand.origin.iata;
@@ -305,19 +320,102 @@ function ArrivalsSummary({
       }
     });
     return Array.from(map.values()).sort((a, b) => b.paxToday - a.paxToday);
-  }, [arrivals, demands]);
+  }, [playerArrivals, demands]);
+
+  // Group connecting dropoffs by via origin
+  const connectingGrouped = useMemo(() => {
+    const map = new Map<
+      string,
+      { iata: string; city: string; country: string; dropoffPax: number }
+    >();
+    connectingRoutes.forEach((route) => {
+      const demand =
+        demands.find((d) => d.id === route.demand.id) ?? route.demand;
+      const paxToday = demand.delivered_pax_today ?? 0;
+      const ratio = route.via_pax_ratio ?? 0;
+      const dropoff = Math.round(paxToday * ratio);
+      if (dropoff <= 0) return;
+      const key = demand.origin.iata;
+      if (map.has(key)) {
+        map.get(key)!.dropoffPax += dropoff;
+      } else {
+        map.set(key, {
+          iata: demand.origin.iata,
+          city: demand.origin.city,
+          country: demand.origin.country,
+          dropoffPax: dropoff,
+        });
+      }
+    });
+    return Array.from(map.values()).sort((a, b) => b.dropoffPax - a.dropoffPax);
+  }, [connectingRoutes, demands]);
+
+  const hasAny =
+    playerGrouped.length > 0 ||
+    connectingGrouped.length > 0 ||
+    aiArrivals.length > 0;
+
+  if (!hasAny) {
+    return (
+      <View style={arr.empty}>
+        <Text style={arr.emptyTxt}>No flights arriving here yet</Text>
+      </View>
+    );
+  }
 
   return (
     <>
-      {grouped.map((g) => (
-        <View key={g.iata} style={arr.row}>
+      {/* Player direct arrivals */}
+      {playerGrouped.map((g) => (
+        <View key={`player-${g.iata}`} style={arr.row}>
           <View style={[arr.dot, { backgroundColor: color }]} />
           <View style={arr.info}>
+            <CountryFlag isoCode={g.country} size={13} />
             <Text style={arr.origin} numberOfLines={1}>
-              <CountryFlag isoCode={g.country} size={16} /> {g.iata} · {g.city}
+              {g.iata} · {g.city}
             </Text>
           </View>
           <Text style={arr.pax}>{g.paxToday.toLocaleString()} arrived</Text>
+        </View>
+      ))}
+
+      {/* Connecting dropoffs */}
+      {connectingGrouped.map((g) => (
+        <View key={`via-${g.iata}`} style={arr.row}>
+          <View style={[arr.dot, { backgroundColor: color, opacity: 0.5 }]} />
+          <View style={arr.info}>
+            <CountryFlag isoCode={g.country} size={13} />
+            <Text style={arr.origin} numberOfLines={1}>
+              {g.iata} · {g.city}
+            </Text>
+            <View style={arr.badge}>
+              <Text style={arr.badgeTxt}>stopover</Text>
+            </View>
+          </View>
+          <Text style={arr.pax}>
+            {g.dropoffPax.toLocaleString()} dropped off
+          </Text>
+        </View>
+      ))}
+
+      {/* AI arrivals */}
+      {aiArrivals.map((g) => (
+        <View key={`ai-${g.iata}-${g.airlineName}`} style={arr.row}>
+          <View
+            style={[arr.dot, { backgroundColor: g.aiColor, opacity: 0.6 }]}
+          />
+          <View style={arr.info}>
+            <CountryFlag isoCode={g.country} size={13} />
+            <Text style={arr.origin} numberOfLines={1}>
+              {g.iata} · {g.city}
+            </Text>
+            <View style={[arr.badge, { backgroundColor: g.aiColor + "18" }]}>
+              <Text style={[arr.badgeTxt, { color: g.aiColor }]}>
+                {g.airlineName}
+              </Text>
+            </View>
+          </View>
+          <Text style={[arr.pax, { color: Colors.dim }]}>rival</Text>
         </View>
       ))}
     </>
@@ -394,7 +492,7 @@ function CongestionHelper({
   if (suggestions.length === 0) {
     suggestions.push({
       icon: "add-circle-outline",
-      text: "All demands served — upgrade this hub to unlock more route slots",
+      text: "All routes are running smoothly — upgrade this hub to unlock more destinations",
     });
   }
 
@@ -545,6 +643,7 @@ export default function AirportSheet() {
   const buyHub = useBuyHub();
   const sellHub = useSellHub();
   const upgradeHub = useUpgradeHub();
+  const updateHubNickname = useUpdateHubNickname();
   const gameAlert = useGameAlert();
 
   const [buying, setBuying] = useState(false);
@@ -552,6 +651,8 @@ export default function AirportSheet() {
   const [selling, setSelling] = useState(false);
   const [upgrading, setUpgrading] = useState(false);
   const [upgradeError, setUpgradeError] = useState<string | null>(null);
+  const [editingNickname, setEditingNickname] = useState(false);
+  const [nicknameInput, setNicknameInput] = useState("");
 
   const previewDemands = usePreviewDemands(airport, airports);
   const color = airline?.color ?? Colors.sky;
@@ -590,7 +691,8 @@ export default function AirportSheet() {
     }));
   }, [isOwned, hubDemands, previewDemands, routes]);
 
-  const arrivals = useMemo(() => {
+  // Player direct arrivals — routes flying INTO this airport from elsewhere
+  const playerArrivals = useMemo(() => {
     return routes.filter(
       (r) =>
         r.active &&
@@ -599,10 +701,46 @@ export default function AirportSheet() {
     );
   }, [routes, airport?.iata]);
 
+  // Connecting dropoffs — routes that stop via this airport
+  const connectingRoutes = useMemo(() => {
+    return routes.filter(
+      (r) =>
+        r.active && r.via_iata === airport?.iata && (r.via_pax_ratio ?? 0) > 0,
+    );
+  }, [routes, airport?.iata]);
+
+  // AI arrivals — rival airlines flying into this airport
+  const aiArrivals = useMemo(() => {
+    if (!airport) return [];
+    const seen = new Set<string>();
+    const result: {
+      iata: string;
+      city: string;
+      country: string;
+      airlineName: string;
+      aiColor: string;
+    }[] = [];
+    aiAirlines.forEach((ai) => {
+      const aiRoutes = buildAIRoutes(ai, airports);
+      aiRoutes.forEach((r) => {
+        if (r.dest.iata !== airport.iata) return;
+        const key = `${r.origin.iata}-${ai.id}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        result.push({
+          iata: r.origin.iata,
+          city: r.origin.city,
+          country: r.origin.country,
+          airlineName: ai.name,
+          aiColor: ai.color,
+        });
+      });
+    });
+    return result;
+  }, [aiAirlines, airports, airport?.iata]);
+
   if (!airport) return null;
 
-  const classification = airportClassification(airport);
-  const tierColor = AIRPORT_TIER_COLORS[classification.label] ?? Colors.dim;
   const cost = hubPurchaseCost(airport);
 
   // ── Presence gate ──────────────────────────────────────────────
@@ -633,15 +771,15 @@ export default function AirportSheet() {
   const nextTierCfg = HUB_TIER_CONFIG[tierNum + 1];
   const isMaxTier = tierNum >= 6;
   const trustPct = Math.round(hub?.trust ?? 0);
-  const daysOwned = hub?.days_owned ?? 0;
+  const hubPax = hub?.hub_pax ?? 0;
   const trustNeeded = tierCfg?.upgradeTrust ?? 100;
-  const daysNeeded = tierCfg?.upgradeDays ?? 999;
+  const paxNeededForUpgrade = tierCfg?.upgradePax ?? 999_999;
   const upgradeCost = HUB_UPGRADE_COSTS[tierNum] ?? 999_999;
   const trustReady = trustPct >= trustNeeded;
-  const daysReady = daysOwned >= daysNeeded;
+  const paxReady = hubPax >= paxNeededForUpgrade;
   const cashReady = cash >= upgradeCost;
   const upgradeReady =
-    isOwned && !isMaxTier && trustReady && daysReady && cashReady;
+    isOwned && !isMaxTier && trustReady && paxReady && cashReady;
 
   // ── Handlers ──────────────────────────────────────────────────
 
@@ -735,6 +873,17 @@ export default function AirportSheet() {
     });
   };
 
+  const handleNicknameEdit = () => {
+    setNicknameInput(hub?.nickname ?? "");
+    setEditingNickname(true);
+  };
+
+  const handleNicknameSave = async () => {
+    if (!hub) return;
+    setEditingNickname(false);
+    await updateHubNickname(hub.id, nicknameInput);
+  };
+
   const handleCreateRoute = (demand: Demand) => {
     haptics.tap();
     closeSheet();
@@ -761,20 +910,6 @@ export default function AirportSheet() {
             <View style={s.iataRow}>
               <Text style={s.iata}>{airport.iata}</Text>
 
-              <View
-                style={[
-                  s.pill,
-                  {
-                    backgroundColor: tierColor + "18",
-                    borderColor: tierColor + "44",
-                  },
-                ]}
-              >
-                <Text style={[s.pillText, { color: tierColor }]}>
-                  {classification.label}
-                </Text>
-              </View>
-
               {isOwned && (
                 <View
                   style={[
@@ -794,6 +929,37 @@ export default function AirportSheet() {
             <Text style={s.name} numberOfLines={1}>
               {airport.name}
             </Text>
+            {isOwned &&
+              hub &&
+              (editingNickname ? (
+                <TextInput
+                  style={s.nicknameInput}
+                  value={nicknameInput}
+                  onChangeText={setNicknameInput}
+                  onBlur={handleNicknameSave}
+                  onSubmitEditing={handleNicknameSave}
+                  placeholder="Name this hub…"
+                  placeholderTextColor={Colors.dim}
+                  maxLength={20}
+                  autoFocus
+                  returnKeyType="done"
+                />
+              ) : (
+                <TouchableOpacity
+                  onPress={handleNicknameEdit}
+                  activeOpacity={0.7}
+                  style={s.nicknameRow}
+                >
+                  <Ionicons
+                    name="pencil-outline"
+                    size={10}
+                    color={Colors.dim}
+                  />
+                  <Text style={s.nicknameTxt} numberOfLines={1}>
+                    {hub.nickname ?? "Add nickname"}
+                  </Text>
+                </TouchableOpacity>
+              ))}
             <Text style={s.location} numberOfLines={1}>
               {[airport.city, airport.country, airport.continent]
                 .filter(Boolean)
@@ -849,8 +1015,8 @@ export default function AirportSheet() {
                   ]}
                 >
                   {presenceReady
-                    ? "Unlocked"
-                    : `${paxRemaining.toLocaleString()} pax to go`}
+                    ? "Ready to open! ✓"
+                    : `${paxRemaining.toLocaleString()} more passengers needed`}
                   {aiHubCount > 0 && !presenceReady
                     ? ` · ${aiHubCount} rival${aiHubCount > 1 ? "s" : ""} here`
                     : ""}
@@ -905,9 +1071,9 @@ export default function AirportSheet() {
                   ]}
                 >
                   {!presenceReady
-                    ? `Fly ${paxRemaining.toLocaleString()} pax here first`
+                    ? `Fly ${paxRemaining.toLocaleString()} more passengers here first`
                     : !canAfford
-                      ? `Need ${fmtCash(cost + CASH_RESERVE_AFTER_BUY)} (inc. reserve)`
+                      ? `You need ${fmtCash(cost + CASH_RESERVE_AFTER_BUY)} to open this hub`
                       : `Open Hub · ${fmtCash(cost)}`}
                 </Text>
               </>
@@ -934,8 +1100,12 @@ export default function AirportSheet() {
             </View>
             <View style={s.statDivider} />
             <View style={s.stat}>
-              <Text style={s.statVal}>{daysOwned}d</Text>
-              <Text style={s.statLbl}>Days owned</Text>
+              <Text style={s.statVal}>
+                {hubPax >= 1000
+                  ? `${(hubPax / 1000).toFixed(1)}k`
+                  : hubPax.toLocaleString()}
+              </Text>
+              <Text style={s.statLbl}>Passengers</Text>
             </View>
             <View style={s.statDivider} />
             <View style={s.stat}>
@@ -975,25 +1145,27 @@ export default function AirportSheet() {
                       { color: trustReady ? Colors.green : Colors.dim },
                     ]}
                   >
-                    {trustPct}% / {trustNeeded}% trust
+                    {trustReady
+                      ? `${trustNeeded}% trust ✓`
+                      : `${trustPct}% trust — need ${trustNeeded}%`}
                   </Text>
                 </View>
-                {/* Days requirement */}
+                {/* Pax requirement */}
                 <View style={s.req}>
                   <Ionicons
-                    name={daysReady ? "checkmark-circle" : "time-outline"}
+                    name={paxReady ? "checkmark-circle" : "people-outline"}
                     size={13}
-                    color={daysReady ? Colors.green : Colors.dim}
+                    color={paxReady ? Colors.green : Colors.dim}
                   />
                   <Text
                     style={[
                       s.reqTxt,
-                      { color: daysReady ? Colors.green : Colors.dim },
+                      { color: paxReady ? Colors.green : Colors.dim },
                     ]}
                   >
-                    {daysReady
-                      ? `${daysNeeded}d ✓`
-                      : `${daysNeeded - daysOwned}d to go`}
+                    {paxReady
+                      ? `${(paxNeededForUpgrade / 1000).toFixed(0)}k passengers ✓`
+                      : `${((paxNeededForUpgrade - hubPax) / 1000).toFixed(1)}k more passengers needed`}
                   </Text>
                 </View>
                 {/* Cash requirement */}
@@ -1009,7 +1181,9 @@ export default function AirportSheet() {
                       { color: cashReady ? Colors.green : Colors.dim },
                     ]}
                   >
-                    {fmtCash(upgradeCost)} cost
+                    {cashReady
+                      ? `${fmtCash(upgradeCost)} ✓`
+                      : `${fmtCash(upgradeCost)} needed`}
                   </Text>
                 </View>
               </View>
@@ -1060,8 +1234,8 @@ export default function AirportSheet() {
                       </Text>
                       {nextTierCfg && (
                         <Text style={s.upgradeDetail}>
-                          {nextTierCfg.routes} slots · {nextTierCfg.trustFloor}%
-                          floor
+                          Unlocks {nextTierCfg.routes} routes · trust stays
+                          above {nextTierCfg.trustFloor}%
                         </Text>
                       )}
                     </View>
@@ -1204,20 +1378,27 @@ export default function AirportSheet() {
       )}
 
       {/* ── ARRIVALS ──────────────────────────────────────────── */}
-      {arrivals.length > 0 && (
-        <>
-          <View style={[s.sectionHeader, { marginTop: Spacing.md }]}>
-            <View style={s.sectionTitleRow}>
-              <Ionicons name="download-outline" size={13} color={Colors.dim} />
-              <Text style={s.eyebrow}>ARRIVALS</Text>
-            </View>
-          </View>
-          <ArrivalsSummary
-            arrivals={arrivals}
-            demands={demands}
-            color={color}
-          />
-        </>
+      <View style={[s.sectionHeader, { marginTop: Spacing.md }]}>
+        <View style={s.sectionTitleRow}>
+          <Ionicons name="download-outline" size={13} color={Colors.dim} />
+          <Text style={s.eyebrow}>ARRIVALS</Text>
+        </View>
+      </View>
+      {playerArrivals.length > 0 ||
+      connectingRoutes.length > 0 ||
+      aiArrivals.length > 0 ? (
+        <ArrivalsSummary
+          playerArrivals={playerArrivals}
+          connectingRoutes={connectingRoutes}
+          aiArrivals={aiArrivals}
+          demands={demands}
+          color={color}
+          dayProgress={dayProgress}
+        />
+      ) : (
+        <View style={s.emptyBoard}>
+          <Text style={s.emptyTxt}>No flights arriving here yet</Text>
+        </View>
       )}
 
       {/* ── SELL ──────────────────────────────────────────────── */}
@@ -1301,6 +1482,29 @@ const s = StyleSheet.create({
   pillText: { fontSize: 9, fontWeight: "900", letterSpacing: 0.5 },
   name: { fontSize: 13, color: Colors.text, fontWeight: "700", marginTop: 2 },
   location: { fontSize: 10, color: Colors.dim, lineHeight: 15, marginTop: 1 },
+
+  nicknameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    marginTop: 2,
+  },
+  nicknameTxt: {
+    fontSize: 11,
+    color: Colors.dim,
+    fontWeight: "700",
+    fontStyle: "italic",
+  },
+  nicknameInput: {
+    fontSize: 11,
+    color: Colors.text,
+    fontWeight: "700",
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.dim,
+    paddingVertical: 2,
+    marginTop: 2,
+    minWidth: 120,
+  },
 
   divider: {
     height: StyleSheet.hairlineWidth,
@@ -1612,7 +1816,28 @@ const arr = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,.025)",
   },
   dot: { width: 6, height: 6, borderRadius: 3, flexShrink: 0 },
-  info: { flex: 1, minWidth: 0 },
+  info: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    flexWrap: "wrap",
+  },
   origin: { fontSize: 12, color: Colors.text, fontWeight: "600" },
   pax: { fontSize: 11, color: Colors.muted, fontWeight: "600", flexShrink: 0 },
+  badge: {
+    backgroundColor: "rgba(255,255,255,.08)",
+    borderRadius: 4,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+  },
+  badgeTxt: {
+    fontSize: 8,
+    color: Colors.dim,
+    fontWeight: "800",
+    letterSpacing: 0.5,
+  },
+  empty: { padding: Spacing.xl, alignItems: "center" },
+  emptyTxt: { fontSize: 12, color: Colors.dim, fontWeight: "700" },
 });

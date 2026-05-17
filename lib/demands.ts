@@ -85,7 +85,7 @@ export interface HubTierConfig {
   routes: number; // max active demand slots
   trustFloor: number; // trust floor (%) set on buy/upgrade
   upgradeTrust: number; // trust required to upgrade to next tier
-  upgradeDays: number; // days_owned required to upgrade
+  upgradePax: number; // cumulative hub pax required to upgrade
   minAirportTier: string; // minimum AirportTier for this hub tier
 }
 
@@ -94,42 +94,42 @@ export const HUB_TIER_CONFIG: Record<number, HubTierConfig> = {
     routes: 2,
     trustFloor: 0,
     upgradeTrust: 45,
-    upgradeDays: 7,
+    upgradePax: 3_000,
     minAirportTier: "local",
   },
   2: {
     routes: 3,
     trustFloor: 35,
     upgradeTrust: 58,
-    upgradeDays: 21,
+    upgradePax: 10_000,
     minAirportTier: "minor",
   },
   3: {
     routes: 4,
     trustFloor: 50,
     upgradeTrust: 68,
-    upgradeDays: 45,
+    upgradePax: 30_000,
     minAirportTier: "regional",
   },
   4: {
     routes: 5,
     trustFloor: 60,
     upgradeTrust: 78,
-    upgradeDays: 75,
+    upgradePax: 80_000,
     minAirportTier: "major",
   },
   5: {
     routes: 6,
     trustFloor: 70,
     upgradeTrust: 88,
-    upgradeDays: 120,
+    upgradePax: 200_000,
     minAirportTier: "large",
   },
   6: {
     routes: 7,
     trustFloor: 80,
     upgradeTrust: 100,
-    upgradeDays: 999,
+    upgradePax: 999_999,
     minAirportTier: "mega",
   },
 };
