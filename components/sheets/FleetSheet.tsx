@@ -99,10 +99,14 @@ const OwnedPlaneGroup = React.memo(function OwnedPlaneGroup({
   group,
   planeRouteMap,
   onAssign,
+  onTap,
+  onClose,
 }: {
   group: { model: PlaneModel; planes: OwnedPlane[] };
   planeRouteMap: Map<string, string>;
   onAssign: () => void;
+  onTap: () => void;
+  onClose: () => void;
   day: number;
 }) {
   const fc = FAMILY_COLOR[group.model.family] ?? Colors.sky;
@@ -116,9 +120,10 @@ const OwnedPlaneGroup = React.memo(function OwnedPlaneGroup({
 
       <View style={g.body}>
         <View style={g.top}>
-          <Text style={g.name}>{group.model.nickname}</Text>
-
-          <Text style={g.count}>×{total}</Text>
+          <Text style={g.name}>
+            {group.model.nickname}
+            <Text style={g.count}> ×{total}</Text>
+          </Text>
         </View>
 
         <Text style={g.meta}>
@@ -132,7 +137,7 @@ const OwnedPlaneGroup = React.memo(function OwnedPlaneGroup({
       </View>
 
       <View style={g.actions}>
-        {idle > 0 && (
+        {/* {idle > 0 && (
           <TouchableOpacity
             style={[g.assignBtn, { backgroundColor: fc }]}
             onPress={onAssign}
@@ -140,7 +145,18 @@ const OwnedPlaneGroup = React.memo(function OwnedPlaneGroup({
             <Ionicons name="flash-outline" size={13} color={Colors.bg} />
             <Text style={g.assignTxt}>Assign</Text>
           </TouchableOpacity>
-        )}
+        )} */}
+        <TouchableOpacity
+          style={g.manageBtn}
+          onPress={() => {
+            onClose();
+            setTimeout(onTap, 1000);
+          }}
+          activeOpacity={0.8}
+        >
+          <Text style={g.manageTxt}>Manage</Text>
+          <Ionicons name="chevron-forward" size={11} color={Colors.dim} />
+        </TouchableOpacity>
       </View>
     </View>
   );
@@ -329,6 +345,7 @@ export default function FleetSheet() {
   const demands = useDemands();
   const airline = useAirline();
   const cash = useCash();
+  const openSheet = useGameStore((s) => s.openSheet);
   const closeSheet = useGameStore((s) => s.closeSheet);
   const startCreation = useGameStore((s) => s.startRouteCreation);
   const tabBarH = useTabBarHeight();
@@ -420,254 +437,272 @@ export default function FleetSheet() {
   }, [haptics, closeSheet, startCreation]);
 
   return (
-    <BottomSheetScrollView
-      style={s.root}
-      contentContainerStyle={[
-        s.content,
-        { paddingBottom: tabBarH + Spacing.xxl },
-      ]}
-      showsVerticalScrollIndicator={false}
-    >
-      <View style={s.header}>
-        <View style={s.hdrL}>
-          <Ionicons name="flash-outline" size={21} color={color} />
-          <View>
-            <Text style={s.title}>Fleet</Text>
+    <>
+      <BottomSheetScrollView
+        style={s.root}
+        contentContainerStyle={[
+          s.content,
+          { paddingBottom: tabBarH + Spacing.xxl },
+        ]}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={s.header}>
+          <View style={s.hdrL}>
+            <Ionicons name="flash-outline" size={21} color={color} />
+            <View>
+              <Text style={s.title}>Fleet</Text>
+            </View>
+          </View>
+
+          <TouchableOpacity
+            onPress={closeSheet}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
+            <Ionicons name="close" size={22} color={Colors.dim} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Segmented control */}
+        <View style={s.segWrap}>
+          <TouchableOpacity
+            style={[
+              s.seg,
+              activeTab === "planes" && {
+                backgroundColor: color + "18",
+                borderColor: color + "55",
+              },
+            ]}
+            onPress={() => setActiveTab("planes")}
+            activeOpacity={0.8}
+          >
+            <Text style={[s.segTxt, activeTab === "planes" && { color }]}>
+              My Planes
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              s.seg,
+              activeTab === "store" && {
+                backgroundColor: color + "18",
+                borderColor: color + "55",
+              },
+            ]}
+            onPress={() => setActiveTab("store")}
+            activeOpacity={0.8}
+          >
+            <Text style={[s.segTxt, activeTab === "store" && { color }]}>
+              Store
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={s.rushStats}>
+          <View style={s.rushStat}>
+            <Text style={[s.rushVal, { color }]}>{ownedPlanes.length}</Text>
+            <Text style={s.rushLbl}>Planes</Text>
+          </View>
+          <View style={s.rushStat}>
+            <Text
+              style={[
+                s.rushVal,
+                { color: idlePlanes.length > 0 ? Colors.amber : Colors.green },
+              ]}
+            >
+              {idlePlanes.length}
+            </Text>
+            <Text style={s.rushLbl}>Idle</Text>
+          </View>
+          <View style={s.rushStat}>
+            <Text style={[s.rushVal, { color: Colors.green }]}>
+              {totalCapacity}
+            </Text>
+            <Text style={s.rushLbl}>Total seats</Text>
+          </View>
+          <View style={s.rushStat}>
+            <Text
+              style={[
+                s.rushVal,
+                { color: waitingPax > 0 ? Colors.amber : Colors.green },
+              ]}
+            >
+              {waitingPax.toLocaleString()}
+            </Text>
+            <Text style={s.rushLbl}>Waiting</Text>
           </View>
         </View>
 
-        <TouchableOpacity
-          onPress={closeSheet}
-          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-        >
-          <Ionicons name="close" size={22} color={Colors.dim} />
-        </TouchableOpacity>
-      </View>
-
-      {/* Segmented control */}
-      <View style={s.segWrap}>
-        <TouchableOpacity
-          style={[
-            s.seg,
-            activeTab === "planes" && {
-              backgroundColor: color + "18",
-              borderColor: color + "55",
-            },
-          ]}
-          onPress={() => setActiveTab("planes")}
-          activeOpacity={0.8}
-        >
-          <Text style={[s.segTxt, activeTab === "planes" && { color }]}>
-            My Planes
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[
-            s.seg,
-            activeTab === "store" && {
-              backgroundColor: color + "18",
-              borderColor: color + "55",
-            },
-          ]}
-          onPress={() => setActiveTab("store")}
-          activeOpacity={0.8}
-        >
-          <Text style={[s.segTxt, activeTab === "store" && { color }]}>
-            Store
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      <View style={s.rushStats}>
-        <View style={s.rushStat}>
-          <Text style={[s.rushVal, { color }]}>{ownedPlanes.length}</Text>
-          <Text style={s.rushLbl}>Planes</Text>
-        </View>
-        <View style={s.rushStat}>
-          <Text
-            style={[
-              s.rushVal,
-              { color: idlePlanes.length > 0 ? Colors.amber : Colors.green },
-            ]}
-          >
-            {idlePlanes.length}
-          </Text>
-          <Text style={s.rushLbl}>Idle</Text>
-        </View>
-        <View style={s.rushStat}>
-          <Text style={[s.rushVal, { color: Colors.green }]}>
-            {totalCapacity}
-          </Text>
-          <Text style={s.rushLbl}>Total seats</Text>
-        </View>
-        <View style={s.rushStat}>
-          <Text
-            style={[
-              s.rushVal,
-              { color: waitingPax > 0 ? Colors.amber : Colors.green },
-            ]}
-          >
-            {waitingPax.toLocaleString()}
-          </Text>
-          <Text style={s.rushLbl}>Waiting</Text>
-        </View>
-      </View>
-
-      {/* ── My Planes Tab ── */}
-      {activeTab === "planes" && (
-        <>
-          {ownedPlanes.length === 0 ? (
-            <View style={s.emptyState}>
-              <Ionicons name="airplane-outline" size={48} color={Colors.dim} />
-              <Text style={s.emptyTitle}>No planes yet</Text>
-              <Text style={s.emptySub}>
-                Go to the Store tab to buy your first aircraft.
-              </Text>
-              <TouchableOpacity
-                style={[s.emptyBtn, { borderColor: color + "55" }]}
-                onPress={() => setActiveTab("store")}
-                activeOpacity={0.8}
-              >
-                <Ionicons name="storefront-outline" size={15} color={color} />
-                <Text style={[s.emptyBtnTxt, { color }]}>Open Store</Text>
-              </TouchableOpacity>
-            </View>
-          ) : (
-            <>
-              {/* Assign banner */}
-              {idlePlanes.length > 0 && pendingDemands.length > 0 && (
-                <TouchableOpacity
-                  style={[s.actionBanner, { borderColor: color + "44" }]}
-                  onPress={handleAssign}
-                >
-                  <Ionicons name="airplane-outline" size={17} color={color} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={s.actionTitle}>
-                      {idlePlanes.length} idle plane
-                      {idlePlanes.length !== 1 ? "s" : ""} ready to assign
-                    </Text>
-                    <Text style={s.actionSub}>Tap to open route creation.</Text>
-                  </View>
-                  <Ionicons
-                    name="chevron-forward"
-                    size={18}
-                    color={Colors.dim}
-                  />
-                </TouchableOpacity>
-              )}
-
-              {/* ── Needs Attention section ── */}
-              {(() => {
-                const worn = ownedPlanes.filter(
-                  (p) => (p.condition ?? 100) <= 40,
-                );
-                if (worn.length === 0) return null;
-                return (
-                  <>
-                    <Text style={s.eyebrow}>NEEDS ATTENTION</Text>
-                    <View style={s.section}>
-                      {worn.map((plane) => {
-                        const cond = plane.condition ?? 100;
-                        const condColor =
-                          cond <= 15 ? Colors.red : Colors.amber;
-                        const maintCost =
-                          5_000 + plane.plane_model.pax_capacity * 50;
-                        const fc =
-                          FAMILY_COLOR[plane.plane_model.family] ?? Colors.sky;
-                        return (
-                          <View key={plane.id} style={m.row}>
-                            <View
-                              style={[m.stripe, { backgroundColor: condColor }]}
-                            />
-                            <View style={m.body}>
-                              <Text style={m.name} numberOfLines={1}>
-                                {plane.plane_model.nickname}
-                              </Text>
-                              <View style={m.barRow}>
-                                <View style={m.track}>
-                                  <View
-                                    style={[
-                                      m.fill,
-                                      {
-                                        width: `${cond}%` as any,
-                                        backgroundColor: condColor,
-                                      },
-                                    ]}
-                                  />
-                                </View>
-                                <Text style={[m.pct, { color: condColor }]}>
-                                  {cond}%
-                                </Text>
-                              </View>
-                            </View>
-                            <TouchableOpacity
-                              style={m.btn}
-                              onPress={() => handleMaintain(plane.id)}
-                            >
-                              <Ionicons
-                                name="construct-outline"
-                                size={13}
-                                color={Colors.amber}
-                              />
-                              <Text style={m.btnTxt}>
-                                ${Math.round(maintCost / 1000)}K
-                              </Text>
-                            </TouchableOpacity>
-                          </View>
-                        );
-                      })}
-                    </View>
-                  </>
-                );
-              })()}
-
-              {/* ── Fleet grouped by model ── */}
-              <Text style={s.eyebrow}>YOUR FLEET</Text>
-              <View style={s.section}>
-                {groupedOwned.map((group) => (
-                  <OwnedPlaneGroup
-                    key={group.model.id}
-                    group={group}
-                    planeRouteMap={planeRouteMap}
-                    onAssign={handleAssign}
-                    day={day}
-                  />
-                ))}
-              </View>
-            </>
-          )}
-        </>
-      )}
-
-      {/* ── Store Tab ── */}
-      {activeTab === "store" && (
-        <>
-          <Text style={s.eyebrow}>ADD AIRCRAFT</Text>
-          <Text style={s.eyebrowSub}>
-            {fmtCash(cash)} available · serve more routes to unlock larger
-            aircraft
-          </Text>
-
-          {grouped.map(({ family, label, color: fc, planes: familyPlanes }) => (
-            <View key={family} style={s.section}>
-              <View style={s.familyHeader}>
-                <View style={[s.familyDot, { backgroundColor: fc }]} />
-                <Text style={[s.familyLabel, { color: fc }]}>{label}</Text>
-              </View>
-
-              {familyPlanes.map((model) => (
-                <PlaneCard
-                  key={model.id}
-                  model={model}
-                  demandScore={demandScore}
-                  cash={cash}
+        {/* ── My Planes Tab ── */}
+        {activeTab === "planes" && (
+          <>
+            {ownedPlanes.length === 0 ? (
+              <View style={s.emptyState}>
+                <Ionicons
+                  name="airplane-outline"
+                  size={48}
+                  color={Colors.dim}
                 />
-              ))}
-            </View>
-          ))}
-        </>
-      )}
-    </BottomSheetScrollView>
+                <Text style={s.emptyTitle}>No planes yet</Text>
+                <Text style={s.emptySub}>
+                  Go to the Store tab to buy your first aircraft.
+                </Text>
+                <TouchableOpacity
+                  style={[s.emptyBtn, { borderColor: color + "55" }]}
+                  onPress={() => setActiveTab("store")}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="storefront-outline" size={15} color={color} />
+                  <Text style={[s.emptyBtnTxt, { color }]}>Open Store</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <>
+                {/* Assign banner */}
+                {idlePlanes.length > 0 && pendingDemands.length > 0 && (
+                  <TouchableOpacity
+                    style={[s.actionBanner, { borderColor: color + "44" }]}
+                    onPress={handleAssign}
+                  >
+                    <Ionicons name="airplane-outline" size={17} color={color} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.actionTitle}>
+                        {idlePlanes.length} idle plane
+                        {idlePlanes.length !== 1 ? "s" : ""} ready to assign
+                      </Text>
+                      <Text style={s.actionSub}>
+                        Tap to open route creation.
+                      </Text>
+                    </View>
+                    <Ionicons
+                      name="chevron-forward"
+                      size={18}
+                      color={Colors.dim}
+                    />
+                  </TouchableOpacity>
+                )}
+
+                {/* ── Needs Attention section ── */}
+                {(() => {
+                  const worn = ownedPlanes.filter(
+                    (p) => (p.condition ?? 100) <= 40,
+                  );
+                  if (worn.length === 0) return null;
+                  return (
+                    <>
+                      <Text style={s.eyebrow}>NEEDS ATTENTION</Text>
+                      <View style={s.section}>
+                        {worn.map((plane) => {
+                          const cond = plane.condition ?? 100;
+                          const condColor =
+                            cond <= 15 ? Colors.red : Colors.amber;
+                          const maintCost =
+                            5_000 + plane.plane_model.pax_capacity * 50;
+                          const fc =
+                            FAMILY_COLOR[plane.plane_model.family] ??
+                            Colors.sky;
+                          return (
+                            <View key={plane.id} style={m.row}>
+                              <View
+                                style={[
+                                  m.stripe,
+                                  { backgroundColor: condColor },
+                                ]}
+                              />
+                              <View style={m.body}>
+                                <Text style={m.name} numberOfLines={1}>
+                                  {plane.plane_model.nickname}
+                                </Text>
+                                <View style={m.barRow}>
+                                  <View style={m.track}>
+                                    <View
+                                      style={[
+                                        m.fill,
+                                        {
+                                          width: `${cond}%` as any,
+                                          backgroundColor: condColor,
+                                        },
+                                      ]}
+                                    />
+                                  </View>
+                                  <Text style={[m.pct, { color: condColor }]}>
+                                    {cond}%
+                                  </Text>
+                                </View>
+                              </View>
+                              <TouchableOpacity
+                                style={m.btn}
+                                onPress={() => handleMaintain(plane.id)}
+                              >
+                                <Ionicons
+                                  name="construct-outline"
+                                  size={13}
+                                  color={Colors.amber}
+                                />
+                                <Text style={m.btnTxt}>
+                                  ${Math.round(maintCost / 1000)}K
+                                </Text>
+                              </TouchableOpacity>
+                            </View>
+                          );
+                        })}
+                      </View>
+                    </>
+                  );
+                })()}
+
+                {/* ── Fleet grouped by model ── */}
+                <Text style={s.eyebrow}>YOUR FLEET</Text>
+                <View style={s.section}>
+                  {groupedOwned.map((group) => (
+                    <OwnedPlaneGroup
+                      key={group.model.id}
+                      group={group}
+                      planeRouteMap={planeRouteMap}
+                      onAssign={handleAssign}
+                      onTap={() =>
+                        openSheet("manage-planes", undefined, undefined, group)
+                      }
+                      onClose={closeSheet}
+                      day={day}
+                    />
+                  ))}
+                </View>
+              </>
+            )}
+          </>
+        )}
+
+        {/* ── Store Tab ── */}
+        {activeTab === "store" && (
+          <>
+            <Text style={s.eyebrow}>ADD AIRCRAFT</Text>
+            <Text style={s.eyebrowSub}>
+              {fmtCash(cash)} available · serve more routes to unlock larger
+              aircraft
+            </Text>
+
+            {grouped.map(
+              ({ family, label, color: fc, planes: familyPlanes }) => (
+                <View key={family} style={s.section}>
+                  <View style={s.familyHeader}>
+                    <View style={[s.familyDot, { backgroundColor: fc }]} />
+                    <Text style={[s.familyLabel, { color: fc }]}>{label}</Text>
+                  </View>
+
+                  {familyPlanes.map((model) => (
+                    <PlaneCard
+                      key={model.id}
+                      model={model}
+                      demandScore={demandScore}
+                      cash={cash}
+                    />
+                  ))}
+                </View>
+              ),
+            )}
+          </>
+        )}
+      </BottomSheetScrollView>
+    </>
   );
 }
 
@@ -759,6 +794,22 @@ const pr = StyleSheet.create({
     gap: 5,
     padding: Spacing.sm,
     flexShrink: 0,
+  },
+  manageBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 5,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: "rgba(255,255,255,.03)",
+  },
+  manageTxt: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: Colors.dim,
   },
   assignBtn: {
     flexDirection: "row",
@@ -878,6 +929,22 @@ const g = StyleSheet.create({
   wearTxt: {
     fontSize: 8,
     fontWeight: "700",
+  },
+  manageBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 5,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: "rgba(255,255,255,.03)",
+  },
+  manageTxt: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: Colors.dim,
   },
   assignBtn: {
     flexDirection: "row",

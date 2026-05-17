@@ -97,6 +97,7 @@ export function useRevenueTick() {
       resetDailyPax,
       applyWaveToStore,
       setActiveDemandWave,
+      upsertPresence,
     } = store;
 
     const entries: LedgerEntry[] = [];
@@ -147,48 +148,68 @@ export function useRevenueTick() {
     const eventMultiplier = store.dailyEvent?.revenueMultiplier ?? 1.0;
     const aiAirlines = store.aiAirlines;
 
-    // Trust = player flow share at each hub.
-    // Use actual moved pax first; fall back to potential demand early game.
+    // Trust = fill-rate based delta clamped by trust_floor.
+    // Fill rate = player moved pax / total demand pax at this hub.
     hubs.forEach((hub) => {
       const iata = hub.airport.iata;
       const hubRoutes = routes.filter((r) => r.active && r.hub_iata === iata);
 
-      const playerMovedPax = hubRoutes.reduce((sum, route) => {
+      const movedPax = hubRoutes.reduce((sum, route) => {
         return sum + (paxSnapshot.get(route.demand.id) ?? 0);
       }, 0);
 
-      const playerPotentialPax = hubRoutes.reduce((sum, route) => {
+      const totalDemandPax = hubRoutes.reduce((sum, route) => {
         const demand = demands.find((d) => d.id === route.demand.id);
         return sum + (demand?.base_pax_day ?? route.demand.base_pax_day ?? 0);
       }, 0);
 
-      let aiPax = 0;
-      aiAirlines.forEach((ai) => {
-        if (ai.hubIatas.includes(iata)) {
-          const routesAtHub = Math.max(
-            1,
-            Math.floor(ai.routeCount / Math.max(1, ai.hubIatas.length)),
-          );
-          aiPax += routesAtHub * 150;
-        }
-      });
+      const fillRate =
+        totalDemandPax > 0
+          ? Math.round((movedPax / totalDemandPax) * 100)
+          : hubRoutes.length === 0
+            ? 0
+            : 100; // all demands served with no quota = perfect fill
 
-      const playerPax =
-        playerMovedPax > 0 ? playerMovedPax : playerPotentialPax;
-      const total = playerPax + aiPax;
-      const newTrust =
-        total > 0
-          ? Math.round((playerPax / total) * 100)
-          : playerPax > 0
-            ? 100
-            : 0;
+      // Fill-rate → daily trust delta
+      let trustDelta =
+        fillRate >= 90
+          ? 4
+          : fillRate >= 70
+            ? 2
+            : fillRate >= 50
+              ? 1
+              : fillRate >= 25
+                ? -2
+                : -5;
 
-      if (newTrust !== Math.round(hub.trust)) {
-        updateHub(hub.id, { trust: newTrust });
-      }
+      // Crowding penalties on top
+      const crowding = crowdingByHub.get(iata);
+      if (crowding?.level === "crisis") trustDelta -= 3;
+      else if (crowding?.level === "overcrowded") trustDelta -= 1;
+
+      const floor = hub.trust_floor ?? 0;
+      // Neglected hubs (no routes assigned) bypass the trust floor so decay
+      // actually bites — the floor only protects active hubs.
+      const effectiveFloor = hubRoutes.length === 0 ? 0 : floor;
+      const newTrust = Math.max(
+        effectiveFloor,
+        Math.min(100, hub.trust + trustDelta),
+      );
+
+      // Increment days_owned each game-day
+      const newDaysOwned = (hub.days_owned ?? 0) + 1;
+
+      const patch: Partial<typeof hub> = {};
+      if (Math.round(newTrust) !== Math.round(hub.trust))
+        patch.trust = newTrust;
+      if (newDaysOwned !== hub.days_owned) patch.days_owned = newDaysOwned;
+      if (Object.keys(patch).length > 0) updateHub(hub.id, patch);
     });
 
     // Day-end route summaries. Cash was credited live by RouteLayer.
+    // Also accumulate presence pax per destination for hub unlock gating.
+    const presencePaxByIata = new Map<string, number>();
+
     routes.forEach((route) => {
       if (!route.active) return;
 
@@ -198,6 +219,15 @@ export function useRevenueTick() {
       const remaining = Math.max(0, demand.base_pax_day - deliveredPax);
 
       if (deliveredPax <= 0) stalledRouteCount++;
+
+      // Accumulate presence for the destination airport
+      if (deliveredPax > 0) {
+        const destIata = demand.dest.iata;
+        presencePaxByIata.set(
+          destIata,
+          (presencePaxByIata.get(destIata) ?? 0) + deliveredPax,
+        );
+      }
 
       const routeCrowding = crowdingByHub.get(route.hub_iata);
       const crowdMultiplier =
@@ -247,6 +277,11 @@ export function useRevenueTick() {
         amount: finalRevenue,
         route_id: route.id,
       });
+    });
+
+    // Flush presence accumulations to store (DB sync handled separately)
+    presencePaxByIata.forEach((pax, iata) => {
+      upsertPresence(iata, pax);
     });
 
     const rate =

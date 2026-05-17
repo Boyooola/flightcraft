@@ -21,7 +21,7 @@ import { devtools, subscribeWithSelector } from "zustand/middleware";
 export type HaulClass = "short" | "medium" | "long";
 export type DemandStatus = "pending" | "served" | "no_plane";
 export type FamilyId = "embraer" | "bombardier" | "boeing" | "airbus";
-export type HubTier = 1 | 2 | 3 | 4;
+export type HubTier = 1 | 2 | 3 | 4 | 5 | 6;
 export type GamePhase =
   | "auth"
   | "loading"
@@ -44,7 +44,9 @@ export type ActiveSheet =
   | "create-route"
   | "achievements"
   | "missions"
-  | "privacy-policy";
+  | "privacy-policy"
+  | "manage-planes"
+  | "assign-route";
 
 export type AirportTier =
   | "mega"
@@ -110,6 +112,8 @@ export interface OwnedHub {
   airport: Airport;
   tier: HubTier;
   trust: number;
+  days_owned: number; // incremented each game-day; resets to 0 on upgrade
+  trust_floor: number; // minimum trust enforced by tier (set on buy/upgrade)
 }
 
 export interface Demand {
@@ -160,6 +164,12 @@ export interface LedgerEntry {
   label: string;
   amount: number;
   route_id: string | null;
+}
+
+export interface AirportPresence {
+  id: string;
+  airport_iata: string;
+  total_pax_delivered: number;
 }
 
 export interface LoadStep {
@@ -219,10 +229,13 @@ export interface GameStore {
   ownedPlanes: OwnedPlane[];
   routes: Route[];
   ledger: LedgerEntry[];
+  presence: AirportPresence[]; // cumulative pax delivered per destination airport
 
   // Mobile sheet + selection state
   activeSheet: ActiveSheet;
   selectedAirport: Airport | null;
+  selectedPlaneGroup: { model: PlaneModel; planes: OwnedPlane[] } | null;
+  selectedPlane: OwnedPlane | null;
   pendingDemand: Demand | null;
   routeCreationMode: boolean;
   creationWaypoints: Airport[];
@@ -294,6 +307,10 @@ export interface GameStore {
   setLedger: (entries: LedgerEntry[]) => void;
   addLedgerEntries: (entries: LedgerEntry[]) => void;
 
+  // Presence
+  setPresence: (presence: AirportPresence[]) => void;
+  upsertPresence: (iata: string, pax: number) => void;
+
   // Economy
   spendCash: (amount: number) => void;
   earnCash: (amount: number) => void;
@@ -303,7 +320,13 @@ export interface GameStore {
   advanceDay: () => void;
 
   // Sheet control
-  openSheet: (sheet: ActiveSheet, airport?: Airport, demand?: Demand) => void;
+  openSheet: (
+    sheet: ActiveSheet,
+    airport?: Airport,
+    demand?: Demand,
+    planeGroup?: { model: PlaneModel; planes: OwnedPlane[] } | null,
+    plane?: OwnedPlane | null,
+  ) => void;
   closeSheet: () => void;
   startRouteCreation: (preWaypoints?: Airport[]) => void;
   addWaypoint: (airport: Airport) => void;
@@ -373,8 +396,11 @@ export const useGameStore = create<GameStore>()(
       ownedPlanes: [],
       routes: [],
       ledger: [],
+      presence: [],
       activeSheet: null,
       selectedAirport: null,
+      selectedPlaneGroup: null,
+      selectedPlane: null,
       pendingDemand: null,
       routeCreationMode: false,
       creationWaypoints: [],
@@ -690,6 +716,7 @@ export const useGameStore = create<GameStore>()(
             routes: [],
             ownedPlanes: [],
             ledger: [],
+            presence: [],
             aiAirlines: [],
             globalContract: null,
             activeDemandWave: null,
@@ -712,6 +739,37 @@ export const useGameStore = create<GameStore>()(
           }),
           false,
           "addLedgerEntries",
+        ),
+
+      // ── Presence ─────────────────────────────────────────────────
+      setPresence: (presence) => set({ presence }, false, "setPresence"),
+
+      upsertPresence: (iata, pax) =>
+        set(
+          (s) => {
+            const existing = s.presence.find((p) => p.airport_iata === iata);
+            if (existing) {
+              return {
+                presence: s.presence.map((p) =>
+                  p.airport_iata === iata
+                    ? { ...p, total_pax_delivered: p.total_pax_delivered + pax }
+                    : p,
+                ),
+              };
+            }
+            return {
+              presence: [
+                ...s.presence,
+                {
+                  id: `presence-${iata}`,
+                  airport_iata: iata,
+                  total_pax_delivered: pax,
+                },
+              ],
+            };
+          },
+          false,
+          "upsertPresence",
         ),
 
       // ── Economy ──────────────────────────────────────────────────
@@ -797,11 +855,13 @@ export const useGameStore = create<GameStore>()(
         ),
 
       // ── Sheet control ────────────────────────────────────────────
-      openSheet: (sheet, airport, demand) =>
+      openSheet: (sheet, airport, demand, planeGroup, plane) =>
         set(
           {
             activeSheet: sheet,
             selectedAirport: airport ?? null,
+            selectedPlaneGroup: planeGroup ?? null,
+            selectedPlane: plane ?? null,
             pendingDemand: demand ?? null,
           },
           false,
@@ -813,6 +873,8 @@ export const useGameStore = create<GameStore>()(
           {
             activeSheet: null,
             selectedAirport: null,
+            selectedPlaneGroup: null,
+            selectedPlane: null,
             pendingDemand: null,
             // Does NOT reset routeCreationMode — use clearRouteCreation() for that
           },
@@ -865,6 +927,8 @@ export const useGameStore = create<GameStore>()(
             creationWaypoints: [],
             activeSheet: null,
             selectedAirport: null,
+            selectedPlaneGroup: null,
+            selectedPlane: null,
             pendingDemand: null,
           },
           false,
@@ -922,6 +986,9 @@ export const useLoadComplete = () => useGameStore((s) => s.loadComplete);
 // Sheet / selection
 export const useActiveSheet = () => useGameStore((s) => s.activeSheet);
 export const useSelectedAirport = () => useGameStore((s) => s.selectedAirport);
+export const useSelectedPlaneGroup = () =>
+  useGameStore((s) => s.selectedPlaneGroup);
+export const useSelectedPlane = () => useGameStore((s) => s.selectedPlane);
 export const usePendingDemand = () => useGameStore((s) => s.pendingDemand);
 
 // Derived scalar
@@ -936,6 +1003,12 @@ export const useDemandCount = (status?: DemandStatus) =>
     status
       ? s.demands.filter((d) => d.status === status).length
       : s.demands.length,
+  );
+
+// Hub tier for a given iata (used by upgrade UI)
+export const useHubTier = (iata: string | undefined) =>
+  useGameStore((s) =>
+    iata ? (s.hubs.find((h) => h.airport.iata === iata)?.tier ?? 1) : 1,
   );
 
 // Route creation — specific hooks (no object returns)
@@ -959,3 +1032,12 @@ export const useRouteCreation = () => {
 };
 
 export const useTodayCash = () => useGameStore((s) => s.todayCash);
+
+export const usePresence = () => useGameStore((s) => s.presence);
+export const useAirportPresence = (iata: string | undefined) =>
+  useGameStore((s) =>
+    iata
+      ? (s.presence.find((p) => p.airport_iata === iata)?.total_pax_delivered ??
+        0)
+      : 0,
+  );

@@ -2,7 +2,7 @@ export default {
   expo: {
     name: "Flightcraft",
     slug: "flightcraft",
-    version: "0.5.0",
+    version: "0.6.0",
     orientation: "portrait",
     icon: "./assets/images/icon.png",
     scheme: "flightcraft",
@@ -62,13 +62,6 @@ export default {
           organization: "flightcraft",
         },
       ],
-      // react-native-game-services — pass the Play Games app ID
-      // [
-      //   "react-native-game-services",
-      //   {
-      //     android_app_id: "482109260344",
-      //   },
-      // ],
       "@sentry/react-native",
       [
         "expo-notifications",
@@ -78,7 +71,6 @@ export default {
           androidMode: "default",
         },
       ],
-      // AdMob — commented out until 0.4.1 when billing APK is uploaded
       // [
       //   "react-native-google-mobile-ads",
       //   {

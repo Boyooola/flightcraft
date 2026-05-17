@@ -30,6 +30,7 @@ import { useMissionChecker } from "@/hooks/useMissionChecker";
 import { useNotifications } from "@/hooks/useNotifications";
 import { useRateUs } from "@/hooks/useRateUs";
 import { useRevenueTick } from "@/hooks/useRevenueTick";
+import { useLoadPresence } from "@/hooks/useSupabaseWrite";
 import { useWeeklyChallenge } from "@/hooks/useWeeklyChallenge";
 import { useAirline, useLoadComplete, useLoadSteps, usePhase } from "@/store";
 import { useEffect, useState } from "react";
@@ -48,10 +49,10 @@ function GameContent() {
   useDailyEvents();
   useNotifications();
   useRateUs();
-  useRateUs();
   useWeeklyChallenge();
   useAITick();
   useAICompetition();
+  useLoadPresence();
 
   const loadComplete = useLoadComplete();
   const loadSteps = useLoadSteps();
@@ -97,6 +98,7 @@ function GameContent() {
       {(phase === "playing" || phase === "tutorial") && <RouteCreationBanner />}
       {phase === "tutorial" && mapReady && <TutorialScreen />}
       {phase === "bankrupt" && <BankruptScreen />}
+      {/* <AwayEarningsModal /> */}
     </View>
   );
 }

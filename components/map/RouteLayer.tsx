@@ -11,6 +11,7 @@
  */
 
 import { computePlayerMarketShare } from "@/lib/AIAirline";
+import { hubCrowdingLevel } from "@/lib/demands";
 import { boardPassengers } from "@/lib/passengerFlow";
 import { calcInstantDeliveryReward } from "@/lib/revenue";
 import { getSeasonalMultiplier } from "@/lib/seasons";
@@ -171,10 +172,27 @@ export default function RouteLayer({
         earnCash,
       } = useGameStore.getState();
 
-      // Combined revenue multiplier from daily event + active demand wave
+      // Combined revenue multiplier from daily event + active demand wave + hub crowding
       const globalRevMul =
         (dailyEvent?.revenueMultiplier ?? 1.0) *
         (activeDemandWave?.wave.revenueMultiplier ?? 1.0);
+
+      // Per-hub crowding multiplier — computed once per tick, applied per route
+      const hubCrowdMul = new Map<string, number>();
+      hubs.forEach((hub) => {
+        const crowding = hubCrowdingLevel(
+          hub.airport.iata,
+          demands,
+          hub.airport,
+        );
+        const mul =
+          crowding?.level === "crisis"
+            ? 0.8
+            : crowding?.level === "overcrowded"
+              ? 0.9
+              : 1.0;
+        hubCrowdMul.set(hub.airport.iata, mul);
+      });
 
       const newPlanes: PlaneState[] = active.map((route) => {
         const pts = routePoints[route.id];
@@ -276,7 +294,11 @@ export default function RouteLayer({
                 deliveredPax: delieveredPax,
                 priceStrategy: route.price_strategy ?? "standard",
                 priceElasticity: liveDemand.price_elasticity ?? 1,
-                crowdMultiplier: globalRevMul * seasonalMul * conditionMul,
+                crowdMultiplier:
+                  globalRevMul *
+                  seasonalMul *
+                  conditionMul *
+                  (hubCrowdMul.get(route.hub_iata) ?? 1.0),
                 businessPct: liveDemand.business_pct ?? 0.25,
                 leisurePct: liveDemand.leisure_pct ?? 0.75,
                 // O&D via route split — leg distances now typed on Route

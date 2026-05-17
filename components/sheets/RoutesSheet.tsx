@@ -1,4 +1,3 @@
-import SwapPlaneSheet from "@/components/sheets/SwapPlaneSheet";
 import { GameAlert, useGameAlert } from "@/components/ui/GameAlert";
 import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { useHaptics } from "@/hooks/useHaptics";
@@ -27,7 +26,7 @@ import {
   useDemands,
   useGameStore,
   useHubs,
-  useRoutes
+  useRoutes,
 } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
 import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
@@ -285,13 +284,13 @@ function RouteGroupRow({
   deactivating,
   onLongPress,
   onPriceChange,
-  onSwap,
+  onUnassign,
 }: {
   group: RouteGroup;
   deactivating: boolean;
   onLongPress: (group: RouteGroup) => void;
   onPriceChange: (group: RouteGroup, strategy: PriceStrategy) => void;
-  onSwap: (group: RouteGroup) => void;
+  onUnassign: (group: RouteGroup) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const isConnecting = !!group.via_iata;
@@ -498,15 +497,19 @@ function RouteGroupRow({
                 </Text>
               ) : null;
             })()}
-            {/* Swap button */}
-            <TouchableOpacity
-              style={rr.swapBtnFull}
-              onPress={() => onSwap(group)}
+            {/* Unassign button */}
+            {/* <TouchableOpacity
+              style={rr.unassignBtn}
+              onPress={() => onUnassign(group)}
               activeOpacity={0.8}
             >
-              <Ionicons name="swap-horizontal" size={13} color={Colors.sky} />
-              <Text style={rr.swapFullTxt}>Swap Plane</Text>
-            </TouchableOpacity>
+              <Ionicons
+                name="close-circle-outline"
+                size={13}
+                color={Colors.red}
+              />
+              <Text style={rr.unassignTxt}>Unassign</Text>
+            </TouchableOpacity> */}
           </View>
         )}
 
@@ -816,17 +819,6 @@ export default function RoutesSheet() {
     });
   }, [activeRoutes, liveDemands, dayProgress, hubs]);
 
-  const sortedGroups = useMemo(() => {
-    return [...groupedRoutes].sort((a, b) => {
-      if (a.status.priority !== b.status.priority) {
-        return a.status.priority - b.status.priority;
-      }
-
-      if (a.waitingPax !== b.waitingPax) return b.waitingPax - a.waitingPax;
-      return b.leftToMove - a.leftToMove;
-    });
-  }, [groupedRoutes]);
-
   const totalMoved = groupedRoutes.reduce((sum, r) => sum + r.deliveredPax, 0);
   const totalTarget = groupedRoutes.reduce((sum, r) => sum + r.targetPax, 0);
   const totalWaiting = groupedRoutes.reduce((sum, r) => sum + r.waitingPax, 0);
@@ -866,11 +858,16 @@ export default function RoutesSheet() {
   }, [closeSheet, haptics, startCreation]);
 
   const [activeTab, setActiveTab] = useState<"routes" | "hubs">("routes");
-  const [swapGroup, setSwapGroup] = useState<RouteGroup | null>(null);
 
-  const handleSwap = useCallback((group: RouteGroup) => {
-    setSwapGroup(group);
-  }, []);
+  const handleUnassign = useCallback(
+    async (group: RouteGroup) => {
+      // Deactivate all routes in the group
+      for (const route of group.routes) {
+        await deactivate(route.id);
+      }
+    },
+    [deactivate],
+  );
 
   const handlePriceChange = useCallback(
     async (group: RouteGroup, strategy: PriceStrategy) => {
@@ -1115,13 +1112,13 @@ export default function RoutesSheet() {
             </Text>
 
             <View style={s.section}>
-              {sortedGroups.map((group) => (
+              {groupedRoutes.map((group) => (
                 <RouteGroupRow
                   key={group.id}
                   group={group}
                   deactivating={deactivating === group.id}
                   onLongPress={handleLongPress}
-                  onSwap={handleSwap}
+                  onUnassign={handleUnassign}
                   onPriceChange={handlePriceChange}
                 />
               ))}
@@ -1167,10 +1164,6 @@ export default function RoutesSheet() {
         <View style={{ height: 36 }} />
         <GameAlert ref={gameAlert.ref} />
       </BottomSheetScrollView>
-
-      {swapGroup && (
-        <SwapPlaneSheet group={swapGroup} onClose={() => setSwapGroup(null)} />
-      )}
     </>
   );
 }
@@ -1344,6 +1337,22 @@ const rr = StyleSheet.create({
   mixTxt: {
     fontSize: 11,
     color: Colors.dim,
+  },
+  unassignBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 8,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.red + "33",
+    backgroundColor: Colors.red + "08",
+  },
+  unassignTxt: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: Colors.red,
   },
   swapBtnFull: {
     flexDirection: "row",

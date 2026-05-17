@@ -77,34 +77,102 @@ export function maxRangeForProgress(demandScore: number): number {
 // WORLDWIDE RUSH-STYLE DEMAND SLOTS
 // ─────────────────────────────────────────────────────────────────
 
-export const STARTING_DEMAND_SLOTS = 3;
-export const MAX_DEMANDS_PER_HUB = 8;
+// ─────────────────────────────────────────────────────────────────
+// HUB TIER CONFIG
+// ─────────────────────────────────────────────────────────────────
+
+export interface HubTierConfig {
+  routes: number; // max active demand slots
+  trustFloor: number; // trust floor (%) set on buy/upgrade
+  upgradeTrust: number; // trust required to upgrade to next tier
+  upgradeDays: number; // days_owned required to upgrade
+  minAirportTier: string; // minimum AirportTier for this hub tier
+}
+
+export const HUB_TIER_CONFIG: Record<number, HubTierConfig> = {
+  1: {
+    routes: 2,
+    trustFloor: 0,
+    upgradeTrust: 45,
+    upgradeDays: 7,
+    minAirportTier: "local",
+  },
+  2: {
+    routes: 3,
+    trustFloor: 35,
+    upgradeTrust: 58,
+    upgradeDays: 21,
+    minAirportTier: "minor",
+  },
+  3: {
+    routes: 4,
+    trustFloor: 50,
+    upgradeTrust: 68,
+    upgradeDays: 45,
+    minAirportTier: "regional",
+  },
+  4: {
+    routes: 5,
+    trustFloor: 60,
+    upgradeTrust: 78,
+    upgradeDays: 75,
+    minAirportTier: "major",
+  },
+  5: {
+    routes: 6,
+    trustFloor: 70,
+    upgradeTrust: 88,
+    upgradeDays: 120,
+    minAirportTier: "large",
+  },
+  6: {
+    routes: 7,
+    trustFloor: 80,
+    upgradeTrust: 100,
+    upgradeDays: 999,
+    minAirportTier: "mega",
+  },
+};
+
+// ─────────────────────────────────────────────────────────────────
+// AIRPORT PRESENCE THRESHOLDS
+// Cumulative pax delivered to an airport before the player can buy it.
+// AI hub presence multiplies the base threshold.
+// ─────────────────────────────────────────────────────────────────
+
+export const PAX_PRESENCE_THRESHOLDS: Record<string, number> = {
+  local: 500,
+  minor: 1_500,
+  regional: 4_000,
+  major: 10_000,
+  large: 25_000,
+  mega: 60_000,
+};
+
+export const CASH_RESERVE_AFTER_BUY = 100_000;
+
+/**
+ * Pax presence required to unlock a hub purchase.
+ * aiHubCount = number of AI competitors that already have a hub here.
+ */
+export function presenceThreshold(
+  airport: Airport,
+  aiHubCount: number,
+): number {
+  const base = PAX_PRESENCE_THRESHOLDS[airport.tier] ?? 500;
+  const multiplier = aiHubCount >= 2 ? 3 : aiHubCount === 1 ? 2 : 1;
+  return base * multiplier;
+}
+export function maxRoutesForTier(tier: number): number {
+  return HUB_TIER_CONFIG[tier]?.routes ?? HUB_TIER_CONFIG[1].routes;
+}
 
 /**
  * Number of visible demand slots for a hub.
- * You can later replace this with trust-based logic from your store.
+ * Determined entirely by hub tier — no bonuses from trust or demand score.
  */
-export function demandSlotsForHub(params?: {
-  demandScore?: number;
-  trust?: number;
-  hubLevel?: number;
-}): number {
-  const demandScore = params?.demandScore ?? 0;
-  const trust = params?.trust ?? 50;
-  const hubLevel = params?.hubLevel ?? 1;
-
-  let slots = STARTING_DEMAND_SLOTS;
-
-  if (hubLevel >= 2) slots += 1;
-  if (hubLevel >= 4) slots += 1;
-
-  if (demandScore >= 10) slots += 1;
-  if (demandScore >= 30) slots += 1;
-
-  if (trust >= 80) slots += 1;
-  if (trust <= 25) slots -= 1;
-
-  return Math.max(2, Math.min(MAX_DEMANDS_PER_HUB, slots));
+export function demandSlotsForHub(params?: { hubLevel?: number }): number {
+  return maxRoutesForTier(params?.hubLevel ?? 1);
 }
 
 /**
@@ -126,10 +194,11 @@ export function activeDemandCount(hubIata: string, demands: Demand[]): number {
 export function demandsToSpawnForHub(
   hubIata: string,
   demands: Demand[],
-  demandSlots: number = STARTING_DEMAND_SLOTS,
+  demandSlots: number = HUB_TIER_CONFIG[1].routes,
 ): number {
   const active = activeDemandCount(hubIata, demands);
-  return Math.max(0, Math.min(MAX_DEMANDS_PER_HUB, demandSlots) - active);
+  // demandSlots is already tier-capped by the caller; just respect it
+  return Math.max(0, demandSlots - active);
 }
 
 /**
@@ -373,7 +442,7 @@ function buildPool(
 export function generateDemands(
   hub: Airport,
   allAirports: Airport[],
-  count: number = STARTING_DEMAND_SLOTS,
+  count: number = HUB_TIER_CONFIG[1].routes,
   existingDests: string[] = [],
   demandScore: number = 0,
   forceShort: boolean = false,
@@ -449,11 +518,8 @@ export function generateOneDemand(
   allAirports: Airport[],
   existingDests: string[],
   demandScore: number = 0,
-  currentCount: number = 0,
   gameDay: number = 1,
 ): Omit<Demand, "id" | "airline_id"> | null {
-  if (currentCount >= MAX_DEMANDS_PER_HUB) return null;
-
   const result = generateDemands(
     hub,
     allAirports,
@@ -482,18 +548,13 @@ export function refillDemandSlots(
   allDemands: Demand[],
   options?: {
     demandScore?: number;
-    trust?: number;
     hubLevel?: number;
     forceShort?: boolean;
   },
 ): Omit<Demand, "id" | "airline_id">[] {
   const demandScore = options?.demandScore ?? 0;
 
-  const slots = demandSlotsForHub({
-    demandScore,
-    trust: options?.trust,
-    hubLevel: options?.hubLevel,
-  });
+  const slots = demandSlotsForHub({ hubLevel: options?.hubLevel });
 
   const missing = demandsToSpawnForHub(hub.iata, allDemands, slots);
   if (missing <= 0) return [];

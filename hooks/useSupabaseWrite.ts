@@ -13,13 +13,17 @@
 
 import { gameSounds } from "@/hooks/useGameSounds";
 import {
+  CASH_RESERVE_AFTER_BUY,
   generateDemands,
   generateOneDemand,
+  HUB_TIER_CONFIG,
   hubPurchaseCost,
+  maxRoutesForTier,
+  presenceThreshold,
 } from "@/lib/demands";
 import { fmtCash } from "@/lib/revenue";
 import { supabase } from "@/lib/supabase";
-import type { Airport, Demand, OwnedPlane, PlaneModel } from "@/store";
+import type { Airport, Demand, HubTier, OwnedPlane, PlaneModel } from "@/store";
 import { useGameStore } from "@/store";
 import { useCallback } from "react";
 
@@ -39,6 +43,8 @@ export function useBuyHub() {
         airline,
         airports,
         demands,
+        hubs,
+        aiAirlines,
         addHub,
         addDemands,
         spendCash,
@@ -47,17 +53,52 @@ export function useBuyHub() {
 
       if (!airline) return { error: "No airline found" };
 
-      const cost = hubPurchaseCost(airport);
+      if (hubs.find((h) => h.airport.iata === airport.iata)) {
+        return { error: "You already own this hub" };
+      }
 
-      if (airline.cash < cost) {
-        return {
-          error: `Insufficient funds. Need $${(cost / 1000).toFixed(0)}K`,
-        };
+      const cost = hubPurchaseCost(airport);
+      const isFirstHub = hubs.length === 0;
+
+      if (isFirstHub) {
+        // First hub — cash only, no presence required
+        if (airline.cash < cost) {
+          return { error: `Insufficient funds. Need ${fmtCash(cost)}` };
+        }
+      } else {
+        // ── Presence gate ──────────────────────────────────────────
+        const aiHubCount = aiAirlines.filter((ai) =>
+          ai.hubIatas.includes(airport.iata),
+        ).length;
+        const paxNeeded = presenceThreshold(airport, aiHubCount);
+        const paxDelivered =
+          store().presence.find((p) => p.airport_iata === airport.iata)
+            ?.total_pax_delivered ?? 0;
+        if (paxDelivered < paxNeeded) {
+          const remaining = paxNeeded - paxDelivered;
+          return {
+            error: `Fly ${remaining.toLocaleString()} more pax to ${airport.iata} to unlock`,
+          };
+        }
+
+        // ── Cash reserve gate ──────────────────────────────────────
+        if (airline.cash < cost + CASH_RESERVE_AFTER_BUY) {
+          return {
+            error: `Need ${fmtCash(cost)} + ${fmtCash(CASH_RESERVE_AFTER_BUY)} reserve`,
+          };
+        }
       }
 
       const tempHubId = `temp-${Date.now()}`;
       spendCash(cost);
-      addHub({ id: tempHubId, airport, tier: 1, trust: 0 });
+      addHub({
+        id: tempHubId,
+        airport,
+        tier: 1,
+        trust: 0,
+        days_owned: 0,
+        trust_floor: 0,
+      });
       addLedgerEntries([
         {
           id: `led-${Date.now()}`,
@@ -76,10 +117,9 @@ export function useBuyHub() {
           : generateDemands(
               airport,
               airports,
-              3,
+              maxRoutesForTier(1),
               existingDests,
               airline.demand_score,
-              true,
             );
 
       try {
@@ -90,6 +130,8 @@ export function useBuyHub() {
             iata: airport.iata,
             tier: 1,
             trust: 0,
+            days_owned: 0,
+            trust_floor: 0,
           })
           .select()
           .single();
@@ -252,6 +294,125 @@ export function useSellHub() {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// UPGRADE HUB
+// Advances a hub by one tier. Costs scale with tier.
+// Resets days_owned to 0, sets trust_floor to the new tier's value.
+// ─────────────────────────────────────────────────────────────────
+
+export const HUB_UPGRADE_COSTS: Record<number, number> = {
+  1: 150_000, // T1 → T2
+  2: 350_000, // T2 → T3
+  3: 700_000, // T3 → T4
+  4: 1_400_000, // T4 → T5
+  5: 2_500_000, // T5 → T6
+};
+
+export function useUpgradeHub() {
+  const store = useGameStore.getState;
+
+  return useCallback(
+    async (hubId: string): Promise<{ error: string | null }> => {
+      const {
+        airline,
+        hubs,
+        updateHub,
+        spendCash,
+        earnCash,
+        addLedgerEntries,
+      } = store();
+
+      if (!airline) return { error: "No airline found" };
+
+      const hub = hubs.find((h) => h.id === hubId);
+      if (!hub) return { error: "Hub not found" };
+
+      const currentTier = hub.tier as number;
+      if (currentTier >= 6) return { error: "Hub is already at max tier" };
+
+      const cfg = HUB_TIER_CONFIG[currentTier];
+      if (!cfg) return { error: "Invalid tier" };
+
+      // Eligibility checks
+      if (hub.trust < cfg.upgradeTrust) {
+        return {
+          error: `Need ${cfg.upgradeTrust}% trust to upgrade (currently ${Math.round(hub.trust)}%)`,
+        };
+      }
+      if ((hub.days_owned ?? 0) < cfg.upgradeDays) {
+        const remaining = cfg.upgradeDays - (hub.days_owned ?? 0);
+        return {
+          error: `Need ${cfg.upgradeDays} days at this hub (${remaining} more day${remaining !== 1 ? "s" : ""} to go)`,
+        };
+      }
+
+      const cost = HUB_UPGRADE_COSTS[currentTier] ?? 500_000;
+      if (airline.cash < cost) {
+        return {
+          error: `Upgrade costs $${(cost / 1_000).toFixed(0)}K — need $${((cost - airline.cash) / 1_000).toFixed(0)}K more`,
+        };
+      }
+
+      const nextTier = (currentTier + 1) as HubTier;
+      const nextFloor = HUB_TIER_CONFIG[nextTier]?.trustFloor ?? 0;
+
+      // Optimistic update
+      spendCash(cost);
+      updateHub(hubId, {
+        tier: nextTier,
+        trust_floor: nextFloor,
+        days_owned: 0,
+        // Clamp trust to new floor if it somehow dropped below
+        trust: Math.max(hub.trust, nextFloor),
+      });
+      addLedgerEntries([
+        {
+          id: `led-upgrade-hub-${Date.now()}`,
+          day: airline.day,
+          type: "purchase",
+          label: `Hub upgrade — ${hub.airport.iata} T${currentTier}→T${nextTier}`,
+          amount: -cost,
+          route_id: null,
+        },
+      ]);
+
+      try {
+        const { error: dbErr } = await supabase
+          .from("hubs")
+          .update({
+            tier: nextTier,
+            trust_floor: nextFloor,
+            days_owned: 0,
+            trust: Math.max(hub.trust, nextFloor),
+          })
+          .eq("id", hubId);
+
+        if (dbErr) throw new Error(dbErr.message);
+
+        await supabase
+          .from("airlines")
+          .update({ cash: store().airline?.cash })
+          .eq("id", airline.id);
+
+        return { error: null };
+      } catch (err) {
+        // Rollback
+        updateHub(hubId, {
+          tier: currentTier as HubTier,
+          trust_floor: hub.trust_floor,
+          days_owned: hub.days_owned,
+          trust: hub.trust,
+        });
+        earnCash(cost);
+        return {
+          error: err instanceof Error ? err.message : "Failed to upgrade hub",
+        };
+      }
+    },
+    [],
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────
 // REFRESH DEMANDS — adds a new demand at an owned hub ($50K)
 // ─────────────────────────────────────────────────────────────────
 
@@ -288,7 +449,6 @@ export function useRefreshDemands() {
         1,
         existingDests,
         airline.demand_score,
-        true,
       );
 
       if (newDemands.length === 0) {
@@ -544,7 +704,7 @@ export function useSaveAirlineDay() {
   const store = useGameStore.getState;
 
   return useCallback(async () => {
-    const { airline, hubs, demands } = store();
+    const { airline, hubs, demands, presence } = store();
     if (!airline) return;
 
     const { earnedAchievements, missionsCompleted } = store();
@@ -586,6 +746,62 @@ export function useSaveAirlineDay() {
           .eq("id", d.id),
       ),
     );
+
+    // Sync presence — upsert all rows
+    if (presence.length > 0) {
+      await supabase.from("airport_presence").upsert(
+        presence
+          .filter((p) => !p.id.startsWith("presence-")) // skip optimistic-only rows
+          .map((p) => ({
+            id: p.id,
+            airline_id: airline.id,
+            airport_iata: p.airport_iata,
+            total_pax_delivered: p.total_pax_delivered,
+          })),
+        { onConflict: "airline_id,airport_iata" },
+      );
+
+      // Also upsert optimistic rows (new destinations hit this day)
+      const newRows = presence.filter((p) => p.id.startsWith("presence-"));
+      if (newRows.length > 0) {
+        await supabase.from("airport_presence").upsert(
+          newRows.map((p) => ({
+            airline_id: airline.id,
+            airport_iata: p.airport_iata,
+            total_pax_delivered: p.total_pax_delivered,
+          })),
+          { onConflict: "airline_id,airport_iata" },
+        );
+      }
+    }
+  }, []);
+}
+
+// ─────────────────────────────────────────────────────────────────
+// LOAD PRESENCE — call from game loader after hubs/demands load
+// ─────────────────────────────────────────────────────────────────
+
+export function useLoadPresence() {
+  const store = useGameStore.getState;
+
+  return useCallback(async () => {
+    const { airline, setPresence } = store();
+    if (!airline) return;
+
+    const { data, error } = await supabase
+      .from("airport_presence")
+      .select("id, airport_iata, total_pax_delivered")
+      .eq("airline_id", airline.id);
+
+    if (error || !data) return;
+
+    setPresence(
+      data.map((row) => ({
+        id: row.id,
+        airport_iata: row.airport_iata,
+        total_pax_delivered: row.total_pax_delivered,
+      })),
+    );
   }, []);
 }
 
@@ -618,7 +834,6 @@ export function useSpawnDailyDemand() {
       airports,
       existingDests,
       airline.demand_score,
-      hubDemands.length,
       airline.day ?? 1,
     );
 
@@ -734,6 +949,66 @@ export function useMaintenancePlane() {
 // ─────────────────────────────────────────────────────────────────
 // BUY PLANE
 // ─────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────
+// SELL PLANE
+// ─────────────────────────────────────────────────────────────────
+
+export function useSellPlane() {
+  const store = useGameStore.getState;
+
+  return useCallback(
+    async (planeId: string): Promise<{ error: string | null }> => {
+      const {
+        airline,
+        ownedPlanes,
+        setOwnedPlanes,
+        earnCash,
+        addLedgerEntries,
+      } = store();
+      if (!airline) return { error: "No airline found" };
+
+      const plane = ownedPlanes.find((p) => p.id === planeId);
+      if (!plane) return { error: "Plane not found" };
+
+      // Can only sell idle planes
+      if (plane.route_id) return { error: "Unassign the plane before selling" };
+
+      const salePrice = Math.round(plane.plane_model.price * 0.4);
+
+      // Optimistic update
+      setOwnedPlanes(ownedPlanes.filter((p) => p.id !== planeId));
+      earnCash(salePrice);
+      addLedgerEntries([
+        {
+          id: `sold-plane-${Date.now()}`,
+          day: airline.day,
+          type: "revenue" as const,
+          label: `Sold ${plane.plane_model.nickname}`,
+          amount: salePrice,
+          route_id: null,
+        },
+      ]);
+
+      try {
+        await supabase.from("owned_planes").delete().eq("id", planeId);
+
+        await supabase
+          .from("airlines")
+          .update({ cash: store().airline?.cash })
+          .eq("id", airline.id);
+
+        return { error: null };
+      } catch {
+        // Rollback
+        setOwnedPlanes([...store().ownedPlanes, plane]);
+        earnCash(-salePrice);
+        return { error: "Sale failed — please try again" };
+      }
+    },
+    [],
+  );
+}
 
 export function useBuyPlane() {
   const store = useGameStore.getState;

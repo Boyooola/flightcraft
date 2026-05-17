@@ -14,11 +14,13 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import { StyleSheet } from "react-native";
 import AchievementsSheet from "./AchievementsSheet";
 import AirportSheet from "./AirportSheet";
+import AssignRouteSheet from "./AssignRouteSheet";
 import BankSheet from "./BankSheet";
 import CreateRouteSheet from "./CreateRouteSheet";
 import FinanceSheet from "./FinanceSheet";
 import FleetSheet from "./FleetSheet";
 import LeaderboardSheet from "./LeaderboardSheet";
+import ManagePlanesSheet from "./ManagePlanesSheet";
 import MissionsSheet from "./MissionsSheet";
 import PrivacyPolicySheet from "./PrivacyPolicySheet";
 import RoutesSheet from "./RoutesSheet";
@@ -27,6 +29,8 @@ import SettingsSheet from "./SettingsSheet";
 const SNAP_RATIOS: Record<string, number[]> = {
   airport: [0.55, 1.0],
   fleet: [1.0],
+  "manage-planes": [1.0],
+  "assign-route": [0.75, 1.0],
   finance: [1.0],
   routes: [0.55, 1.0],
   settings: [0.55],
@@ -107,6 +111,8 @@ export default function SheetManager() {
       {activeSheet === "achievements" && <AchievementsSheet />}
       {activeSheet === "missions" && <MissionsSheet />}
       {activeSheet === "privacy-policy" && <PrivacyPolicySheet />}
+      {activeSheet === "manage-planes" && <ManagePlanesSheet />}
+      {activeSheet === "assign-route" && <AssignRouteSheet />}
     </BottomSheet>
   );
 }

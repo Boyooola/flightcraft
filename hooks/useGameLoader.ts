@@ -9,6 +9,7 @@
 import { getPlayerId, setPlayerId } from "@/hooks/useAuth";
 import { initPlayGames, signInWithPlayGames } from "@/hooks/usePlayGames";
 import { setDemandSeed } from "@/lib/demands";
+import { fetchAllRows } from "@/lib/fetch";
 import { supabase } from "@/lib/supabase";
 import type {
   AirlineConfig,
@@ -115,20 +116,24 @@ export function useGameLoader() {
     // ── 1. airports ────────────────────────────────────────────
     try {
       setLoadStep("airports", "loading");
-      const { data, error } = await supabase
-        .from("airports")
-        .select("*")
-        .in("type", ["large_airport", "medium_airport"])
-        .eq("scheduled_service", "yes")
-        .not("iata_code", "is", null);
 
-      if (error) throw error;
-      const airports: Airport[] = (data ?? [])
+      const allAirports = await fetchAllRows<any>(
+        supabase
+          .from("airports")
+          .select("*")
+          .in("tier", ["minor", "regional", "major", "large", "mega"])
+          .eq("scheduled_service", "yes")
+          .not("iata_code", "is", null),
+      );
+
+      const airports: Airport[] = allAirports
         .filter(
           (r: { latitude_deg?: string; longitude_deg?: string }) =>
             r.latitude_deg && r.longitude_deg,
         )
         .map(rowToAirport);
+
+      console.log("airports loaded:", airports.length);
 
       setAirports(airports);
       setLoadStep("airports", "done");
@@ -247,7 +252,9 @@ export function useGameLoader() {
     // ── 4. hubs + demands ──────────────────────────────────────
     try {
       setLoadStep("hubs", "loading");
+
       const airlineId = useGameStore.getState().airline?.id;
+
       if (!airlineId) {
         setLoadStep("hubs", "done");
       } else {
@@ -255,84 +262,63 @@ export function useGameLoader() {
           useGameStore.getState().airports.map((a) => [a.iata, a]),
         );
 
-        const { data: hubData, error: hubErr } = await supabase
-          .from("hubs")
-          .select("*")
-          .eq("airline_id", airlineId);
-        if (hubErr) throw hubErr;
+        // HUBS
+        const hubData = await fetchAllRows<any>(
+          supabase.from("hubs").select("*").eq("airline_id", airlineId),
+        );
 
-        const hubs: OwnedHub[] = (hubData ?? [])
-          .map(
-            (h: {
-              id: string;
-              iata: string;
-              tier?: number;
-              trust?: number;
-            }) => {
-              const airport = airportMap.get(h.iata);
-              if (!airport) return null;
-              return {
-                id: h.id,
-                airport,
-                tier: (h.tier ?? 1) as HubTier,
-                trust: Number(h.trust ?? 0),
-              };
-            },
-          )
+        const hubs: OwnedHub[] = hubData
+          .map((h) => {
+            const airport = airportMap.get(h.iata);
+            if (!airport) return null;
+
+            return {
+              id: h.id,
+              airport,
+              tier: (h.tier ?? 1) as HubTier,
+              trust: Number(h.trust ?? 0),
+            };
+          })
           .filter(Boolean) as OwnedHub[];
+
         setHubs(hubs);
 
-        const { data: demandData, error: demandErr } = await supabase
-          .from("demands")
-          .select("*")
-          .eq("airline_id", airlineId);
-        if (demandErr) throw demandErr;
+        // DEMANDS
+        const demandData = await fetchAllRows<any>(
+          supabase.from("demands").select("*").eq("airline_id", airlineId),
+        );
 
-        const demands: Demand[] = (demandData ?? [])
-          .map(
-            (d: {
-              id: string;
-              airline_id: string;
-              hub_iata: string;
-              origin_iata: string;
-              dest_iata: string;
-              dist_nm: number;
-              haul: string;
-              status: string;
-              base_pax_day: number;
-              popularity: number;
-              delivered_pax_today: number;
-              price_elasticity: number;
-              ai_stolen_pax?: number;
-              business_pct?: number;
-              leisure_pct?: number;
-            }) => {
-              const origin = airportMap.get(d.origin_iata);
-              const dest = airportMap.get(d.dest_iata);
-              if (!origin || !dest) return null;
-              return {
-                id: d.id,
-                airline_id: d.airline_id,
-                hub_iata: d.hub_iata,
-                origin,
-                dest,
-                dist_nm: d.dist_nm,
-                haul: d.haul as HaulClass,
+        const demands: Demand[] = demandData
+          .map((d) => {
+            const origin = airportMap.get(d.origin_iata);
+            const dest = airportMap.get(d.dest_iata);
 
-                base_pax_day: d.base_pax_day ?? 0,
-                popularity: d.popularity ?? 0,
-                price_elasticity: Number(d.price_elasticity ?? 1),
-                delivered_pax_today: d.delivered_pax_today ?? 0,
-                ai_stolen_pax: d.ai_stolen_pax ?? 0,
-                business_pct: d.business_pct ?? 0.25,
-                leisure_pct: d.leisure_pct ?? 0.75,
+            if (!origin || !dest) return null;
 
-                status: d.status as "pending" | "served" | "no_plane",
-              };
-            },
-          )
+            return {
+              id: d.id,
+              airline_id: d.airline_id,
+              hub_iata: d.hub_iata,
+              origin,
+              dest,
+              dist_nm: d.dist_nm,
+              haul: d.haul as HaulClass,
+
+              base_pax_day: d.base_pax_day ?? 0,
+              popularity: d.popularity ?? 0,
+              price_elasticity: Number(d.price_elasticity ?? 1),
+              delivered_pax_today: d.delivered_pax_today ?? 0,
+              ai_stolen_pax: d.ai_stolen_pax ?? 0,
+              business_pct: d.business_pct ?? 0.25,
+              leisure_pct: d.leisure_pct ?? 0.75,
+
+              status: d.status as "pending" | "served" | "no_plane",
+            };
+          })
           .filter(Boolean) as Demand[];
+
         setDemands(demands);
+
         setLoadStep("hubs", "done");
       }
     } catch (err) {
@@ -346,27 +332,31 @@ export function useGameLoader() {
     try {
       setLoadStep("fleet", "loading");
       const airlineId = useGameStore.getState().airline?.id;
+
       if (!airlineId) {
         setLoadStep("fleet", "done");
       } else {
         const planeMap = new Map(
           useGameStore.getState().planes.map((p) => [p.id, p]),
         );
+
         const demandMap = new Map(
           useGameStore.getState().demands.map((d) => [d.id, d]),
         );
 
-        const { data: planeData, error: planeErr } = await supabase
-          .from("owned_planes")
-          .select("*")
-          .eq("airline_id", airlineId);
-        if (planeErr) throw planeErr;
+        // ── owned planes ─────────────────────────────
 
-        const ownedPlanes: OwnedPlane[] = (planeData ?? [])
+        const planeData = await fetchAllRows<any>(
+          supabase.from("owned_planes").select("*").eq("airline_id", airlineId),
+        );
+
+        const ownedPlanes: OwnedPlane[] = planeData
           .map(
             (p: { id: string; plane_id: string; route_id?: string | null }) => {
               const model = planeMap.get(p.plane_id);
+
               if (!model) return null;
+
               return {
                 id: p.id,
                 plane_model: model,
@@ -375,18 +365,22 @@ export function useGameLoader() {
             },
           )
           .filter(Boolean) as OwnedPlane[];
+
         setOwnedPlanes(ownedPlanes);
 
         const ownedMap = new Map(ownedPlanes.map((p) => [p.id, p]));
 
-        const { data: routeData, error: routeErr } = await supabase
-          .from("routes")
-          .select("*")
-          .eq("airline_id", airlineId)
-          .eq("active", true);
-        if (routeErr) throw routeErr;
+        // ── routes ─────────────────────────────
 
-        const routes: Route[] = (routeData ?? [])
+        const routeData = await fetchAllRows<any>(
+          supabase
+            .from("routes")
+            .select("*")
+            .eq("airline_id", airlineId)
+            .eq("active", true),
+        );
+
+        const routes: Route[] = routeData
           .map(
             (r: {
               id: string;
@@ -401,7 +395,9 @@ export function useGameLoader() {
             }) => {
               const demand = demandMap.get(r.demand_id);
               const plane = ownedMap.get(r.plane_id);
+
               if (!demand || !plane) return null;
+
               return {
                 id: r.id,
                 demand,
@@ -419,35 +415,44 @@ export function useGameLoader() {
             },
           )
           .filter(Boolean) as Route[];
+
         setRoutes(routes);
 
-        const airlineDay = useGameStore.getState().airline?.day ?? 1;
-        const { data: ledgerData } = await supabase
-          .from("ledger")
-          .select("*")
-          .eq("airline_id", airlineId)
-          .gte("day", Math.max(1, airlineDay - 90))
-          .order("day", { ascending: false })
-          .limit(365);
+        // ── ledger ─────────────────────────────
 
-        const ledger: LedgerEntry[] = (ledgerData ?? []).map(
-          (e: {
-            id: string;
-            day: number;
-            type: string;
-            label: string;
-            amount: number;
-            route_id?: string | null;
-          }) => ({
-            id: e.id,
-            day: e.day,
-            type: e.type as LedgerEntry["type"],
-            label: e.label,
-            amount: Number(e.amount),
-            route_id: e.route_id ?? null,
-          }),
+        const airlineDay = useGameStore.getState().airline?.day ?? 1;
+
+        const ledgerData = await fetchAllRows<any>(
+          supabase
+            .from("ledger")
+            .select("*")
+            .eq("airline_id", airlineId)
+            .gte("day", Math.max(1, airlineDay - 90))
+            .order("day", { ascending: false }),
         );
+
+        const ledger: LedgerEntry[] = ledgerData
+          .slice(0, 365)
+          .map(
+            (e: {
+              id: string;
+              day: number;
+              type: string;
+              label: string;
+              amount: number;
+              route_id?: string | null;
+            }) => ({
+              id: e.id,
+              day: e.day,
+              type: e.type as LedgerEntry["type"],
+              label: e.label,
+              amount: Number(e.amount),
+              route_id: e.route_id ?? null,
+            }),
+          );
+
         setLedger(ledger);
+
         setLoadStep("fleet", "done");
       }
     } catch {
