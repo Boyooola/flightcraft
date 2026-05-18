@@ -29,7 +29,7 @@ export default {
 
     android: {
       package: "com.stratoslabs.flightcraft",
-      versionCode: 17,
+      versionCode: 18,
       adaptiveIcon: {
         foregroundImage: "./assets/images/adaptive-icon.png",
         backgroundColor: "#04090f",
