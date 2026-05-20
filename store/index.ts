@@ -134,6 +134,7 @@ export interface Demand {
   price_elasticity?: number;
   business_pct?: number;
   leisure_pct?: number;
+  pax_ceiling: number;
 }
 
 export interface OwnedPlane {
@@ -191,8 +192,6 @@ export interface GameStore {
   globalContract: GlobalContractState | null;
   completedGlobalContracts: number;
   activeDemandWave: AppliedDemandWave | null;
-  awayEarnings: { days: number; amount: number } | null;
-  isApplyingAwayEarnings: boolean;
   dayProgress: number; // 0 → 1 within the current game day
   todayCash: number; // exact cash earned today (resets each day)
   aiAirlines: AIAirline[];
@@ -265,8 +264,6 @@ export interface GameStore {
   completeGlobalContract: () => void;
   setActiveDemandWave: (wave: AppliedDemandWave | null) => void;
   applyWaveToStore: (wave: AppliedDemandWave) => void;
-  setAwayEarnings: (data: { days: number; amount: number } | null) => void;
-  setIsApplyingAway: (v: boolean) => void;
   setDayProgress: (value: number) => void;
   setAIAirlines: (airlines: AIAirline[]) => void;
   updateWeeklyProgress: (update: Partial<GameStore["weeklyProgress"]>) => void;
@@ -368,8 +365,6 @@ export const useGameStore = create<GameStore>()(
       completedGlobalContracts: 0,
       todayCash: 0,
       activeDemandWave: null,
-      awayEarnings: null,
-      isApplyingAwayEarnings: false,
       dayProgress: 0,
       weeklyProgress: {
         weekNumber: 0,
@@ -473,10 +468,6 @@ export const useGameStore = create<GameStore>()(
           false,
           "applyWaveToStore",
         ),
-      setAwayEarnings: (data) =>
-        set({ awayEarnings: data }, false, "setAwayEarnings"),
-      setIsApplyingAway: (v) =>
-        set({ isApplyingAwayEarnings: v }, false, "setIsApplyingAway"),
       setDayProgress: (value) =>
         set(
           { dayProgress: Math.max(0, Math.min(1, value)) },
@@ -588,6 +579,7 @@ export const useGameStore = create<GameStore>()(
           const base = d.base_pax_day ?? 0;
 
           let popularity = d.popularity ?? 0;
+          const ceiling = d.pax_ceiling ?? base * 10;
 
           if (hasActiveRoute) {
             const ratio = base > 0 ? delivered / base : 0;
@@ -613,15 +605,14 @@ export const useGameStore = create<GameStore>()(
             const computed = Math.round(
               base * multiplier * pricing.demandMultiplier,
             );
-            const floor = Math.max(20, Math.round(base * 0.3));
+            const floor = Math.max(8, Math.round(ceiling * 0.02));
 
-            // If player didn't clear the queue, demand should not grow.
-            // Passengers who couldn't get a seat find other ways — demand shrinks.
-            // If cleared → demand can grow normally.
-            // If not cleared → demand can only stay or shrink (computed may drop due to popularity).
             const didClear = delivered >= d.base_pax_day;
             const newPax = didClear
-              ? Math.max(floor, Math.min(computed, Math.round(base * 1.05))) // cleared → grow max 5%/day
+              ? Math.max(
+                  floor,
+                  Math.min(computed, Math.round(base * 1.05), ceiling),
+                )
               : Math.max(
                   floor,
                   Math.min(
@@ -629,7 +620,6 @@ export const useGameStore = create<GameStore>()(
                     computed - Math.round(d.base_pax_day * 0.05),
                   ),
                 );
-            // not cleared → shrink by up to 5%/day + popularity effect, never grow
 
             return {
               ...d,
@@ -641,12 +631,15 @@ export const useGameStore = create<GameStore>()(
               status: "pending" as DemandStatus,
             };
           } else {
-            // No active route — slowly recover toward base_pax_day.
-            const recovered = Math.min(base, Math.round(d.base_pax_day * 1.02));
+            // No active route — decay slowly, never below floor
+            const floor = Math.max(8, Math.round(ceiling * 0.02));
+            const decayed = Math.round(base * 0.98);
+            popularity = Math.max(-40, popularity - 1);
 
             return {
               ...d,
-              base_pax_day: recovered,
+              popularity,
+              base_pax_day: Math.max(floor, decayed),
               delivered_pax_today: 0,
               ai_stolen_pax: 0,
               price_elasticity: d.price_elasticity ?? 1,
@@ -722,7 +715,6 @@ export const useGameStore = create<GameStore>()(
             globalContract: null,
             activeDemandWave: null,
             dailyEvent: null,
-            awayEarnings: null,
             completedGlobalContracts: 0,
             dayProgress: 0,
             todayCash: 0,
@@ -979,7 +971,6 @@ export const useActiveDemandWave = () =>
   useGameStore((s) => s.activeDemandWave);
 export const useCompletedGlobalContracts = () =>
   useGameStore((s) => s.completedGlobalContracts);
-export const useAwayEarnings = () => useGameStore((s) => s.awayEarnings);
 export const useDayProgress = () => useGameStore((s) => s.dayProgress);
 export const useLoadSteps = () => useGameStore((s) => s.loadSteps);
 export const useLoadComplete = () => useGameStore((s) => s.loadComplete);

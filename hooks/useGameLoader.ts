@@ -123,7 +123,8 @@ export function useGameLoader() {
           .select("*")
           .in("tier", ["minor", "regional", "major", "large", "mega"])
           .eq("scheduled_service", "yes")
-          .not("iata_code", "is", null),
+          .not("iata_code", "is", null)
+          .gte("pax_annual_m", 0),
       );
 
       const airports: Airport[] = allAirports
@@ -313,6 +314,7 @@ export function useGameLoader() {
               leisure_pct: d.leisure_pct ?? 0.75,
 
               status: d.status as "pending" | "served" | "no_plane",
+              pax_ceiling: d.pax_ceiling ?? 0,
             };
           })
           .filter(Boolean) as Demand[];

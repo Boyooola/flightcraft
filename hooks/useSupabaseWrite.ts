@@ -14,12 +14,14 @@
 import { gameSounds } from "@/hooks/useGameSounds";
 import {
   CASH_RESERVE_AFTER_BUY,
+  computePaxCeiling,
   generateDemands,
   generateOneDemand,
   HUB_TIER_CONFIG,
   hubPurchaseCost,
   maxRoutesForTier,
   presenceThreshold,
+  simulatePaxDay,
 } from "@/lib/demands";
 import { fmtCash } from "@/lib/revenue";
 import { supabase } from "@/lib/supabase";
@@ -154,6 +156,7 @@ export function useBuyHub() {
             status: "pending",
             popularity: d.popularity,
             base_pax_day: d.base_pax_day,
+            pax_ceiling: d.pax_ceiling,
           }));
 
           const { data: demandData, error: demandErr } = await supabase
@@ -176,6 +179,7 @@ export function useBuyHub() {
             delivered_pax_today: 0,
             popularity: row.popularity,
             base_pax_day: row.base_pax_day,
+            pax_ceiling: row.pax_ceiling ?? row.base_pax_day * 10,
           }));
 
           addDemands(fullDemands);
@@ -536,6 +540,7 @@ export function useRefreshDemands() {
             dist_nm: d.dist_nm,
             haul: d.haul,
             base_pax_day: d.base_pax_day,
+            pax_ceiling: d.pax_ceiling,
             status: "pending",
           })
           .select()
@@ -915,6 +920,7 @@ export function useSpawnDailyDemand() {
           dist_nm: newDemand.dist_nm,
           haul: newDemand.haul,
           base_pax_day: newDemand.base_pax_day,
+          pax_ceiling: newDemand.pax_ceiling,
           status: "pending",
         })
         .select()
@@ -935,6 +941,7 @@ export function useSpawnDailyDemand() {
           status: "pending",
           delivered_pax_today: data.delivered_pax_today,
           base_pax_day: data.base_pax_day ?? 0,
+          pax_ceiling: data.pax_ceiling ?? (data.base_pax_day ?? 0) * 10,
           popularity: data.popularity,
         },
       ]);
@@ -1456,6 +1463,7 @@ export function useCreateCustomRoute() {
           price_strategy: "standard",
         });
       } else {
+        const paxCeiling = computePaxCeiling(origin, dest, distNm);
         const syntheticDemand: Demand = {
           id: tempDemandId,
           airline_id: airline.id,
@@ -1464,10 +1472,14 @@ export function useCreateCustomRoute() {
           dest,
           dist_nm: distNm,
           haul: haul as Demand["haul"],
-          base_pax_day: paxDay,
+          base_pax_day: Math.min(
+            paxCeiling,
+            simulatePaxDay(origin, dest, distNm, airline.demand_score ?? 0),
+          ),
           status: "pending",
           delivered_pax_today: 0,
           popularity: 0,
+          pax_ceiling: paxCeiling,
         };
 
         addDemands([syntheticDemand]);
@@ -1502,6 +1514,7 @@ export function useCreateCustomRoute() {
             .update({ status: "pending" })
             .eq("id", existingDemand.id);
         } else {
+          const paxCeiling = computePaxCeiling(origin, dest, distNm);
           const { data: demandData, error: demandErr } = await supabase
             .from("demands")
             .insert({
@@ -1511,7 +1524,11 @@ export function useCreateCustomRoute() {
               dest_iata: dest.iata,
               dist_nm: distNm,
               haul,
-              base_pax_day: paxDay,
+              base_pax_day: Math.min(
+                paxCeiling,
+                simulatePaxDay(origin, dest, distNm, airline.demand_score ?? 0),
+              ),
+              pax_ceiling: paxCeiling,
               status: "pending",
               source: "custom",
             })

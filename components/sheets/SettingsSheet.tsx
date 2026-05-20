@@ -128,6 +128,10 @@ export default function SettingsSheet() {
                     supabase.from("owned_planes").delete().eq("airline_id", id),
                     supabase.from("hubs").delete().eq("airline_id", id),
                     supabase.from("ledger").delete().eq("airline_id", id),
+                    supabase
+                      .from("airport_presence")
+                      .delete()
+                      .eq("airline_id", id),
                   ]);
                   await supabase.from("airlines").delete().eq("id", id);
                 }
@@ -333,7 +337,7 @@ export default function SettingsSheet() {
         <SettingRow
           icon="information-circle-outline"
           label="Version"
-          sublabel="0.6.0"
+          sublabel="0.6.1"
           color={Colors.dim}
         />
         <Divider />

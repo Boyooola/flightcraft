@@ -205,20 +205,20 @@ function buildPlaneLabel(routes: Route[]) {
     .join(" · ");
 }
 
-function routeGrowthLabel(demand: Demand) {
+function routeYieldLabel(demand: Demand) {
   const popularity = demand.popularity ?? 0;
 
   if (popularity >= 30) {
     return {
-      text: `+${popularity}% booming`,
+      text: "Passengers love this route",
       color: Colors.green,
-      icon: "flame-outline" as const,
+      icon: "heart-outline" as const,
     };
   }
 
   if (popularity >= 10) {
     return {
-      text: `+${popularity}% growing`,
+      text: "Strong passenger interest",
       color: Colors.green,
       icon: "trending-up-outline" as const,
     };
@@ -226,7 +226,7 @@ function routeGrowthLabel(demand: Demand) {
 
   if (popularity <= -20) {
     return {
-      text: `${popularity}% declining`,
+      text: "Passengers choosing other options",
       color: Colors.red,
       icon: "trending-down-outline" as const,
     };
@@ -234,34 +234,35 @@ function routeGrowthLabel(demand: Demand) {
 
   if (popularity <= -5) {
     return {
-      text: `${popularity}% soft`,
+      text: "Lukewarm interest — check your service",
       color: Colors.amber,
-      icon: "arrow-down-outline" as const,
+      icon: "alert-circle-outline" as const,
     };
   }
 
   return {
-    text: "Stable demand",
+    text: "Steady — passengers are happy",
     color: Colors.dim,
-    icon: "remove-outline" as const,
+    icon: "checkmark-circle-outline" as const,
   };
 }
 
-// ── Route quality rating ──────────────────────────────────────────
+// ── Route yield rating ───────────────────────────────────────────
 // Derived from demand.popularity (-40 → +80 range).
-// No DB column needed — purely a display layer.
+// Reflects how well passengers are being served — affects revenue yield.
 function routeQuality(popularity: number): {
   stars: number;
   label: string;
   color: string;
 } {
   if (popularity >= 40)
-    return { stars: 5, label: "Excellent", color: "#22c55e" };
-  if (popularity >= 15) return { stars: 4, label: "Strong", color: "#4ade80" };
-  if (popularity >= 0) return { stars: 3, label: "Solid", color: "#94a3b8" };
+    return { stars: 5, label: "Outstanding", color: "#22c55e" };
+  if (popularity >= 15)
+    return { stars: 4, label: "Great service", color: "#4ade80" };
+  if (popularity >= 0) return { stars: 3, label: "Good", color: "#94a3b8" };
   if (popularity >= -10)
-    return { stars: 2, label: "Developing", color: "#f59e0b" };
-  return { stars: 1, label: "Struggling", color: "#ef4444" };
+    return { stars: 2, label: "Needs attention", color: "#f59e0b" };
+  return { stars: 1, label: "Poor service", color: "#ef4444" };
 }
 
 function StarRating({ stars, color }: { stars: number; color: string }) {
@@ -304,7 +305,7 @@ function RouteGroupRow({
     group.status.label === "NEEDS HELP" || group.status.label === "OVERLOADED";
   const isCleared = group.status.label === "DONE";
   const accent = group.status.color;
-  const growth = routeGrowthLabel(group.demand);
+  const growth = routeYieldLabel(group.demand);
   const pricingColor = PRICING_COLOR[group.priceStrategy] ?? Colors.green;
   const quality = routeQuality(group.demand.popularity ?? 0);
   const day = useGameStore((s) => s.airline?.day ?? 1);

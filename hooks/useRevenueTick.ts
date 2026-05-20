@@ -76,8 +76,6 @@ export function useRevenueTick() {
     if (airline.day === lastDay.current) return;
     lastDay.current = airline.day;
 
-    if (useGameStore.getState().isApplyingAwayEarnings) return;
-
     if (prevDemandScore.current === -1) {
       prevDemandScore.current = airline.demand_score ?? 0;
     }

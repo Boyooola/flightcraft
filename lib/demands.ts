@@ -358,6 +358,27 @@ export function routeMarketStrength(
  *   mid:   40–160 pax
  *   late:  100–400+ pax
  */
+// ─────────────────────────────────────────────────────────────────
+// PAX CEILING
+// Fixed daily demand ceiling for a route — computed once at generation.
+// Formula: max(10, sqrt(paxA_m * paxB_m) * 10 / (1 + dist_km / 4000))
+// Uses pax_annual_m in millions directly — no multiplication by 1M.
+// Aircraft capacity is the real daily constraint, not this ceiling.
+// ─────────────────────────────────────────────────────────────────
+
+export function computePaxCeiling(
+  origin: Airport,
+  dest: Airport,
+  distNm: number,
+): number {
+  const paxA = origin.pax_annual_m ?? 0.1;
+  const paxB = dest.pax_annual_m ?? 0.1;
+  const distKm = distNm * 1.852;
+  const distDecay = 1 + distKm / 4000;
+  const raw = (Math.sqrt(paxA * paxB) * 10) / distDecay;
+  return Math.max(10, Math.round(raw));
+}
+
 export function simulatePaxDay(
   origin: Airport,
   dest: Airport,
@@ -490,6 +511,11 @@ function generateFromPool(
     if (dist < 50) continue;
 
     const mix = passengerMixFromDistance(dist);
+    const paxCeiling = computePaxCeiling(hub, dest, dist);
+    const basePaxDay = Math.min(
+      paxCeiling,
+      simulatePaxDay(hub, dest, dist, demandScore, gameDay),
+    );
 
     demands.push({
       hub_iata: hub.iata,
@@ -501,7 +527,8 @@ function generateFromPool(
       delivered_pax_today: 0,
       business_pct: mix.businessPct,
       leisure_pct: mix.leisurePct,
-      base_pax_day: simulatePaxDay(hub, dest, dist, demandScore, gameDay),
+      base_pax_day: basePaxDay,
+      pax_ceiling: paxCeiling,
       popularity: 0,
     });
   }
