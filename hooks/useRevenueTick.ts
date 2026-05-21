@@ -19,6 +19,7 @@ import {
   emitUnlockToast,
   emitWarningToast,
 } from "@/hooks/useToast";
+import { computePlayerMarketShare } from "@/lib/AIAirline";
 import { applyAIPressure } from "@/lib/aiPressure";
 import { allDemandsServed, hubCrowdingLevel } from "@/lib/demands";
 import { applyDemandWave, isDemandWaveDay } from "@/lib/demandWaves";
@@ -28,7 +29,7 @@ import {
   shouldStartGlobalContracts,
 } from "@/lib/globalContracts";
 import { hubOutboundWaitingPax } from "@/lib/passengerFlow";
-import { dailyInterest } from "@/lib/revenue";
+import { calcRouteRevenue, dailyInterest } from "@/lib/revenue";
 import { getActiveSeason, getSeasonLabel } from "@/lib/seasons";
 import { supabase } from "@/lib/supabase";
 import type { Demand, LedgerEntry } from "@/store";
@@ -134,7 +135,6 @@ export function useRevenueTick() {
       applyWaveToStore,
       setActiveDemandWave,
       upsertPresence,
-      setRouteEarnings,
     } = store;
 
     const entries: LedgerEntry[] = [];
@@ -142,7 +142,6 @@ export function useRevenueTick() {
     let totalPaxToday = 0;
     let activeRouteCount = 0;
     let stalledRouteCount = 0;
-    const routeEarningsMap: Record<string, number> = {};
 
     // Snapshot yesterday's moved travelers BEFORE resetDailyPax().
     const paxSnapshot = snapshotDeliveredPax(demands);
@@ -273,7 +272,41 @@ export function useRevenueTick() {
         );
       }
 
-      const finalRevenue = routeEarningsMap[route.id];
+      const routeCrowding = crowdingByHub.get(route.hub_iata);
+      const crowdMultiplier =
+        routeCrowding?.level === "crisis"
+          ? 0.8
+          : routeCrowding?.level === "overcrowded"
+            ? 0.9
+            : 1.0;
+
+      const hub = hubs.find((h) => h.airport.iata === route.hub_iata);
+      const marketShare = computePlayerMarketShare(
+        hub?.trust ?? 50,
+        aiAirlines,
+        demand.origin.iata,
+        demand.dest.iata,
+      );
+
+      const revMultiplier = crowdMultiplier * eventMultiplier * marketShare;
+      const routeDist = route.total_dist_nm ?? demand.dist_nm;
+      const plane = route.plane.plane_model;
+      const res = calcRouteRevenue({
+        distNm: routeDist,
+        speedKts: Math.max(1, plane.speed_kts ?? 400),
+        trustPct: hub?.trust ?? 0,
+        boardedPax: deliveredPax,
+        seatCapacity: Math.max(1, plane.pax_capacity ?? 70),
+        costPerSector: plane.cost_per_sector ?? 500,
+        fuelPerNm: plane.fuel_per_nm ?? 2.0,
+        priceStrategy: route.price_strategy ?? "standard",
+        priceElasticity: demand.price_elasticity ?? 1,
+        crowdMultiplier: revMultiplier,
+        congestionMultiplier: 1,
+        businessPct: demand.business_pct ?? 0.25,
+        leisurePct: demand.leisure_pct ?? 0.75,
+      });
+      const finalRevenue = isNaN(res.net) ? 0 : res.net;
       totalRev += finalRevenue;
       totalPaxToday += deliveredPax;
       activeRouteCount++;
@@ -337,13 +370,11 @@ export function useRevenueTick() {
       }
     }
 
-    const net = totalRev - interest;
-
-    // Store per-route earnings — used by RoutesSheet and AirportSheet for display
-    setRouteEarnings(routeEarningsMap);
+    const net = (isNaN(totalRev) ? 0 : totalRev) - interest;
+    const safeRev = isNaN(totalRev) ? 0 : totalRev;
 
     // Credit net route revenue — single source of truth for cash
-    if (totalRev !== 0) earnCash(totalRev);
+    if (safeRev !== 0) earnCash(safeRev);
     if (interest > 0) accrueInterest(interest);
 
     // Idle plane maintenance cost — planes with no active route still cost money
@@ -489,17 +520,35 @@ export function useRevenueTick() {
         activeRoutes.length === 0 ||
         activeRoutes.every((route) => {
           const demand = demands.find((d) => d.id === route.demand.id);
+          const hub = hubs.find((h) => h.airport.iata === route.hub_iata);
+          const plane = route.plane.plane_model;
           if (!demand) return true;
 
           const deliveredPax = paxSnapshot.get(demand.id) ?? 0;
           if (deliveredPax <= 0) return false;
 
-          return routeEarningsMap[route.id] >= 0;
+          return (
+            calcRouteRevenue({
+              distNm: route.total_dist_nm ?? demand.dist_nm,
+              speedKts: plane.speed_kts,
+              trustPct: hub?.trust ?? 0,
+              boardedPax: deliveredPax,
+              seatCapacity: plane.pax_capacity,
+              costPerSector: plane.cost_per_sector ?? 500,
+              fuelPerNm: plane.fuel_per_nm ?? 2.0,
+              priceStrategy: (route as any).price_strategy ?? "standard",
+              priceElasticity: demand.price_elasticity ?? 1,
+              crowdMultiplier: 1,
+              congestionMultiplier: 1,
+              businessPct: demand.business_pct ?? 0.25,
+              leisurePct: demand.leisure_pct ?? 0.75,
+            }).net >= 0
+          );
         });
 
       updateWeeklyProgress({
         paxTotal: weeklyProgress.paxTotal + totalPaxToday,
-        revenueTotal: weeklyProgress.revenueTotal + totalRev,
+        revenueTotal: weeklyProgress.revenueTotal + safeRev,
         loginDays: weeklyProgress.loginDays + 1,
         perfectDays: weeklyProgress.perfectDays + (allMissionsDone ? 1 : 0),
         profitDays:
@@ -543,7 +592,7 @@ export function useRevenueTick() {
     emitDaySummaryToast({
       id: `day-summary-${airline.day}`,
       day: airline.day,
-      revenue: totalRev,
+      revenue: safeRev,
       interest,
       net,
       paxToday: totalPaxToday,

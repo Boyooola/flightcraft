@@ -83,20 +83,11 @@ export function remainingPax(demand: PassengerFlowDemand): number {
 
 export function waitingPaxForDemand(
   demand: PassengerFlowDemand,
-  dayProgress: number,
+  _dayProgress?: number,
 ): number {
-  const spawned = spawnedPaxForDay(demand, dayProgress);
-  const delivered = demand.delivered_pax_today ?? 0;
-  const remaining = remainingPax(demand);
-
-  const waiting = spawned - delivered;
-
-  // If negative, respawn from remaining pool
-  if (waiting <= 0) {
-    return remaining;
-  }
-
-  return Math.max(0, Math.min(remaining, waiting));
+  // Demand is fixed — all passengers are available from the start of the day.
+  // Waiting = total demand minus already delivered. Simple and honest.
+  return remainingPax(demand);
 }
 
 function randomLoadFactor(min = 0.65, max = 1): number {
