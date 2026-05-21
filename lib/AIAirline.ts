@@ -234,19 +234,22 @@ export function computeAIState(
   const avgDistNm = 1500 + (seedHash(aiSeed, "avgdist") % 3000);
   const avgPaxDay = 80 + (seedHash(aiSeed, "avgpax") % 200);
   const aiMix = passengerMixFromDistance(avgDistNm);
+  const avgSeatCap = Math.round(avgPaxDay * 1.2);
 
   const dailyNetPerRoute = calcRouteRevenue({
     distNm: avgDistNm,
     speedKts: 450,
     trustPct: params.trust,
-    deliveredPax: Math.round(avgPaxDay * (params.trust / 100)),
-    paxDay: avgPaxDay,
+    boardedPax: Math.round(avgPaxDay * (params.trust / 100)),
+    seatCapacity: avgSeatCap,
     costPerSector: 400,
     fuelPerNm: 2.0,
-    // Passenger mix — business-heavy AI routes yield more per pax
+    priceStrategy: "standard",
+    priceElasticity: 1,
+    crowdMultiplier: 1,
+    congestionMultiplier: 1,
     businessPct: aiMix.businessPct,
     leisurePct: aiMix.leisurePct,
-    seatCapacity: 0,
   }).net;
 
   const dailyNet = dailyNetPerRoute * routeCount * params.growthMultiplier;
