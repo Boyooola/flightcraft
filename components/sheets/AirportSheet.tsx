@@ -22,7 +22,7 @@ import {
 } from "@/lib/demands";
 import { congestionPenaltyPct } from "@/lib/hubCongestion";
 import { waitingPaxForDemand } from "@/lib/passengerFlow";
-import { calcRouteRevenue, fmtCash } from "@/lib/revenue";
+import { fmtCash } from "@/lib/revenue";
 import { getSeasonForRoute } from "@/lib/seasons";
 import type { Airport, Demand, OwnedHub, Route } from "@/store";
 import {
@@ -31,10 +31,10 @@ import {
   useAirportPresence,
   useCash,
   useDayProgress,
-  useDemands,
   useGameStore,
   useHubs,
   useOwnedPlanes,
+  useRouteEarnings,
   useRoutes,
   useSelectedAirport,
 } from "@/store";
@@ -93,6 +93,7 @@ function DepartureRow({
   onCreateRoute,
   maxPlaneRange,
   day,
+  routeEarnings,
 }: {
   demand: Demand;
   routes: Route[];
@@ -102,6 +103,7 @@ function DepartureRow({
   onCreateRoute: (d: Demand) => void;
   maxPlaneRange: number;
   day: number;
+  routeEarnings: Record<string, number>;
 }) {
   const activeRoutes = routes.filter(
     (r) => r.active && r.demand.id === demand.id,
@@ -120,27 +122,11 @@ function DepartureRow({
   const barColor =
     fillPct >= 80 ? Colors.green : fillPct > 0 ? Colors.amber : Colors.red;
 
-  const revenue = (() => {
-    if (!firstRoute || !hub) return 0;
-    return activeRoutes.reduce((sum, route) => {
-      const p = route.plane.plane_model;
-      const dist = route.total_dist_nm ?? route.demand.dist_nm;
-      return (
-        sum +
-        calcRouteRevenue({
-          distNm: dist,
-          speedKts: p.speed_kts,
-          trustPct: hub.trust,
-          deliveredPax: demand.delivered_pax_today ?? 0,
-          paxDay: demand.base_pax_day ?? 0,
-          costPerSector: p.cost_per_sector ?? 500,
-          fuelPerNm: p.fuel_per_nm ?? 2.0,
-          businessPct: demand.business_pct ?? 0.25,
-          leisurePct: demand.leisure_pct ?? 0.75,
-        }).net
-      );
-    }, 0);
-  })();
+  // Sum earnings for all active routes from the routeEarnings map
+  const revenue = activeRoutes.reduce(
+    (sum, r) => sum + (routeEarnings[r.id] ?? 0),
+    0,
+  );
 
   const planeLabel =
     activeRoutes.length > 1
@@ -212,12 +198,36 @@ function DepartureRow({
               </>
             ) : (
               <>
-                <Text style={[dep.waiting, !hub && { color: Colors.dim }]}>
-                  {hub ? "WAITING" : "~" + demand.base_pax_day.toLocaleString()}
-                </Text>
-                <Text style={dep.small}>
-                  {hub ? waitingPax.toLocaleString() + " pax" : "pax/day"}
-                </Text>
+                {(() => {
+                  const ceiling = demand.pax_ceiling ?? demand.base_pax_day;
+                  const ratio = ceiling > 0 ? demand.base_pax_day / ceiling : 1;
+                  const label = !hub
+                    ? "~" + demand.base_pax_day.toLocaleString()
+                    : ratio >= 0.7
+                      ? "READY"
+                      : ratio >= 0.3
+                        ? "LOSING INTEREST"
+                        : "ALMOST GONE";
+                  const labelColor = !hub
+                    ? Colors.dim
+                    : ratio >= 0.7
+                      ? Colors.amber
+                      : ratio >= 0.3
+                        ? Colors.orange
+                        : Colors.red;
+                  return (
+                    <>
+                      <Text style={[dep.waiting, { color: labelColor }]}>
+                        {label}
+                      </Text>
+                      <Text style={dep.small}>
+                        {hub
+                          ? `${demand.base_pax_day.toLocaleString()} pax · ${ceiling.toLocaleString()} potential`
+                          : "pax/day"}
+                      </Text>
+                    </>
+                  );
+                })()}
               </>
             )}
           </View>
@@ -235,9 +245,21 @@ function DepartureRow({
                 />
               </View>
               <Text style={[dep.percent, { color: barColor }]}>{fillPct}%</Text>
-              {revenue > 0 && (
-                <Text style={dep.revenue}>{fmtCash(revenue)}</Text>
-              )}
+              <Text
+                style={[
+                  dep.revenue,
+                  {
+                    color:
+                      revenue === 0
+                        ? Colors.dim
+                        : revenue > 0
+                          ? Colors.green
+                          : Colors.red,
+                  },
+                ]}
+              >
+                {revenue === 0 ? "—" : fmtCash(revenue)}
+              </Text>
             </View>
             <Text style={dep.meta} numberOfLines={1}>
               {planeLabel}
@@ -626,7 +648,8 @@ const tb = StyleSheet.create({
 export default function AirportSheet() {
   const airport = useSelectedAirport();
   const hubs = useHubs();
-  const demands = useDemands();
+  // Read demands live from store — tracks delivered_pax_today updates from RouteLayer
+  const demands = useGameStore((s) => s.demands);
   const routes = useRoutes();
   const dayProgress = useDayProgress();
   const airline = useAirline();
@@ -636,6 +659,7 @@ export default function AirportSheet() {
   const day = useGameStore((s) => s.airline?.day ?? 1);
   const ownedPlanes = useOwnedPlanes();
   const aiAirlines = useAIAirlines();
+  const routeEarnings = useRouteEarnings();
 
   const tabBarH = useTabBarHeight();
   const haptics = useHaptics();
@@ -1373,6 +1397,7 @@ export default function AirportSheet() {
             onCreateRoute={handleCreateRoute}
             maxPlaneRange={maxPlaneRange}
             day={day}
+            routeEarnings={routeEarnings}
           />
         ))
       )}

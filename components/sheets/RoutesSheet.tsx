@@ -4,28 +4,21 @@ import { useHaptics } from "@/hooks/useHaptics";
 import { useTabBarHeight } from "@/hooks/useSheetLayout";
 import { useDeactivateRoute } from "@/hooks/useSupabaseWrite";
 import { hubCrowdingLevel } from "@/lib/demands";
-import { congestionEfficiencyMultiplier } from "@/lib/hubCongestion";
 import { splitOdPax } from "@/lib/od";
-import {
-  demandFlowStatus,
-  remainingPax,
-  waitingPaxForDemand,
-} from "@/lib/passengerFlow";
+import { demandFlowStatus, waitingPaxForDemand } from "@/lib/passengerFlow";
 import { passengerTypeBreakdown } from "@/lib/passengerTypes";
-import {
-  calcRouteRevenue,
-  computePriceElasticity,
-  fmtCash,
-} from "@/lib/revenue";
-import { getSeasonForRoute } from "@/lib/seasons";
+import { fmtCash, normalizePriceStrategy } from "@/lib/revenue";
+import { getSeasonalMultiplier, getSeasonForRoute } from "@/lib/seasons";
 import { supabase } from "@/lib/supabase";
 import type { Demand, OwnedHub, Route } from "@/store";
 import {
+  useActiveDemandWave,
   useAirline,
+  useDailyEvent,
   useDayProgress,
-  useDemands,
   useGameStore,
   useHubs,
+  useRouteEarnings,
   useRoutes,
 } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
@@ -437,11 +430,19 @@ function RouteGroupRow({
           <Text
             style={[
               rr.cash,
-              { color: group.totalReward >= 0 ? Colors.green : Colors.red },
+              {
+                color:
+                  group.totalReward === 0
+                    ? Colors.dim
+                    : group.totalReward > 0
+                      ? Colors.green
+                      : Colors.red,
+              },
             ]}
           >
-            {group.totalReward >= 0 ? "+" : ""}
-            {fmtCash(group.totalReward)}
+            {group.totalReward === 0
+              ? "—"
+              : (group.totalReward > 0 ? "+" : "") + fmtCash(group.totalReward)}
           </Text>
         </View>
 
@@ -687,9 +688,13 @@ export default function RoutesSheet() {
   const routes = useRoutes();
   const hubs = useHubs();
   const airline = useAirline();
-  const liveDemands = useDemands();
+  const routeEarnings = useRouteEarnings();
+  // Read demands live from store — tracks delivered_pax_today updates from RouteLayer
+  const liveDemands = useGameStore((s) => s.demands);
   const dayProgress = useDayProgress();
   const tabBarH = useTabBarHeight();
+  const dailyEvent = useDailyEvent();
+  const activeDemandWave = useActiveDemandWave();
   const closeSheet = useGameStore((s) => s.closeSheet);
   const openSheet = useGameStore((s) => s.openSheet);
   const startCreation = useGameStore((s) => s.startRouteCreation);
@@ -701,6 +706,26 @@ export default function RoutesSheet() {
 
   const color = airline?.color ?? Colors.sky;
   const activeRoutes = routes.filter((r) => r.active);
+
+  const hubCrowdMul = new Map<string, number>();
+  hubs.forEach((hub) => {
+    const crowding = hubCrowdingLevel(
+      hub.airport.iata,
+      liveDemands,
+      hub.airport,
+    );
+    const mul =
+      crowding?.level === "crisis"
+        ? 0.8
+        : crowding?.level === "overcrowded"
+          ? 0.9
+          : 1.0;
+    hubCrowdMul.set(hub.airport.iata, mul);
+  });
+
+  const globalRevMul =
+    (dailyEvent?.revenueMultiplier ?? 1.0) *
+    (activeDemandWave?.wave.revenueMultiplier ?? 1.0);
 
   const groupedRoutes = useMemo<RouteGroup[]>(() => {
     const map = new Map<string, Route[]>();
@@ -714,84 +739,77 @@ export default function RoutesSheet() {
 
     return Array.from(map.entries()).map(([demandId, groupRoutes]) => {
       const first = groupRoutes[0];
-      const demand = getLiveDemand(first, liveDemands);
-      const deliveredPax = demand.delivered_pax_today ?? 0;
-      const targetPax = demand.base_pax_day ?? 0;
-      const waitingPax = waitingPaxForDemand(demand, dayProgress);
-      const leftToMove = remainingPax(demand);
+
+      const hub = hubs.find((h) => h.airport.iata === first.hub_iata);
+
+      // Seasonal multiplier — continent-first, country override
+      const seasonalMul = getSeasonalMultiplier(
+        dayProgress,
+        first.demand.dest?.country,
+        first.demand.dest?.continent,
+      );
+
+      // Condition penalty — worn planes earn less
+      const condition = first.plane.condition ?? 100;
+      const conditionMul =
+        condition <= 15
+          ? 0.7 // critical — -30%
+          : condition <= 40
+            ? 0.85 // worn     — -15%
+            : 1.0; // good     — no penalty
+
+      const dist = first.total_dist_nm ?? first.demand.dist_nm ?? 0;
+      // Read delivered_pax_today from live store — not from stale route.demand snapshot
+      const liveDemand =
+        liveDemands.find((d) => d.id === first.demand.id) ?? first.demand;
+      const deliveredPax = liveDemand.delivered_pax_today ?? 0;
+      const targetPax = liveDemand.base_pax_day ?? 0;
+      const waitingPax = waitingPaxForDemand(liveDemand, dayProgress);
       const totalCapacity = groupRoutes.reduce(
-        (sum, route) => sum + route.plane.plane_model.pax_capacity,
+        (sum, r) => sum + r.plane.plane_model.pax_capacity,
         0,
       );
+      const leftToMove = Math.max(0, targetPax - deliveredPax);
       const canBoardNow = Math.min(waitingPax, totalCapacity);
       const movedPct =
         targetPax > 0
           ? Math.min(100, Math.round((deliveredPax / targetPax) * 100))
           : 0;
-
+      const priceStrategy = normalizePriceStrategy(first.price_strategy);
+      const hubCrowding = hubCrowdingLevel(
+        first.hub_iata,
+        liveDemands,
+        hub?.airport ?? first.demand.origin,
+      );
+      const congestionMul = hubCrowdMul.get(first.hub_iata) ?? 1.0;
       const status = buildStatus(
-        demand,
+        liveDemand,
         waitingPax,
         deliveredPax,
         leftToMove,
         canBoardNow,
         dayProgress,
       );
+      const priceElasticity = first.demand.price_elasticity ?? 1;
 
-      const hub = hubs.find((h) => h.airport.iata === first.hub_iata);
+      // Sum earnings for all planes in this group from the routeEarnings map
+      // populated by useRevenueTick at end of day — single source of truth
+      const totalReward = groupRoutes.reduce(
+        (sum, r) => sum + (routeEarnings[r.id] ?? 0),
+        0,
+      );
 
-      const priceStrategy = getRoutePriceStrategy(first);
-      const dist = first.total_dist_nm ?? demand.dist_nm;
-
-      // Congestion — computed once per group, used in reward + display
-      const hubCrowding = hub
-        ? hubCrowdingLevel(first.hub_iata, liveDemands, hub.airport)
-        : null;
-      const congestionMul = congestionEfficiencyMultiplier(hubCrowding?.level);
-      const priceElasticity =
-        demand.price_elasticity ?? computePriceElasticity(dist);
-
-      // Representative result from first plane — used for utilization display
-      const firstPlane = first.plane.plane_model;
-      const representativeResult = calcRouteRevenue({
-        distNm: dist,
-        speedKts: firstPlane.speed_kts,
-        trustPct: hub?.trust ?? 0,
-        deliveredPax,
-        paxDay: demand.base_pax_day,
-        costPerSector: firstPlane.cost_per_sector ?? 500,
-        fuelPerNm: firstPlane.fuel_per_nm ?? 2,
-        priceStrategy,
-        priceElasticity,
-        congestionMultiplier: congestionMul,
-        businessPct: demand.business_pct ?? 0.25,
-        leisurePct: demand.leisure_pct ?? 0.75,
-      });
-
-      const totalReward = groupRoutes.reduce((sum, route) => {
-        const p = route.plane.plane_model;
-
-        const result = calcRouteRevenue({
-          distNm: dist,
-          speedKts: p.speed_kts,
-          trustPct: hub?.trust ?? 0,
-          deliveredPax,
-          paxDay: demand.base_pax_day,
-          costPerSector: p.cost_per_sector ?? 500,
-          fuelPerNm: p.fuel_per_nm ?? 2,
-          priceStrategy,
-          priceElasticity,
-          congestionMultiplier: congestionMul,
-          businessPct: demand.business_pct ?? 0.25,
-          leisurePct: demand.leisure_pct ?? 0.75,
-        });
-
-        return sum + result.gross;
-      }, 0);
+      const representativeResult = {
+        utilization: {
+          label: "Healthy",
+          utilization: 1,
+          band: "healthy" as const,
+        },
+      };
 
       return {
         id: demandId,
-        demand,
+        demand: first.demand,
         routes: groupRoutes,
         hub_iata: first.hub_iata,
         via_iata: first.via_iata,
@@ -818,7 +836,7 @@ export default function RoutesSheet() {
         viaPaxRatio: first.via_pax_ratio ?? null,
       };
     });
-  }, [activeRoutes, liveDemands, dayProgress, hubs]);
+  }, [activeRoutes, hubs, dayProgress, liveDemands, hubCrowdMul]);
 
   const totalMoved = groupedRoutes.reduce((sum, r) => sum + r.deliveredPax, 0);
   const totalTarget = groupedRoutes.reduce((sum, r) => sum + r.targetPax, 0);
@@ -1060,8 +1078,20 @@ export default function RoutesSheet() {
               </View>
               <View style={s.rushDivider} />
               <View style={s.rushStat}>
-                <Text style={[s.rushVal, { color: Colors.green }]}>
-                  {fmtCash(totalReward)}
+                <Text
+                  style={[
+                    s.rushVal,
+                    {
+                      color:
+                        totalReward === 0
+                          ? Colors.dim
+                          : totalReward > 0
+                            ? Colors.green
+                            : Colors.red,
+                    },
+                  ]}
+                >
+                  {totalReward === 0 ? "—" : fmtCash(totalReward)}
                 </Text>
                 <Text style={s.rushLbl}>Earned</Text>
               </View>
@@ -1750,31 +1780,6 @@ const s = StyleSheet.create({
     fontWeight: "800",
   },
 });
-
-const es = StyleSheet.create({
-  wrap: { flex: 1, padding: Spacing.lg },
-  empty: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    gap: Spacing.md,
-    paddingVertical: 60,
-  },
-  emptyTitle: {
-    fontSize: 17,
-    fontWeight: "700",
-    color: Colors.text,
-    textAlign: "center",
-  },
-  emptySub: {
-    fontSize: 13,
-    color: Colors.muted,
-    textAlign: "center",
-    lineHeight: 20,
-    maxWidth: 280,
-  },
-});
-
 // ─────────────────────────────────────────────────────────────────
 // SWAP PLANE MODAL
 // Shows idle compatible planes for this route, sorted by efficiency

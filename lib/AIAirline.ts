@@ -246,6 +246,7 @@ export function computeAIState(
     // Passenger mix — business-heavy AI routes yield more per pax
     businessPct: aiMix.businessPct,
     leisurePct: aiMix.leisurePct,
+    seatCapacity: 0,
   }).net;
 
   const dailyNet = dailyNetPerRoute * routeCount * params.growthMultiplier;

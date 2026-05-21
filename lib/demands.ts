@@ -512,10 +512,6 @@ function generateFromPool(
 
     const mix = passengerMixFromDistance(dist);
     const paxCeiling = computePaxCeiling(hub, dest, dist);
-    const basePaxDay = Math.min(
-      paxCeiling,
-      simulatePaxDay(hub, dest, dist, demandScore, gameDay),
-    );
 
     demands.push({
       hub_iata: hub.iata,
@@ -527,7 +523,7 @@ function generateFromPool(
       delivered_pax_today: 0,
       business_pct: mix.businessPct,
       leisure_pct: mix.leisurePct,
-      base_pax_day: basePaxDay,
+      base_pax_day: paxCeiling,
       pax_ceiling: paxCeiling,
       popularity: 0,
     });
@@ -605,15 +601,15 @@ export function refillDemandSlots(
 export function allDemandsServed(hubIata: string, demands: Demand[]): boolean {
   const hubDemands = demands.filter((d) => d.hub_iata === hubIata);
   if (hubDemands.length === 0) return false;
-  console.log(
-    "Checking if all demands served for hub",
-    hubDemands.every(
-      (d) => (d.delivered_pax_today ?? 0) >= (d.base_pax_day ?? 1),
-    ),
-  );
-  return hubDemands.every(
-    (d) => (d.delivered_pax_today ?? 0) >= (d.base_pax_day ?? 1),
-  );
+  return hubDemands.every((d) => {
+    const delivered = d.delivered_pax_today ?? 0;
+    const target = Math.min(
+      d.base_pax_day ?? 1,
+      d.pax_ceiling ?? d.base_pax_day ?? 1,
+    );
+    // Allow 2 pax tolerance for rounding in boardPassengers/spawnedPaxForDay
+    return delivered >= target - 2;
+  });
 }
 
 export function pendingDemandCount(hubIata: string, demands: Demand[]): number {

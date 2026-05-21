@@ -36,7 +36,7 @@ const SPEEDS: {
   label: string;
   icon: keyof typeof Ionicons.glyphMap;
 }[] = [
-  { value: 0, label: "",  icon: "pause" },
+  { value: 0, label: "", icon: "pause" },
   { value: 1, label: "1x", icon: "play" },
   { value: 2, label: "2x", icon: "play-forward" },
   { value: 3, label: "3x", icon: "play-skip-forward" },
@@ -168,7 +168,6 @@ export default function TopHUD() {
 
   return (
     <View style={[s.container, { paddingTop: topInset + 4 }]}>
-
       {/* ── Row 1: Airline · Cash · Speed ── */}
       <View style={s.row}>
         <View style={s.identity}>
@@ -202,7 +201,12 @@ export default function TopHUD() {
                   color={active ? Colors.bg : Colors.dim}
                 />
                 {label ? (
-                  <Text style={[s.speedLabel, { color: active ? Colors.bg : Colors.dim }]}>
+                  <Text
+                    style={[
+                      s.speedLabel,
+                      { color: active ? Colors.bg : Colors.dim },
+                    ]}
+                  >
                     {label}
                   </Text>
                 ) : null}
@@ -215,31 +219,36 @@ export default function TopHUD() {
       {/* ── Row 2: TODAY · DAY · TIME ── */}
       <View style={s.statsRow}>
         {/* Today income */}
-        <View style={[
-          s.statBox,
-          {
-            borderColor: todayReward > 0
-              ? Colors.green + "40"
-              : todayReward < 0
-                ? Colors.red + "40"
-                : Colors.border,
-            backgroundColor: todayReward > 0
-              ? Colors.green + "0c"
-              : todayReward < 0
-                ? Colors.red + "08"
-                : "transparent",
-          }
-        ]}>
+        <View
+          style={[
+            s.statBox,
+            {
+              borderColor:
+                todayReward > 0
+                  ? Colors.green + "40"
+                  : todayReward < 0
+                    ? Colors.red + "40"
+                    : Colors.border,
+              backgroundColor:
+                todayReward > 0
+                  ? Colors.green + "0c"
+                  : todayReward < 0
+                    ? Colors.red + "08"
+                    : "transparent",
+            },
+          ]}
+        >
           <Text style={s.statLabel}>TODAY</Text>
           <Animated.Text
             style={[
               s.statValue,
               {
-                color: todayReward > 0
-                  ? Colors.green
-                  : todayReward < 0
-                    ? Colors.red
-                    : Colors.dim,
+                color:
+                  todayReward > 0
+                    ? Colors.green
+                    : todayReward < 0
+                      ? Colors.red
+                      : Colors.dim,
                 transform: [{ scale: rewardScale }],
               },
             ]}
@@ -248,7 +257,7 @@ export default function TopHUD() {
             {todayReward > 0
               ? `+${fmtCash(displayedReward || todayReward)}`
               : todayReward < 0
-                ? fmtCash(displayedReward || todayReward)
+                ? `${fmtCash(displayedReward || todayReward)}`
                 : "$0"}
           </Animated.Text>
         </View>
@@ -282,7 +291,6 @@ export default function TopHUD() {
           </View>
         </View>
       </View>
-
     </View>
   );
 }
@@ -323,73 +331,73 @@ const s = StyleSheet.create({
 
   // ── Row 2 stat bar ──────────────────────────────────────────────
   statsRow: {
-    flexDirection:   "row",
-    alignItems:      "stretch",
-    marginTop:       Spacing.sm,
-    borderRadius:    Radius.lg,
-    borderWidth:     1,
-    borderColor:     Colors.border,
-    overflow:        "hidden",
+    flexDirection: "row",
+    alignItems: "stretch",
+    marginTop: Spacing.sm,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    overflow: "hidden",
   },
   statBox: {
-    flex:            1,
-    alignItems:      "center",
-    justifyContent:  "center",
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
     paddingVertical: 6,
-    borderWidth:     1,
-    borderColor:     "transparent",
-    borderRadius:    Radius.lg,
-    gap:             1,
+    borderWidth: 1,
+    borderColor: "transparent",
+    borderRadius: Radius.lg,
+    gap: 1,
   },
   statLabel: {
-    fontSize:      7,
-    color:         Colors.dim,
+    fontSize: 7,
+    color: Colors.dim,
     letterSpacing: 1.4,
-    fontWeight:    "900",
+    fontWeight: "900",
   },
   statValue: {
-    fontSize:   15,
+    fontSize: 15,
     fontWeight: "900",
-    color:      Colors.text,
+    color: Colors.text,
     lineHeight: 18,
   },
   statDivider: {
-    width:           1,
+    width: 1,
     backgroundColor: Colors.border,
-    marginVertical:  6,
+    marginVertical: 6,
   },
   clockTrack: {
-    width:           "80%",
-    height:          2,
+    width: "80%",
+    height: 2,
     backgroundColor: "rgba(255,255,255,0.08)",
-    borderRadius:    1,
-    overflow:        "hidden",
-    marginTop:       2,
+    borderRadius: 1,
+    overflow: "hidden",
+    marginTop: 2,
   },
   clockFill: {
-    height:       "100%",
+    height: "100%",
     borderRadius: 1,
   },
 
   // ── Speed controls ───────────────────────────────────────────────
   speedGroup: {
     flexDirection: "row",
-    gap:           3,
+    gap: 3,
   },
   speedBtn: {
-    minWidth:        36,
-    minHeight:       36,
-    borderRadius:    Radius.md,
-    borderWidth:     1,
-    borderColor:     Colors.border,
+    minWidth: 36,
+    minHeight: 36,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
     backgroundColor: "rgba(255,255,255,.035)",
-    alignItems:      "center",
-    justifyContent:  "center",
-    gap:             1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 1,
     paddingHorizontal: 4,
   },
   speedLabel: {
-    fontSize:   7,
+    fontSize: 7,
     fontWeight: "900",
     lineHeight: 8,
   },

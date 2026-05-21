@@ -380,7 +380,6 @@ export function useUpgradeHub() {
       updateHub(hubId, {
         tier: nextTier,
         trust_floor: nextFloor,
-        hub_pax: 0, // reset on upgrade
         trust: Math.max(hub.trust, nextFloor),
       });
       addLedgerEntries([
@@ -400,7 +399,6 @@ export function useUpgradeHub() {
           .update({
             tier: nextTier,
             trust_floor: nextFloor,
-            hub_pax: 0,
             trust: Math.max(hub.trust, nextFloor),
           })
           .eq("id", hubId);

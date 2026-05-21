@@ -7,13 +7,13 @@
  * - Multiple active routes can share the same demand_id.
  * - Each plane can still animate independently.
  * - Passenger delivery is capped against the live demand in store.
- * - Revenue uses calcInstantDeliveryReward instead of old inline formula.
+ * - Revenue popup is display-only (gross estimate). Actual cash credited by useRevenueTick at end of day.
  */
 
 import { computePlayerMarketShare } from "@/lib/AIAirline";
 import { hubCrowdingLevel } from "@/lib/demands";
 import { boardPassengers } from "@/lib/passengerFlow";
-import { calcInstantDeliveryReward } from "@/lib/revenue";
+import { calcRouteRevenue } from "@/lib/revenue";
 import { getSeasonalMultiplier } from "@/lib/seasons";
 import type { Airport, Route } from "@/store";
 import { useDay, useDayProgress, useGameStore, useRoutes } from "@/store";
@@ -126,6 +126,7 @@ export default function RouteLayer({
   const day = useDay();
   const airports = useGameStore((s) => s.airports);
   const dayProgress = useDayProgress();
+  const earnCash = useGameStore((s) => s.earnCash);
   const updateDemand = useGameStore((s) => s.updateDemand);
 
   const [planes, setPlanes] = useState<PlaneState[]>([]);
@@ -169,7 +170,8 @@ export default function RouteLayer({
         demands,
         hubs,
         addPaxDelivered,
-        earnCash,
+        setRouteEarnings,
+        routeEarnings,
       } = useGameStore.getState();
 
       // Combined revenue multiplier from daily event + active demand wave + hub crowding
@@ -231,130 +233,157 @@ export default function RouteLayer({
           const justArrivedAtDest = lastRaw < 1 && raw >= 1;
 
           if (justArrivedAtDest) {
+            // Read demand directly from store — not from React state snapshot —
+            // so delivered_pax_today reflects other planes that already boarded
+            // this rotation cycle (prevents stale state race condition)
             const liveDemand =
-              demands.find((demand) => demand.id === route.demand.id) ??
-              route.demand;
+              useGameStore
+                .getState()
+                .demands.find((d) => d.id === route.demand.id) ?? route.demand;
 
-            const delieveredPax = boardPassengers({
-              demand: liveDemand,
-              planeCapacity: route.plane.plane_model.pax_capacity,
-              dayProgress,
-              loadFactorMin: 0.65,
-              loadFactorMax: 1,
-            });
+            // Skip boarding if demand already fully cleared
+            const alreadyCleared =
+              (liveDemand.delivered_pax_today ?? 0) >=
+              (liveDemand.base_pax_day ?? 1) - 2;
 
-            const aiAirlines = useGameStore.getState().aiAirlines;
+            if (!alreadyCleared) {
+              const delieveredPax = boardPassengers({
+                demand: liveDemand,
+                planeCapacity: route.plane.plane_model.pax_capacity,
+                dayProgress,
+                loadFactorMin: 0.65,
+                loadFactorMax: 1,
+              });
 
-            if (delieveredPax > 0) {
-              const hub = hubs.find((h) => h.airport.iata === route.hub_iata);
+              const aiAirlines = useGameStore.getState().aiAirlines;
 
-              const share = computePlayerMarketShare(
-                hub?.trust ?? 0,
-                aiAirlines,
-                liveDemand.origin.iata,
-                liveDemand.dest.iata,
-              );
+              if (delieveredPax > 0) {
+                const hub = hubs.find((h) => h.airport.iata === route.hub_iata);
 
-              // Math.round instead of Math.floor — prevents last pax
-              // always being lost when share < 1.0 and deliveredPax = 1.
-              // e.g. floor(1 * 0.6) = 0 (wrong), round(1 * 0.6) = 1 (correct).
-              // Also clamp effective to min 1 when boarding happened —
-              // a plane that boarded passengers always delivers at least 1.
-              const effective = Math.max(1, Math.round(delieveredPax * share));
-              const lost = Math.max(0, delieveredPax - effective);
-              if (effective > 0) {
-                addPaxDelivered(liveDemand.id, effective, lost);
-              }
+                const share = computePlayerMarketShare(
+                  hub?.trust ?? 0,
+                  aiAirlines,
+                  liveDemand.origin.iata,
+                  liveDemand.dest.iata,
+                );
 
-              if (lost > 0) {
-                updateDemand(liveDemand.id, {
-                  ai_stolen_pax: (liveDemand.ai_stolen_pax ?? 0) + 0,
-                });
-              }
+                // Math.round instead of Math.floor — prevents last pax
+                // always being lost when share < 1.0 and deliveredPax = 1.
+                // e.g. floor(1 * 0.6) = 0 (wrong), round(1 * 0.6) = 1 (correct).
+                // Also clamp effective to min 1 when boarding happened —
+                // a plane that boarded passengers always delivers at least 1.
+                const effective = Math.max(
+                  1,
+                  Math.round(delieveredPax * share),
+                );
+                const lost = Math.max(0, delieveredPax - effective);
+                if (effective > 0) {
+                  addPaxDelivered(liveDemand.id, effective, lost);
+                }
 
-              // Seasonal multiplier — continent-first, country override
-              const seasonalMul = getSeasonalMultiplier(
-                day,
-                liveDemand.dest?.country,
-                liveDemand.dest?.continent,
-              );
+                if (lost > 0) {
+                  updateDemand(liveDemand.id, {
+                    ai_stolen_pax: (liveDemand.ai_stolen_pax ?? 0) + 0,
+                  });
+                }
 
-              // Condition penalty — worn planes earn less
-              const condition = route.plane.condition ?? 100;
-              const conditionMul =
-                condition <= 15
-                  ? 0.7 // critical — -30%
-                  : condition <= 40
-                    ? 0.85 // worn     — -15%
-                    : 1.0; // good     — no penalty
+                // Seasonal multiplier — continent-first, country override
+                const seasonalMul = getSeasonalMultiplier(
+                  day,
+                  liveDemand.dest?.country,
+                  liveDemand.dest?.continent,
+                );
 
-              const reward = calcInstantDeliveryReward({
-                distNm: route.total_dist_nm ?? liveDemand.dist_nm,
-                trustPct: hub?.trust ?? 0,
-                deliveredPax: delieveredPax,
-                priceStrategy: route.price_strategy ?? "standard",
-                priceElasticity: liveDemand.price_elasticity ?? 1,
-                crowdMultiplier:
+                // Condition penalty — worn planes earn less
+                const condition = route.plane.condition ?? 100;
+                const conditionMul =
+                  condition <= 15
+                    ? 0.7 // critical — -30%
+                    : condition <= 40
+                      ? 0.85 // worn     — -15%
+                      : 1.0; // good     — no penalty
+
+                // Compute net revenue for this rotation
+                const distNm = route.total_dist_nm ?? liveDemand.dist_nm;
+                const crowdMul =
                   globalRevMul *
                   seasonalMul *
                   conditionMul *
-                  (hubCrowdMul.get(route.hub_iata) ?? 1.0),
-                businessPct: liveDemand.business_pct ?? 0.25,
-                leisurePct: liveDemand.leisure_pct ?? 0.75,
-                // O&D via route split — leg distances now typed on Route
-                viaPaxRatio: route.via_iata
-                  ? (route.via_pax_ratio ?? 0.3)
-                  : null,
-                leg1DistNm: route.via_iata
-                  ? (route.leg1_dist_nm ?? null)
-                  : null,
-                leg2DistNm: route.via_iata
-                  ? (route.leg2_dist_nm ?? null)
-                  : null,
-              });
+                  (hubCrowdMul.get(route.hub_iata) ?? 1.0);
 
-              earnCash(reward);
+                const res = calcRouteRevenue({
+                  distNm,
+                  speedKts: route.plane.plane_model.speed_kts,
+                  trustPct: hub?.trust ?? 0,
+                  boardedPax: delieveredPax,
+                  seatCapacity: route.plane.plane_model.pax_capacity,
+                  costPerSector: route.plane.plane_model.cost_per_sector ?? 500,
+                  fuelPerNm: route.plane.plane_model.fuel_per_nm ?? 2.0,
+                  priceStrategy: route.price_strategy ?? "standard",
+                  priceElasticity: liveDemand.price_elasticity ?? 1,
+                  crowdMultiplier: crowdMul,
+                  congestionMultiplier: 1,
+                  businessPct: liveDemand.business_pct ?? 0.25,
+                  leisurePct: liveDemand.leisure_pct ?? 0.75,
+                });
 
-              const popId = `pop-${route.id}-${Date.now()}`;
+                // Accumulate net earnings per route — realtime, read by RoutesSheet/AirportSheet
+                const prevEarning = routeEarnings[route.id] ?? 0;
+                console.log("prevEar", prevEarning);
+                setRouteEarnings({
+                  ...routeEarnings,
+                  [route.id]: prevEarning + res.net,
+                });
 
-              setRevPops((prev) => [
-                ...prev,
-                {
-                  id: popId,
-                  lng: liveDemand.dest.lng,
-                  lat: liveDemand.dest.lat,
-                  amount: reward,
-                  opacity: 1,
-                  offsetY: 0,
-                },
-              ]);
+                // Display-only popup — shows gross earned this rotation
+                const popupAmount = res.net;
 
-              let frame = 0;
-              const totalFrames = 45;
+                console.log("pop", popupAmount);
+                earnCash(popupAmount);
 
-              const fadeInterval = setInterval(() => {
-                frame++;
-                const t = frame / totalFrames;
+                const popId = `pop-${route.id}-${Date.now()}`;
 
-                if (t >= 1) {
-                  clearInterval(fadeInterval);
-                  setRevPops((prev) => prev.filter((pop) => pop.id !== popId));
-                  return;
-                }
+                setRevPops((prev) => [
+                  ...prev,
+                  {
+                    id: popId,
+                    lng: liveDemand.dest.lng,
+                    lat: liveDemand.dest.lat,
+                    amount: popupAmount,
+                    opacity: 1,
+                    offsetY: 0,
+                  },
+                ]);
 
-                setRevPops((prev) =>
-                  prev.map((pop) =>
-                    pop.id === popId
-                      ? {
-                          ...pop,
-                          opacity: 1 - t,
-                          offsetY: t * 40,
-                        }
-                      : pop,
-                  ),
-                );
-              }, 33);
-            }
+                let frame = 0;
+                const totalFrames = 45;
+
+                const fadeInterval = setInterval(() => {
+                  frame++;
+                  const t = frame / totalFrames;
+
+                  if (t >= 1) {
+                    clearInterval(fadeInterval);
+                    setRevPops((prev) =>
+                      prev.filter((pop) => pop.id !== popId),
+                    );
+                    return;
+                  }
+
+                  setRevPops((prev) =>
+                    prev.map((pop) =>
+                      pop.id === popId
+                        ? {
+                            ...pop,
+                            opacity: 1 - t,
+                            offsetY: t * 40,
+                          }
+                        : pop,
+                    ),
+                  );
+                }, 33);
+              }
+            } // end !alreadyCleared
           }
         }
 
@@ -366,7 +395,7 @@ export default function RouteLayer({
           lat,
           rotation,
         };
-      });
+      }) as PlaneState[];
 
       setPlanes(newPlanes);
     };

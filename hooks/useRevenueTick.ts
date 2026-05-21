@@ -19,7 +19,6 @@ import {
   emitUnlockToast,
   emitWarningToast,
 } from "@/hooks/useToast";
-import { computePlayerMarketShare } from "@/lib/AIAirline";
 import { applyAIPressure } from "@/lib/aiPressure";
 import { allDemandsServed, hubCrowdingLevel } from "@/lib/demands";
 import { applyDemandWave, isDemandWaveDay } from "@/lib/demandWaves";
@@ -29,7 +28,7 @@ import {
   shouldStartGlobalContracts,
 } from "@/lib/globalContracts";
 import { hubOutboundWaitingPax } from "@/lib/passengerFlow";
-import { calcRouteRevenue, dailyInterest } from "@/lib/revenue";
+import { dailyInterest } from "@/lib/revenue";
 import { getActiveSeason, getSeasonLabel } from "@/lib/seasons";
 import { supabase } from "@/lib/supabase";
 import type { Demand, LedgerEntry } from "@/store";
@@ -46,6 +45,45 @@ function snapshotDeliveredPax(demands: Demand[]) {
     map.set(demand.id, demand.delivered_pax_today ?? 0);
   });
   return map;
+}
+
+/**
+ * Distribute demand pax across routes by sequential filling.
+ * Planes board passengers in order until demand is exhausted.
+ * Remaining planes fly empty and pay operating costs with 0 revenue.
+ */
+function buildRoutesPaxMap(
+  routes: {
+    id: string;
+    active: boolean;
+    demand: { id: string };
+    plane: { plane_model: { pax_capacity: number } };
+  }[],
+  paxSnapshot: Map<string, number>,
+): Map<string, number> {
+  const routePaxMap = new Map<string, number>();
+
+  // Group active routes by demand id
+  const byDemand = new Map<string, typeof routes>();
+  routes.forEach((r) => {
+    if (!r.active) return;
+    const key = r.demand.id;
+    if (!byDemand.has(key)) byDemand.set(key, []);
+    byDemand.get(key)!.push(r);
+  });
+
+  byDemand.forEach((demandRoutes, demandId) => {
+    let remaining = paxSnapshot.get(demandId) ?? 0;
+
+    demandRoutes.forEach((r) => {
+      const capacity = r.plane.plane_model.pax_capacity ?? 0;
+      const boarded = Math.min(capacity, remaining);
+      routePaxMap.set(r.id, boarded);
+      remaining -= boarded;
+    });
+  });
+
+  return routePaxMap;
 }
 
 function withSnapshotDelivered(demand: Demand, delivered: number): Demand {
@@ -96,6 +134,7 @@ export function useRevenueTick() {
       applyWaveToStore,
       setActiveDemandWave,
       upsertPresence,
+      setRouteEarnings,
     } = store;
 
     const entries: LedgerEntry[] = [];
@@ -103,9 +142,13 @@ export function useRevenueTick() {
     let totalPaxToday = 0;
     let activeRouteCount = 0;
     let stalledRouteCount = 0;
+    const routeEarningsMap: Record<string, number> = {};
 
     // Snapshot yesterday's moved travelers BEFORE resetDailyPax().
     const paxSnapshot = snapshotDeliveredPax(demands);
+
+    // Distribute demand pax across routes proportionally by plane capacity
+    const routePaxMap = buildRoutesPaxMap(routes, paxSnapshot);
     let demandSnapshot = demands.map((demand) =>
       withSnapshotDelivered(demand, paxSnapshot.get(demand.id) ?? 0),
     );
@@ -213,8 +256,11 @@ export function useRevenueTick() {
 
       const demand =
         demandSnapshot.find((d) => d.id === route.demand.id) ?? route.demand;
-      const deliveredPax = paxSnapshot.get(demand.id) ?? 0;
-      const remaining = Math.max(0, demand.base_pax_day - deliveredPax);
+      const deliveredPax = routePaxMap.get(route.id) ?? 0;
+      const remaining = Math.max(
+        0,
+        demand.base_pax_day - (paxSnapshot.get(demand.id) ?? 0),
+      );
 
       if (deliveredPax <= 0) stalledRouteCount++;
 
@@ -227,38 +273,7 @@ export function useRevenueTick() {
         );
       }
 
-      const routeCrowding = crowdingByHub.get(route.hub_iata);
-      const crowdMultiplier =
-        routeCrowding?.level === "crisis"
-          ? 0.8
-          : routeCrowding?.level === "overcrowded"
-            ? 0.9
-            : 1.0;
-
-      const hub = hubs.find((h) => h.airport.iata === route.hub_iata);
-      const marketShare = computePlayerMarketShare(
-        hub?.trust ?? 50,
-        aiAirlines,
-        demand.origin.iata,
-        demand.dest.iata,
-      );
-
-      const revMultiplier = crowdMultiplier * eventMultiplier * marketShare;
-      const routeDist = route.total_dist_nm ?? demand.dist_nm;
-      const plane = route.plane.plane_model;
-      const res = calcRouteRevenue({
-        distNm: routeDist,
-        speedKts: plane.speed_kts,
-        trustPct: hub?.trust ?? 0,
-        deliveredPax,
-        paxDay: demand.base_pax_day,
-        costPerSector: plane.cost_per_sector ?? 500,
-        fuelPerNm: plane.fuel_per_nm ?? 2.0,
-        crowdMultiplier: revMultiplier,
-        businessPct: demand.business_pct ?? 0.25,
-        leisurePct: demand.leisure_pct ?? 0.75,
-      });
-      const finalRevenue = res.net;
+      const finalRevenue = routeEarningsMap[route.id];
       totalRev += finalRevenue;
       totalPaxToday += deliveredPax;
       activeRouteCount++;
@@ -324,7 +339,11 @@ export function useRevenueTick() {
 
     const net = totalRev - interest;
 
-    // Route rewards already happened live. Only interest + maintenance change cash here.
+    // Store per-route earnings — used by RoutesSheet and AirportSheet for display
+    setRouteEarnings(routeEarningsMap);
+
+    // Credit net route revenue — single source of truth for cash
+    if (totalRev !== 0) earnCash(totalRev);
     if (interest > 0) accrueInterest(interest);
 
     // Idle plane maintenance cost — planes with no active route still cost money
@@ -470,28 +489,12 @@ export function useRevenueTick() {
         activeRoutes.length === 0 ||
         activeRoutes.every((route) => {
           const demand = demands.find((d) => d.id === route.demand.id);
-          const hub = hubs.find((h) => h.airport.iata === route.hub_iata);
-          const plane = route.plane.plane_model;
           if (!demand) return true;
 
           const deliveredPax = paxSnapshot.get(demand.id) ?? 0;
           if (deliveredPax <= 0) return false;
 
-          return (
-            calcRouteRevenue({
-              distNm: route.total_dist_nm ?? demand.dist_nm,
-              speedKts: plane.speed_kts,
-              trustPct: hub?.trust ?? 0,
-              deliveredPax,
-              paxDay: demand.base_pax_day,
-              costPerSector: plane.cost_per_sector ?? 500,
-              fuelPerNm: plane.fuel_per_nm ?? 2.0,
-              priceStrategy: (route as any).price_strategy ?? "standard",
-              priceElasticity: demand.price_elasticity ?? 1,
-              businessPct: demand.business_pct ?? 0.25,
-              leisurePct: demand.leisure_pct ?? 0.75,
-            }).net >= 0
-          );
+          return routeEarningsMap[route.id] >= 0;
         });
 
       updateWeeklyProgress({

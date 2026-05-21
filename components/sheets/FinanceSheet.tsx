@@ -13,10 +13,9 @@
 import { Colors, Radius, Spacing } from "@/constants/theme";
 import { useTabBarHeight } from "@/hooks/useSheetLayout";
 import {
-  calcRouteRevenue,
   dailyInterest,
   fmtCash,
-  fmtCashShort,
+  fmtCashShort
 } from "@/lib/revenue";
 import {
   useAirline,
@@ -27,6 +26,7 @@ import {
   useLedger,
   useLoan,
   useOwnedPlanes,
+  useRouteEarnings,
   useRoutes,
 } from "@/store";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
@@ -80,7 +80,14 @@ function RouteRewardRow({ route, reward }: { route: any; reward: number }) {
 
       <View style={rr.rewardPill}>
         <Ionicons name="cash-outline" size={12} color={Colors.green} />
-        <Text style={rr.reward}>{fmtCash(reward)}</Text>
+        <Text
+          style={[
+            rr.reward,
+            { color: reward >= 0 ? Colors.green : Colors.red },
+          ]}
+        >
+          {fmtCash(reward)}
+        </Text>
       </View>
     </View>
   );
@@ -175,6 +182,7 @@ export default function FinanceSheet() {
   const day = useDay();
   const ownedPlanes = useOwnedPlanes();
   const tabBarH = useTabBarHeight();
+  const routeEarnings = useRouteEarnings();
   const closeSheet = useGameStore((s) => s.closeSheet);
   const openSheet = useGameStore((s) => s.openSheet);
 
@@ -188,31 +196,13 @@ export default function FinanceSheet() {
     return routes
       .filter((r) => r.active)
       .map((r) => {
-        const hub = hubs.find((h) => h.airport.iata === r.hub_iata);
-        const p = r.plane.plane_model;
-        const dist = r.total_dist_nm ?? r.demand.dist_nm;
-
-        const result = calcRouteRevenue({
-          distNm: dist,
-          speedKts: p.speed_kts,
-          trustPct: hub?.trust ?? 0,
-          deliveredPax: r.demand.delivered_pax_today ?? r.demand.base_pax_day,
-          paxDay: r.demand.base_pax_day,
-          costPerSector: p.cost_per_sector ?? 500,
-          fuelPerNm: p.fuel_per_nm ?? 2,
-          priceStrategy: r.price_strategy ?? "standard",
-          priceElasticity: r.demand.price_elasticity ?? 1,
-          businessPct: r.demand.business_pct ?? 0.25,
-          leisurePct: r.demand.leisure_pct ?? 0.75,
-        });
-
         return {
           route: r,
-          reward: result.gross, // gross only — costs don't actually deduct cash
+          reward: routeEarnings[r.id], // gross only — costs don't actually deduct cash
         };
       })
       .sort((a, b) => b.reward - a.reward);
-  }, [routes, hubs, day]);
+  }, [routes, routeEarnings]);
 
   const recentLedger = useMemo(
     () =>
@@ -264,7 +254,7 @@ export default function FinanceSheet() {
   const dailyNet = totalRouteReward - interest - maintenanceCost;
   const netWorth = cash - loan;
 
-  const bestRoute = routeRewards[0];
+  const bestRoute = routeRewards[0].reward >= 0 ? routeRewards[0] : null;
 
   return (
     <BottomSheetScrollView
@@ -326,14 +316,19 @@ export default function FinanceSheet() {
             { color: dailyNet >= 0 ? Colors.green : Colors.red },
           ]}
         >
-          {fmtCashShort(dailyNet)}
+          {fmtCash(dailyNet)}
         </Text>
 
         <View style={s.heroBreakdown}>
           <View style={s.heroLine}>
             <Ionicons name="airplane" size={12} color={Colors.green} />
             <Text style={s.heroLineLabel}>Routes</Text>
-            <Text style={[s.heroLineValue, { color: Colors.green }]}>
+            <Text
+              style={[
+                s.heroLineValue,
+                { color: totalRouteReward >= 0 ? Colors.green : Colors.red },
+              ]}
+            >
               {fmtCash(totalRouteReward)}
             </Text>
           </View>
@@ -396,7 +391,12 @@ export default function FinanceSheet() {
               {` → ${bestRoute.route.demand.dest.iata}`}
             </Text>
           </View>
-          <Text style={[s.bestCash, { color: Colors.green }]}>
+          <Text
+            style={[
+              s.bestCash,
+              { color: bestRoute.reward >= 0 ? Colors.green : Colors.red },
+            ]}
+          >
             {fmtCash(bestRoute.reward)}
           </Text>
         </View>

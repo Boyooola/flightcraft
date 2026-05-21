@@ -194,6 +194,7 @@ export interface GameStore {
   activeDemandWave: AppliedDemandWave | null;
   dayProgress: number; // 0 → 1 within the current game day
   todayCash: number; // exact cash earned today (resets each day)
+  routeEarnings: Record<string, number>; // net earnings per route id, updated end of day
   aiAirlines: AIAirline[];
   weeklyProgress: {
     weekNumber: number;
@@ -272,6 +273,7 @@ export interface GameStore {
   updateAirline: (patch: Partial<AirlineConfig>) => void;
 
   resetTodayCash: (todayCash: number) => void;
+  setRouteEarnings: (earnings: Record<string, number>) => void;
 
   // Achievements
   earnAchievement: (id: string, day: number) => void;
@@ -364,6 +366,7 @@ export const useGameStore = create<GameStore>()(
       globalContract: null,
       completedGlobalContracts: 0,
       todayCash: 0,
+      routeEarnings: {},
       activeDemandWave: null,
       dayProgress: 0,
       weeklyProgress: {
@@ -423,6 +426,8 @@ export const useGameStore = create<GameStore>()(
       setPlanes: (planes) => set({ planes }, false, "setPlanes"),
 
       resetTodayCash: () => set({ todayCash: 0 }, false, "resetTodayCash"),
+      setRouteEarnings: (earnings) =>
+        set({ routeEarnings: earnings }, false, "setRouteEarnings"),
 
       // ── Session ──────────────────────────────────────────────────
       setPhase: (phase) => set({ phase }, false, "setPhase"),
@@ -578,6 +583,8 @@ export const useGameStore = create<GameStore>()(
           const delivered = d.delivered_pax_today ?? 0;
           const base = d.base_pax_day ?? 0;
 
+          // Demand is fixed — pax_ceiling IS base_pax_day, never changes.
+          // Popularity is a pricing/revenue signal only.
           let popularity = d.popularity ?? 0;
           const ceiling = d.pax_ceiling ?? base * 10;
 
@@ -607,7 +614,10 @@ export const useGameStore = create<GameStore>()(
             );
             const floor = Math.max(8, Math.round(ceiling * 0.02));
 
-            const didClear = delivered >= d.base_pax_day;
+            // Use min(base, ceiling) as target — handles old data where base > ceiling
+            // Allow 2 pax tolerance for rounding in boardPassengers/spawnedPaxForDay
+            const target = Math.min(base, ceiling);
+            const didClear = delivered >= target - 2;
             const newPax = didClear
               ? Math.max(
                   floor,
@@ -636,6 +646,8 @@ export const useGameStore = create<GameStore>()(
             const decayed = Math.round(base * 0.98);
             popularity = Math.max(-40, popularity - 1);
 
+            console.log("floor", floor, "decayed", decayed, "ceiling", ceiling);
+
             return {
               ...d,
               popularity,
@@ -648,7 +660,11 @@ export const useGameStore = create<GameStore>()(
           }
         });
 
-        set({ demands: updatedDemands, todayCash: 0 }, false, "resetDailyPax");
+        set(
+          { demands: updatedDemands, todayCash: 0, routeEarnings: {} },
+          false,
+          "resetDailyPax",
+        );
       },
 
       addPaxDelivered: (demandId, pax, lostToAi) =>
@@ -718,6 +734,7 @@ export const useGameStore = create<GameStore>()(
             completedGlobalContracts: 0,
             dayProgress: 0,
             todayCash: 0,
+            routeEarnings: {},
           },
           false,
           "resetGame",
@@ -783,8 +800,8 @@ export const useGameStore = create<GameStore>()(
             airline: s.airline
               ? { ...s.airline, cash: s.airline.cash + amount }
               : null,
-            // Only accumulate positive cash as "today earned"
-            todayCash: amount > 0 ? s.todayCash + amount : s.todayCash,
+            // Accumulate all route revenue (positive or negative) as today's net
+            todayCash: s.todayCash + amount,
           }),
           false,
           "earnCash",
@@ -1024,6 +1041,7 @@ export const useRouteCreation = () => {
 };
 
 export const useTodayCash = () => useGameStore((s) => s.todayCash);
+export const useRouteEarnings = () => useGameStore((s) => s.routeEarnings);
 
 export const usePresence = () => useGameStore((s) => s.presence);
 export const useAirportPresence = (iata: string | undefined) =>
