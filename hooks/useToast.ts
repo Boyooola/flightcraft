@@ -61,6 +61,11 @@ export interface DaySummaryToastData {
   busyHubs?: number;
   overcrowdedHubs?: number;
   crisisHubs?: number;
+  choiceEffect?: {
+    pctLabel: string; // e.g. "+15%" or "-12%"
+    daysLeft: number; // days until revenueMultiplierEndsDay
+    color: string; // green if positive, red if negative
+  } | null;
 }
 
 export interface AchievementToastData {

@@ -607,8 +607,13 @@ export function allDemandsServed(hubIata: string, demands: Demand[]): boolean {
       d.base_pax_day ?? 1,
       d.pax_ceiling ?? d.base_pax_day ?? 1,
     );
-    // Allow 2 pax tolerance for rounding in boardPassengers/spawnedPaxForDay
-    return delivered >= target - 2;
+    // A demand is served when delivered pax has reached the target.
+    // No tolerance subtraction — the "-2" caused capacity-constrained
+    // routes (plane seats < demand) to mark served prematurely,
+    // triggering demand refills while passengers were still waiting.
+    // Rounding is already handled inside boardPassengers by clamping
+    // to Math.min(capacity, remaining), so no tolerance needed here.
+    return delivered >= target;
   });
 }
 

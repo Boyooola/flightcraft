@@ -11,6 +11,7 @@ import TopHUD from "@/components/hud/TopHUD";
 import GameMap from "@/components/map/GameMap";
 import SheetManager from "@/components/sheets/SheetManager";
 import BankruptScreen from "@/components/ui/BankruptScreen";
+import ChoiceEventModal from "@/components/ui/ChoiceEventModal";
 import DailyEventCard from "@/components/ui/DailyEventCard";
 import DaySummaryCard from "@/components/ui/DaySummaryCard";
 import GoalsOverlay from "@/components/ui/GoalsOverlay";
@@ -30,7 +31,11 @@ import { useMissionChecker } from "@/hooks/useMissionChecker";
 import { useNotifications } from "@/hooks/useNotifications";
 import { useRateUs } from "@/hooks/useRateUs";
 import { useRevenueTick } from "@/hooks/useRevenueTick";
-import { useLoadPresence } from "@/hooks/useSupabaseWrite";
+import {
+  useAutoSaveChoiceEventState,
+  useLoadChoiceEventState,
+  useLoadPresence,
+} from "@/hooks/useSupabaseWrite";
 import { useWeeklyChallenge } from "@/hooks/useWeeklyChallenge";
 import { useAirline, useLoadComplete, useLoadSteps, usePhase } from "@/store";
 import { useEffect, useState } from "react";
@@ -53,6 +58,8 @@ function GameContent() {
   useAITick();
   useAICompetition();
   useLoadPresence();
+  useLoadChoiceEventState();
+  useAutoSaveChoiceEventState();
 
   const loadComplete = useLoadComplete();
   const loadSteps = useLoadSteps();
@@ -98,6 +105,7 @@ function GameContent() {
       {(phase === "playing" || phase === "tutorial") && <RouteCreationBanner />}
       {phase === "tutorial" && mapReady && <TutorialScreen />}
       {phase === "bankrupt" && <BankruptScreen />}
+      <ChoiceEventModal />
       {/* <AwayEarningsModal /> */}
     </View>
   );

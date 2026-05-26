@@ -12,11 +12,7 @@
 
 import { Colors, Radius, Spacing } from "@/constants/theme";
 import { useTabBarHeight } from "@/hooks/useSheetLayout";
-import {
-  dailyInterest,
-  fmtCash,
-  fmtCashShort
-} from "@/lib/revenue";
+import { dailyInterest, fmtCash, fmtCashShort } from "@/lib/revenue";
 import {
   useAirline,
   useCash,
@@ -198,7 +194,7 @@ export default function FinanceSheet() {
       .map((r) => {
         return {
           route: r,
-          reward: routeEarnings[r.id], // gross only — costs don't actually deduct cash
+          reward: routeEarnings[r.id] ?? 0, // gross only — costs don't actually deduct cash
         };
       })
       .sort((a, b) => b.reward - a.reward);
@@ -250,10 +246,8 @@ export default function FinanceSheet() {
       (p.plane_model.fuel_per_nm ?? 2) * 500;
     return sum + Math.round(dailyOps * 0.15);
   }, 0);
-
   const dailyNet = totalRouteReward - interest - maintenanceCost;
   const netWorth = cash - loan;
-
   const bestRoute = routeRewards[0].reward >= 0 ? routeRewards[0] : null;
 
   return (

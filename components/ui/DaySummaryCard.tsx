@@ -2,6 +2,10 @@
  * components/ui/DaySummaryCard.tsx
  *
  * Compact end-of-day summary toast.
+ *
+ * Fix 2: Added choice effect line to footer when activeChoiceConsequence
+ * is running. Shows "+15% · 3d left" or "-12% · 1d left" so the player
+ * knows why their revenue number looks different from yesterday.
  */
 
 import { Colors, Radius, Spacing } from "@/constants/theme";
@@ -79,16 +83,13 @@ export default function DaySummaryCard() {
       }),
     ]).start(() => {
       if (currentRef.current) dismiss(currentRef.current.id);
-
       currentRef.current = null;
       setCurrent(null);
-
       slideY.setValue(180);
       opacity.setValue(0);
       scale.setValue(0.98);
       progress.setValue(1);
     });
-    // Refs are stable — no deps needed. dismiss reads currentRef not state.
   }, [dismiss, slideY, opacity, scale, progress]);
 
   useEffect(() => {
@@ -98,7 +99,6 @@ export default function DaySummaryCard() {
     setCurrent(next);
 
     gameSounds.play("dayAdvance");
-
     progress.setValue(1);
 
     Animated.parallel([
@@ -151,11 +151,15 @@ export default function DaySummaryCard() {
   const overcrowdedHubs = current.overcrowdedHubs ?? 0;
   const crisisHubs = current.crisisHubs ?? 0;
 
+  // ── Choice effect — new in Fix 2 ────────────────────────────────
+  // Passed from useRevenueTick via emitDaySummaryToast when
+  // activeChoiceConsequence has a live revenue multiplier today.
+  const choiceEffect = current.choiceEffect ?? null;
+
   const netPositive = net >= 0;
   const allMissions = missionsToday === missionsTotal && missionsTotal > 0;
   const nwDelta = netWorth - prevNetWorth;
 
-  // Show season note when a new month just started (day % 30 ≈ 0)
   const prevMonth = getMonth(getDayOfYear(Math.max(1, day - 1)));
   const currMonth = getMonth(getDayOfYear(day));
   const monthTurned = currMonth !== prevMonth;
@@ -305,6 +309,26 @@ export default function DaySummaryCard() {
             </View>
           )}
 
+          {/* ── Choice effect row — only shown when active ── */}
+          {choiceEffect && (
+            <View style={s.choiceRow}>
+              <Ionicons
+                name="timer-outline"
+                size={10}
+                color={choiceEffect.color}
+              />
+              <Text
+                style={[s.choiceTxt, { color: choiceEffect.color }]}
+                numberOfLines={1}
+              >
+                🎯 Choice effect: {choiceEffect.pctLabel} revenue
+                {" · "}
+                {choiceEffect.daysLeft} day
+                {choiceEffect.daysLeft !== 1 ? "s" : ""} left
+              </Text>
+            </View>
+          )}
+
           <View style={s.footer}>
             <Text style={s.footerText} numberOfLines={1}>
               Earned {fmtCash(revenue)}
@@ -346,7 +370,6 @@ const s = StyleSheet.create({
     right: Spacing.md,
     zIndex: 65,
   },
-
   card: {
     flexDirection: "row",
     backgroundColor: "rgba(8,15,30,0.98)",
@@ -359,24 +382,18 @@ const s = StyleSheet.create({
     shadowRadius: 12,
     elevation: 12,
   },
-
-  stripe: {
-    width: 4,
-  },
-
+  stripe: { width: 4 },
   main: {
     flex: 1,
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.sm,
     gap: 6,
   },
-
   top: {
     flexDirection: "row",
     alignItems: "center",
     gap: Spacing.sm,
   },
-
   dayPill: {
     width: 42,
     height: 38,
@@ -387,97 +404,56 @@ const s = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-
   dayLabel: {
     fontSize: 7,
     color: Colors.dim,
     letterSpacing: 1.3,
     fontWeight: "900",
   },
-
-  day: {
-    fontSize: 16,
-    fontWeight: "900",
-    lineHeight: 18,
-  },
-
-  center: {
-    flex: 1,
-    minWidth: 0,
-  },
-
+  day: { fontSize: 16, fontWeight: "900", lineHeight: 18 },
+  center: { flex: 1, minWidth: 0 },
   label: {
     fontSize: 8,
     color: Colors.dim,
     letterSpacing: 1.5,
     fontWeight: "900",
   },
-
-  net: {
-    fontSize: 22,
-    fontWeight: "900",
-    marginTop: 1,
-  },
-
-  closeBtn: {
-    padding: 4,
-  },
-
+  net: { fontSize: 22, fontWeight: "900", marginTop: 1 },
+  closeBtn: { padding: 4 },
   metrics: {
     flexDirection: "row",
     alignItems: "center",
     flexWrap: "wrap",
     gap: 6,
   },
-
-  metric: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-  },
-
-  metricText: {
-    fontSize: 10,
-    color: Colors.dim,
-    fontWeight: "800",
-  },
-
+  metric: { flexDirection: "row", alignItems: "center", gap: 4 },
+  metricText: { fontSize: 10, color: Colors.dim, fontWeight: "800" },
   dot: {
     width: 3,
     height: 3,
     borderRadius: 2,
     backgroundColor: Colors.border,
   },
+  seasonRow: { flexDirection: "row", alignItems: "center", gap: 4 },
+  seasonTxt: { fontSize: 9, fontWeight: "700", flex: 1 },
 
-  seasonRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-  },
-  seasonTxt: {
-    fontSize: 9,
-    fontWeight: "700",
-    flex: 1,
-  },
+  // Choice effect row — same visual weight as seasonRow
+  choiceRow: { flexDirection: "row", alignItems: "center", gap: 4 },
+  choiceTxt: { fontSize: 9, fontWeight: "700", flex: 1 },
+
   footer: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     gap: Spacing.sm,
   },
-
   footerText: {
     flex: 1,
     fontSize: 10,
     color: Colors.dim,
     fontWeight: "700",
   },
-
-  netWorth: {
-    fontSize: 10,
-    fontWeight: "900",
-  },
-
+  netWorth: { fontSize: 10, fontWeight: "900" },
   progress: {
     position: "absolute",
     bottom: 0,

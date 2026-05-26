@@ -278,6 +278,9 @@ export function useGameLoader() {
               airport,
               tier: (h.tier ?? 1) as HubTier,
               trust: Number(h.trust ?? 0),
+              hub_pax: Number(h.hub_pax ?? 0),
+              nickname: h.nickname,
+              trust_floor: Number(h.trust_floor ?? 0),
             };
           })
           .filter(Boolean) as OwnedHub[];

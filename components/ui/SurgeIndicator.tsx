@@ -1,19 +1,22 @@
 /**
  * components/ui/SurgeIndicator.tsx
  *
- * Persistent compact pill shown on the map while any demand surge or
- * revenue-affecting daily event is active.
+ * Persistent compact pill shown on the map while any demand surge,
+ * revenue-affecting daily event, or choice event consequence is active.
  *
  * Unlike DailyEventCard (auto-dismisses in 5s) and DemandWaveBanner
  * (auto-dismisses in 8s), this stays visible all day so the player
  * always knows a multiplier is in effect while routes are running.
  *
- * Sources:
- *   - activeDemandWave  → wave boosted pax on specific demands
- *   - dailyEvent.waveKind → wave-type event from useDailyEvents
- *   - dailyEvent.revenueMultiplier ≠ 1 → positive/negative event
+ * Sources (priority order):
+ *   1. activeDemandWave  → wave boosted pax on specific demands
+ *   2. dailyEvent        → passive daily event with revenue multiplier
+ *   3. activeChoiceConsequence → lingering effect from a player decision
  *
- * Positioned bottom-left above the tab bar, below RevenueModifierBadge.
+ * When multiple sources are active, wave takes priority for display,
+ * but all multipliers stack in the revenue tick regardless.
+ *
+ * Positioned bottom-left above the tab bar, below SeasonPill.
  */
 
 import { Colors, Radius, Spacing } from "@/constants/theme";
@@ -43,73 +46,147 @@ const WAVE_COLORS: Record<string, string> = {
 export default function SurgeIndicator() {
   const dailyEvent = useDailyEvent();
   const activeDemandWave = useActiveDemandWave();
+  const activeChoiceConsequence = useGameStore(
+    (s) => s.activeChoiceConsequence,
+  );
+  const day = useGameStore((s) => s.airline?.day ?? 0);
   const { tabBarHeight } = useSheetLayout();
 
   const slideY = useRef(new Animated.Value(40)).current;
   const opacity = useRef(new Animated.Value(0)).current;
   const prevDay = useRef<number>(-1);
-  const day = useGameStore((s) => s.airline?.day ?? 0);
 
-  // Derive what to show — wave takes priority over plain event
-  const {
-    waveKind,
-    isWave,
-    revMul,
-    hasEffect,
-    title,
-    icon,
-    pct,
-    pctTxt,
-    color,
-    totalAddedPax,
-    affectedSlots,
-  } = useMemo(() => {
+  // ── Derive what to show ────────────────────────────────────────
+  // Wave > daily event > choice consequence for display priority.
+  // All active multipliers are noted in the sub-label when stacking.
+  const display = useMemo(() => {
     const waveKind = activeDemandWave?.wave.kind ?? dailyEvent?.waveKind;
     const isWave = !!waveKind;
-    const revMul =
+
+    // Combined revenue multiplier from daily event + demand wave
+    const eventRevMul =
       (dailyEvent?.revenueMultiplier ?? 1.0) *
       (activeDemandWave?.wave.revenueMultiplier ?? 1.0);
-    const hasEffect = isWave || Math.abs(revMul - 1.0) >= 0.01;
-    const title =
-      activeDemandWave?.wave.title ??
-      (dailyEvent?.waveKind ? dailyEvent.title : null) ??
-      dailyEvent?.title ??
-      "";
-    const icon =
-      activeDemandWave?.wave.icon ?? dailyEvent?.icon ?? "flash-outline";
-    const pct = Math.round((revMul - 1) * 100);
+
+    // Choice consequence multiplier — only if still active today
+    const choiceActive =
+      activeChoiceConsequence?.revenueMultiplier != null &&
+      activeChoiceConsequence?.revenueMultiplierEndsDay != null &&
+      day < activeChoiceConsequence.revenueMultiplierEndsDay;
+
+    const choiceRevMul = choiceActive
+      ? (activeChoiceConsequence!.revenueMultiplier ?? 1.0)
+      : 1.0;
+
+    // Combined multiplier shown in badge (all sources stacked)
+    const combinedRevMul = eventRevMul * choiceRevMul;
+
+    // Whether there's anything worth showing
+    const hasEventEffect = isWave || Math.abs(eventRevMul - 1.0) >= 0.01;
+    const hasChoiceEffect = choiceActive;
+    const hasEffect = hasEventEffect || hasChoiceEffect;
+
+    // ── Display values ─────────────────────────────────────────
+    // If wave or daily event is active, that leads. Choice is shown
+    // as a secondary note in the sub-label. If only choice is active
+    // (no wave/event), choice leads.
+
+    let title: string;
+    let icon: string;
+    let color: string;
+    let totalAddedPax: number | undefined;
+    let affectedSlots: number | undefined;
+    let primaryMul: number;
+    let isChoiceOnly: boolean;
+
+    if (hasEventEffect) {
+      // Wave or daily event leads
+      title =
+        activeDemandWave?.wave.title ??
+        (dailyEvent?.waveKind ? dailyEvent.title : null) ??
+        dailyEvent?.title ??
+        "";
+      icon = activeDemandWave?.wave.icon ?? dailyEvent?.icon ?? "flash-outline";
+      color = waveKind
+        ? (WAVE_COLORS[waveKind] ?? Colors.amber)
+        : eventRevMul > 1
+          ? "#22c55e"
+          : "#ef4444";
+      totalAddedPax =
+        activeDemandWave?.totalAddedPax ?? dailyEvent?.waveAddedPax;
+      affectedSlots =
+        activeDemandWave?.updates.length ?? dailyEvent?.waveAffectedSlots;
+      primaryMul = combinedRevMul; // show combined pct
+      isChoiceOnly = false;
+    } else {
+      // Only choice consequence is active — lead with it
+      const choicePct = Math.round((choiceRevMul - 1) * 100);
+      title = "Decision in effect";
+      icon = "timer-outline";
+      color = choiceRevMul >= 1 ? "#22c55e" : "#ef4444";
+      primaryMul = choiceRevMul;
+      isChoiceOnly = true;
+    }
+
+    const pct = Math.round((primaryMul - 1) * 100);
     const pctTxt = pct > 0 ? `+${pct}%` : pct < 0 ? `${pct}%` : null;
-    const color = waveKind
-      ? (WAVE_COLORS[waveKind] ?? Colors.amber)
-      : revMul > 1
-        ? "#22c55e"
-        : "#ef4444";
-    const totalAddedPax =
-      activeDemandWave?.totalAddedPax ?? dailyEvent?.waveAddedPax;
-    const affectedSlots =
-      activeDemandWave?.updates.length ?? dailyEvent?.waveAffectedSlots;
+
+    // Badge label
+    const badgeLabel =
+      isWave && pctTxt
+        ? "Boost"
+        : isWave
+          ? "Demand"
+          : isChoiceOnly
+            ? "Choice"
+            : pct > 0
+              ? "Bonus"
+              : "Event";
+
+    // Sub-label lines
+    const subParts: string[] = [];
+    if (totalAddedPax != null)
+      subParts.push(`+${totalAddedPax.toLocaleString()} passengers`);
+    if (pctTxt) subParts.push(`${pctTxt} revenue`);
+    if (affectedSlots != null)
+      subParts.push(
+        `${affectedSlots} route${affectedSlots !== 1 ? "s" : ""} affected`,
+      );
+
+    // If choice is stacking ON TOP of an event, note it
+    if (hasEventEffect && hasChoiceEffect && choiceRevMul !== 1.0) {
+      const choicePct = Math.round((choiceRevMul - 1) * 100);
+      const choiceSign = choicePct >= 0 ? "+" : "";
+      const daysLeft =
+        (activeChoiceConsequence!.revenueMultiplierEndsDay ?? 0) - day;
+      subParts.push(`🎯 ${choiceSign}${choicePct}% choice · ${daysLeft}d left`);
+    }
+
+    // If choice-only, show days left
+    if (isChoiceOnly && activeChoiceConsequence?.revenueMultiplierEndsDay) {
+      const daysLeft = activeChoiceConsequence.revenueMultiplierEndsDay - day;
+      subParts.push(`${daysLeft} day${daysLeft !== 1 ? "s" : ""} remaining`);
+    }
+
     return {
-      waveKind,
-      isWave,
-      revMul,
       hasEffect,
       title,
       icon,
-      pct,
-      pctTxt,
       color,
-      totalAddedPax,
-      affectedSlots,
+      pctTxt,
+      badgeLabel,
+      sub: subParts.join(" · "),
+      isWave,
+      waveKind,
     };
-  }, [activeDemandWave, dailyEvent]);
+  }, [activeDemandWave, dailyEvent, activeChoiceConsequence, day]);
 
-  // Single unified animation effect — prevents race between day advance and new event
+  // ── Animation ──────────────────────────────────────────────────
   useEffect(() => {
     const dayChanged = prevDay.current !== -1 && day !== prevDay.current;
     prevDay.current = day;
 
-    if (dayChanged && !hasEffect) {
-      // Day advanced and no new effect — slide out
+    if (dayChanged && !display.hasEffect) {
       Animated.parallel([
         Animated.timing(slideY, {
           toValue: 40,
@@ -125,9 +202,7 @@ export default function SurgeIndicator() {
       return;
     }
 
-    if (hasEffect) {
-      // New effect active — always show, even after a day change
-      // Reset position first if we're coming from dismissed state
+    if (display.hasEffect) {
       if (dayChanged) {
         slideY.setValue(40);
         opacity.setValue(0);
@@ -146,7 +221,6 @@ export default function SurgeIndicator() {
         }),
       ]).start();
     } else {
-      // No effect — slide out
       Animated.parallel([
         Animated.timing(slideY, {
           toValue: 40,
@@ -160,9 +234,9 @@ export default function SurgeIndicator() {
         }),
       ]).start();
     }
-  }, [day, hasEffect, slideY, opacity]);
+  }, [day, display.hasEffect]);
 
-  // Never return null — let opacity handle visibility.
+  // Never return null — opacity handles visibility.
   // Returning null while hasEffect is true kills the animation.
   return (
     <Animated.View
@@ -177,7 +251,7 @@ export default function SurgeIndicator() {
       pointerEvents="box-none"
     >
       <TouchableOpacity
-        style={[s.pill, { borderColor: color + "55" }]}
+        style={[s.pill, { borderColor: display.color + "55" }]}
         activeOpacity={0.82}
         onPress={() => {
           // Tap opens airport sheet for the primary affected hub if wave
@@ -190,46 +264,38 @@ export default function SurgeIndicator() {
         }}
       >
         {/* Icon */}
-        <View style={[s.iconWrap, { backgroundColor: color + "20" }]}>
-          <Ionicons name={icon as any} size={13} color={color} />
+        <View style={[s.iconWrap, { backgroundColor: display.color + "20" }]}>
+          <Ionicons
+            name={display.icon as any}
+            size={13}
+            color={display.color}
+          />
         </View>
 
         {/* Text */}
         <View style={s.body}>
-          <Text style={[s.title, { color }]} numberOfLines={1}>
-            {title}
+          <Text style={[s.title, { color: display.color }]} numberOfLines={1}>
+            {display.title}
           </Text>
-          <Text style={s.sub} numberOfLines={1}>
-            {[
-              // Pax boost — only for waves
-              totalAddedPax != null &&
-                `+${totalAddedPax.toLocaleString()} passengers`,
-              // Revenue effect — for any event with multiplier
-              pctTxt && `${pctTxt} revenue`,
-              // Affected routes — only for waves
-              affectedSlots != null &&
-                `${affectedSlots} route${affectedSlots !== 1 ? "s" : ""} affected`,
-            ]
-              .filter(Boolean)
-              .join(" · ")}
-          </Text>
+          {display.sub ? (
+            <Text style={s.sub} numberOfLines={1}>
+              {display.sub}
+            </Text>
+          ) : null}
         </View>
 
-        {/* Type badge — PAX or REV or BOTH */}
+        {/* Badge */}
         <View
           style={[
             s.typeBadge,
-            { backgroundColor: color + "18", borderColor: color + "44" },
+            {
+              backgroundColor: display.color + "18",
+              borderColor: display.color + "44",
+            },
           ]}
         >
-          <Text style={[s.typeTxt, { color }]}>
-            {isWave && pctTxt
-              ? "Boost"
-              : isWave
-                ? "Demand"
-                : pct > 0
-                  ? "Bonus"
-                  : "Event"}
+          <Text style={[s.typeTxt, { color: display.color }]}>
+            {display.badgeLabel}
           </Text>
         </View>
       </TouchableOpacity>

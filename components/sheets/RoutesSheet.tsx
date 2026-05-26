@@ -1,14 +1,14 @@
 import { GameAlert, useGameAlert } from "@/components/ui/GameAlert";
-import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
+import { Colors, Radius, Spacing } from "@/constants/theme";
 import { useHaptics } from "@/hooks/useHaptics";
 import { useTabBarHeight } from "@/hooks/useSheetLayout";
 import { useDeactivateRoute } from "@/hooks/useSupabaseWrite";
-import { hubCrowdingLevel } from "@/lib/demands";
+import { HUB_TIER_CONFIG, hubCrowdingLevel } from "@/lib/demands";
 import { splitOdPax } from "@/lib/od";
 import { demandFlowStatus, waitingPaxForDemand } from "@/lib/passengerFlow";
 import { passengerTypeBreakdown } from "@/lib/passengerTypes";
 import { fmtCash, normalizePriceStrategy } from "@/lib/revenue";
-import { getSeasonalMultiplier, getSeasonForRoute } from "@/lib/seasons";
+import { getSeasonForRoute } from "@/lib/seasons";
 import { supabase } from "@/lib/supabase";
 import type { Demand, OwnedHub, Route } from "@/store";
 import {
@@ -32,6 +32,10 @@ import {
   View,
 } from "react-native";
 
+// ─────────────────────────────────────────────────────────────────
+// TYPES
+// ─────────────────────────────────────────────────────────────────
+
 type RouteFlowStatus = {
   label:
     | "DONE"
@@ -46,6 +50,35 @@ type RouteFlowStatus = {
 };
 
 type PriceStrategy = "low" | "standard" | "premium";
+
+type RouteGroup = {
+  id: string;
+  demand: Demand;
+  routes: Route[];
+  hub_iata: string;
+  via_iata: string | null;
+  total_dist_nm: number;
+  deliveredPax: number;
+  targetPax: number;
+  waitingPax: number;
+  canBoardNow: number;
+  leftToMove: number;
+  movedPct: number;
+  status: RouteFlowStatus;
+  totalCapacity: number;
+  totalReward: number;
+  planeLabel: string;
+  priceStrategy: PriceStrategy;
+  congestionLevel: string;
+  congestionMultiplier: number;
+  routeId: string;
+  currentPlaneId: string;
+  viaPaxRatio: number | null;
+};
+
+// ─────────────────────────────────────────────────────────────────
+// CONSTANTS
+// ─────────────────────────────────────────────────────────────────
 
 const PRICE_OPTIONS: {
   key: PriceStrategy;
@@ -79,44 +112,15 @@ const PRICING_COLOR: Record<string, string> = {
   premium: Colors.purple,
 };
 
-function getRoutePriceStrategy(route: Route): PriceStrategy {
-  const value = (route as Route & { price_strategy?: PriceStrategy })
-    .price_strategy;
-
-  if (value === "low" || value === "premium") return value;
-  return "standard";
-}
-
-type RouteGroup = {
-  id: string;
-  demand: Demand;
-  routes: Route[];
-  hub_iata: string;
-  via_iata: string | null;
-  total_dist_nm: number;
-  deliveredPax: number;
-  targetPax: number;
-  waitingPax: number;
-  canBoardNow: number;
-  leftToMove: number;
-  movedPct: number;
-  status: RouteFlowStatus;
-  totalCapacity: number;
-  totalReward: number;
-  planeLabel: string;
-  priceStrategy: PriceStrategy;
-  utilizationLabel: string;
-  utilizationPct: number;
-  congestionLevel: string;
-  congestionMultiplier: number;
-  routeId: string;
-  currentPlaneId: string;
-  viaPaxRatio: number | null;
+const PRICING_EFFECT: Record<PriceStrategy, string> = {
+  low: "+18% demand, -15% fare",
+  standard: "Balanced demand and fare",
+  premium: "-18% demand, +28% fare",
 };
 
-function getLiveDemand(route: Route, liveDemands: Demand[]) {
-  return liveDemands.find((d) => d.id === route.demand.id) ?? route.demand;
-}
+// ─────────────────────────────────────────────────────────────────
+// PURE HELPERS
+// ─────────────────────────────────────────────────────────────────
 
 function buildStatus(
   demand: Demand,
@@ -128,55 +132,41 @@ function buildStatus(
 ): RouteFlowStatus {
   const flowStatus = demandFlowStatus(demand, dayProgress);
 
-  if (
-    flowStatus === "cleared" ||
-    demand.status === "served" ||
-    leftToMove <= 0
-  ) {
+  if (flowStatus === "cleared" || demand.status === "served" || leftToMove <= 0)
     return {
       label: "DONE",
       color: Colors.green,
       priority: 6,
       hint: "All passengers moved today",
     };
-  }
-
-  if (flowStatus === "jammed") {
+  if (flowStatus === "jammed")
     return {
       label: "OVERLOADED",
       color: Colors.red,
       priority: 0,
       hint: "Queue growing faster than capacity",
     };
-  }
-
-  if (waitingPax > 0 && deliveredPax <= 0) {
+  if (waitingPax > 0 && deliveredPax <= 0)
     return {
       label: "NEEDS HELP",
       color: Colors.red,
       priority: 1,
       hint: "Passengers waiting with no movement",
     };
-  }
-
-  if (canBoardNow > 0) {
+  if (canBoardNow > 0)
     return {
       label: "BOARDING",
       color: Colors.amber,
       priority: 2,
       hint: "Passengers boarding now",
     };
-  }
-
-  if (deliveredPax > 0) {
+  if (deliveredPax > 0)
     return {
       label: "FLYING",
       color: Colors.green,
       priority: 3,
       hint: "Route is running well",
     };
-  }
-
   return {
     label: "PENDING",
     color: Colors.sky,
@@ -187,52 +177,41 @@ function buildStatus(
 
 function buildPlaneLabel(routes: Route[]) {
   const counts = new Map<string, number>();
-
-  routes.forEach((route) => {
-    const name = route.plane.plane_model.nickname;
+  routes.forEach((r) => {
+    const name = r.plane.plane_model.nickname;
     counts.set(name, (counts.get(name) ?? 0) + 1);
   });
-
   return Array.from(counts.entries())
     .map(([name, count]) => (count > 1 ? `${name} ×${count}` : name))
     .join(" · ");
 }
 
 function routeYieldLabel(demand: Demand) {
-  const popularity = demand.popularity ?? 0;
-
-  if (popularity >= 30) {
+  const p = demand.popularity ?? 0;
+  if (p >= 30)
     return {
       text: "Passengers love this route",
       color: Colors.green,
       icon: "heart-outline" as const,
     };
-  }
-
-  if (popularity >= 10) {
+  if (p >= 10)
     return {
       text: "Strong passenger interest",
       color: Colors.green,
       icon: "trending-up-outline" as const,
     };
-  }
-
-  if (popularity <= -20) {
+  if (p <= -20)
     return {
       text: "Passengers choosing other options",
       color: Colors.red,
       icon: "trending-down-outline" as const,
     };
-  }
-
-  if (popularity <= -5) {
+  if (p <= -5)
     return {
-      text: "Lukewarm interest — check your service",
+      text: "Lukewarm — check your service",
       color: Colors.amber,
       icon: "alert-circle-outline" as const,
     };
-  }
-
   return {
     text: "Steady — passengers are happy",
     color: Colors.dim,
@@ -240,9 +219,6 @@ function routeYieldLabel(demand: Demand) {
   };
 }
 
-// ── Route yield rating ───────────────────────────────────────────
-// Derived from demand.popularity (-40 → +80 range).
-// Reflects how well passengers are being served — affects revenue yield.
 function routeQuality(popularity: number): {
   stars: number;
   label: string;
@@ -257,6 +233,10 @@ function routeQuality(popularity: number): {
     return { stars: 2, label: "Needs attention", color: "#f59e0b" };
   return { stars: 1, label: "Poor service", color: "#ef4444" };
 }
+
+// ─────────────────────────────────────────────────────────────────
+// STAR RATING
+// ─────────────────────────────────────────────────────────────────
 
 function StarRating({ stars, color }: { stars: number; color: string }) {
   return (
@@ -273,27 +253,33 @@ function StarRating({ stars, color }: { stars: number; color: string }) {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────
+// ROUTE GROUP ROW
+// day is passed from parent — avoids per-row store subscription
+// ─────────────────────────────────────────────────────────────────
+
 function RouteGroupRow({
   group,
+  day,
   deactivating,
   onLongPress,
   onPriceChange,
-  onUnassign,
 }: {
   group: RouteGroup;
+  day: number;
   deactivating: boolean;
   onLongPress: (group: RouteGroup) => void;
   onPriceChange: (group: RouteGroup, strategy: PriceStrategy) => void;
-  onUnassign: (group: RouteGroup) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+
   const isConnecting = !!group.via_iata;
   const viaPaxRatio = group.viaPaxRatio ?? 0.3;
-  const paxDay = group.demand.base_pax_day ?? group.demand.base_pax_day ?? 0;
-  // Use targetPax (pax_day) for the split — more reliable than delivered count
-  const odPaxBase = group.targetPax > 0 ? group.targetPax : paxDay;
+  const odPaxBase =
+    group.targetPax > 0 ? group.targetPax : (group.demand.base_pax_day ?? 0);
   const odSplit =
     isConnecting && odPaxBase > 0 ? splitOdPax(odPaxBase, viaPaxRatio) : null;
+
   const isProblem =
     group.status.label === "NEEDS HELP" || group.status.label === "OVERLOADED";
   const isCleared = group.status.label === "DONE";
@@ -301,14 +287,13 @@ function RouteGroupRow({
   const growth = routeYieldLabel(group.demand);
   const pricingColor = PRICING_COLOR[group.priceStrategy] ?? Colors.green;
   const quality = routeQuality(group.demand.popularity ?? 0);
-  const day = useGameStore((s) => s.airline?.day ?? 1);
+
   const season = getSeasonForRoute(
     day,
     group.demand.dest?.country,
     group.demand.dest?.continent,
   );
 
-  // Worst plane condition in group — warn if worn or critical
   const minCondition = Math.min(
     ...group.routes.map((r) => r.plane.condition ?? 100),
   );
@@ -335,10 +320,10 @@ function RouteGroupRow({
       <View style={[rr.stripe, { backgroundColor: accent }]} />
 
       <View style={rr.body}>
+        {/* ── Row 1: route path + status pill ── */}
         <View style={rr.top}>
           <View style={rr.routeLine}>
             <Text style={rr.iata}>{group.demand.origin.iata}</Text>
-
             {isConnecting && (
               <>
                 <Ionicons
@@ -351,7 +336,6 @@ function RouteGroupRow({
                 </Text>
               </>
             )}
-
             <Ionicons name="arrow-forward" size={11} color={Colors.dim} />
             <Text style={rr.iata}>{group.demand.dest.iata}</Text>
           </View>
@@ -359,10 +343,7 @@ function RouteGroupRow({
           <View
             style={[
               rr.status,
-              {
-                backgroundColor: accent + "18",
-                borderColor: accent + "44",
-              },
+              { backgroundColor: accent + "18", borderColor: accent + "44" },
             ]}
           >
             <Text style={[rr.statusTxt, { color: accent }]}>
@@ -371,6 +352,7 @@ function RouteGroupRow({
           </View>
         </View>
 
+        {/* ── Row 2: plane label + condition badge + multi-plane count + chevron ── */}
         <View style={rr.metaRow}>
           <Ionicons name="airplane" size={11} color={Colors.dim} />
           <Text style={rr.meta} numberOfLines={1}>
@@ -394,7 +376,7 @@ function RouteGroupRow({
           />
         </View>
 
-        {/* Always visible — compact progress */}
+        {/* ── Row 3: progress bar + % + stars + season + revenue ── */}
         <View style={rr.bottom}>
           <View style={rr.progressTrack}>
             <View
@@ -407,11 +389,8 @@ function RouteGroupRow({
               ]}
             />
           </View>
-
           <Text style={[rr.percent, { color: accent }]}>{group.movedPct}%</Text>
-
           <StarRating stars={quality.stars} color={quality.color} />
-
           {season && (
             <View
               style={[rr.seasonBadge, { backgroundColor: season.color + "18" }]}
@@ -426,7 +405,6 @@ function RouteGroupRow({
               </Text>
             </View>
           )}
-
           <Text
             style={[
               rr.cash,
@@ -446,138 +424,115 @@ function RouteGroupRow({
           </Text>
         </View>
 
+        {/* ── Expanded: stats + growth signal + passenger mix + pricing ── */}
         {expanded && (
-          <View style={rr.hintRow}>
-            <Text style={rr.hint} numberOfLines={1}>
-              {group.waitingPax.toLocaleString()} waiting ·{" "}
-              {group.totalCapacity.toLocaleString()} seats
-              {group.congestionLevel !== "normal"
-                ? ` · hub busy -${Math.round((1 - group.congestionMultiplier) * 100)}%`
-                : ""}
-            </Text>
-
-            <View style={rr.growthWrap}>
-              <Ionicons name={growth.icon} size={11} color={growth.color} />
-              <Text style={[rr.growth, { color: growth.color }]}>
-                {growth.text}
+          <>
+            <View style={rr.hintRow}>
+              <Text style={rr.hint} numberOfLines={1}>
+                {group.waitingPax.toLocaleString()} waiting ·{" "}
+                {group.totalCapacity.toLocaleString()} seats
+                {group.congestionLevel !== "normal"
+                  ? ` · hub busy -${Math.round((1 - group.congestionMultiplier) * 100)}%`
+                  : ""}
               </Text>
-            </View>
-
-            <View style={rr.qualityWrap}>
-              <Text style={[rr.qualityLabel, { color: quality.color }]}>
-                {quality.label}
-              </Text>
-            </View>
-          </View>
-        )}
-
-        {expanded && (
-          <View style={rr.expandedExtra}>
-            {/* O&D breakdown — connecting routes */}
-            {isConnecting && odSplit && (
-              <View style={rr.odRow}>
-                <Ionicons
-                  name="git-branch-outline"
-                  size={11}
-                  color={Colors.sky}
-                />
-                <Text style={rr.odTxt}>
-                  {odSplit.localPax} stop at {group.via_iata} ·{" "}
-                  {odSplit.transitPax} continue to {group.demand.dest.iata}
+              <View style={rr.growthWrap}>
+                <Ionicons name={growth.icon} size={11} color={growth.color} />
+                <Text style={[rr.growth, { color: growth.color }]}>
+                  {growth.text}
                 </Text>
               </View>
-            )}
-            {/* Biz/leisure mix */}
-            {(() => {
-              const mix = passengerTypeBreakdown({
-                businessPct: group.demand.business_pct,
-                leisurePct: group.demand.leisure_pct,
-              });
-              return mix.businessPct > 0 ? (
-                <Text style={rr.mixTxt}>
-                  {mix.businessPct}% business · {mix.leisurePct}% leisure
-                </Text>
-              ) : null;
-            })()}
-            {/* Unassign button */}
-            {/* <TouchableOpacity
-              style={rr.unassignBtn}
-              onPress={() => onUnassign(group)}
-              activeOpacity={0.8}
-            >
-              <Ionicons
-                name="close-circle-outline"
-                size={13}
-                color={Colors.red}
-              />
-              <Text style={rr.unassignTxt}>Unassign</Text>
-            </TouchableOpacity> */}
-          </View>
-        )}
-
-        {expanded && (
-          <View style={[rr.pricingBox, { borderColor: pricingColor + "30" }]}>
-            <View style={rr.pricingHeader}>
-              <View style={rr.pricingTitleRow}>
-                <Ionicons
-                  name="pricetag-outline"
-                  size={11}
-                  color={pricingColor}
-                />
-                <Text style={[rr.pricingTitle, { color: pricingColor }]}>
-                  Pricing
+              <View style={rr.qualityWrap}>
+                <Text style={[rr.qualityLabel, { color: quality.color }]}>
+                  {quality.label}
                 </Text>
               </View>
-              <Text style={rr.pricingEffect}>
-                {group.priceStrategy === "low"
-                  ? "+18% demand, -15% fare"
-                  : group.priceStrategy === "premium"
-                    ? "-18% demand, +28% fare"
-                    : "Balanced demand and fare"}
-              </Text>
             </View>
 
-            <View style={rr.priceButtons}>
-              {PRICE_OPTIONS.map((option) => {
-                const active = option.key === group.priceStrategy;
-                const pricingColor =
-                  PRICING_COLOR[group.priceStrategy] ?? Colors.green;
-                return (
-                  <TouchableOpacity
-                    key={option.key}
-                    style={[
-                      rr.priceBtn,
-                      active && {
-                        borderColor: pricingColor + "66",
-                        backgroundColor: pricingColor + "12",
-                      },
-                    ]}
-                    onPress={() => onPriceChange(group, option.key)}
-                    disabled={deactivating || active}
-                    activeOpacity={0.82}
-                  >
-                    <Ionicons
-                      name={option.icon}
-                      size={12}
-                      color={active ? pricingColor : Colors.dim}
-                    />
-                    <Text
+            <View style={rr.expandedExtra}>
+              {isConnecting && odSplit && (
+                <View style={rr.odRow}>
+                  <Ionicons
+                    name="git-branch-outline"
+                    size={11}
+                    color={Colors.sky}
+                  />
+                  <Text style={rr.odTxt}>
+                    {odSplit.localPax} stop at {group.via_iata} ·{" "}
+                    {odSplit.transitPax} continue to {group.demand.dest.iata}
+                  </Text>
+                </View>
+              )}
+              {(() => {
+                const mix = passengerTypeBreakdown({
+                  businessPct: group.demand.business_pct,
+                  leisurePct: group.demand.leisure_pct,
+                });
+                return mix.businessPct > 0 ? (
+                  <Text style={rr.mixTxt}>
+                    {mix.businessPct}% business · {mix.leisurePct}% leisure
+                  </Text>
+                ) : null;
+              })()}
+            </View>
+
+            <View style={[rr.pricingBox, { borderColor: pricingColor + "30" }]}>
+              <View style={rr.pricingHeader}>
+                <View style={rr.pricingTitleRow}>
+                  <Ionicons
+                    name="pricetag-outline"
+                    size={11}
+                    color={pricingColor}
+                  />
+                  <Text style={[rr.pricingTitle, { color: pricingColor }]}>
+                    Pricing
+                  </Text>
+                </View>
+                <Text style={rr.pricingEffect}>
+                  {PRICING_EFFECT[group.priceStrategy]}
+                </Text>
+              </View>
+
+              <View style={rr.priceButtons}>
+                {PRICE_OPTIONS.map((option) => {
+                  const active = option.key === group.priceStrategy;
+                  const btnColor = PRICING_COLOR[option.key] ?? Colors.green;
+                  return (
+                    <TouchableOpacity
+                      key={option.key}
                       style={[
-                        rr.priceBtnTitle,
-                        { color: active ? pricingColor : Colors.text },
+                        rr.priceBtn,
+                        active && {
+                          borderColor: btnColor + "66",
+                          backgroundColor: btnColor + "12",
+                        },
                       ]}
-                      numberOfLines={1}
+                      onPress={() => onPriceChange(group, option.key)}
+                      disabled={deactivating || active}
+                      activeOpacity={0.82}
                     >
-                      {option.label}
-                    </Text>
-                    <Text style={rr.priceBtnSub} numberOfLines={1}>
-                      {option.sub}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
+                      <Ionicons
+                        name={option.icon}
+                        size={12}
+                        color={active ? btnColor : Colors.dim}
+                      />
+                      <Text
+                        style={[
+                          rr.priceBtnTitle,
+                          { color: active ? btnColor : Colors.text },
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {option.label}
+                      </Text>
+                      <Text style={rr.priceBtnSub} numberOfLines={1}>
+                        {option.sub}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
             </View>
-          </View>
+          </>
         )}
       </View>
 
@@ -590,7 +545,10 @@ function RouteGroupRow({
   );
 }
 
-// ── Hub row for Hubs tab ──────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────
+// HUB ROW — shows used/total routes, not demand count
+// ─────────────────────────────────────────────────────────────────
+
 function HubRow({
   hub,
   demands,
@@ -605,18 +563,22 @@ function HubRow({
   color: string;
 }) {
   const hubDemands = demands.filter((d) => d.hub_iata === hub.airport.iata);
-  const active = hubDemands; // all demands for this hub
-  const waiting = active.reduce(
+  const waiting = hubDemands.reduce(
     (sum, d) => sum + waitingPaxForDemand(d, dayProgress),
     0,
   );
-  const moved = active.reduce(
+  const moved = hubDemands.reduce(
     (sum, d) => sum + (d.delivered_pax_today ?? 0),
     0,
   );
-  const total = active.reduce((sum, d) => sum + (d.base_pax_day ?? 0), 0);
+  const total = hubDemands.reduce((sum, d) => sum + (d.base_pax_day ?? 0), 0);
   const flowPct =
     total > 0 ? Math.min(100, Math.round((moved / total) * 100)) : 0;
+
+  const tierNum = (hub.tier ?? 1) as number;
+  const totalSlots = HUB_TIER_CONFIG[tierNum]?.routes ?? "?";
+  const usedSlots = hubDemands.length;
+
   const trustColor =
     hub.trust >= 70
       ? Colors.green
@@ -625,10 +587,18 @@ function HubRow({
         : Colors.red;
   const crowding = hubCrowdingLevel(hub.airport.iata, demands, hub.airport);
   const isBusy = crowding?.level !== "normal";
+  const crowdColor =
+    crowding?.level === "crisis"
+      ? Colors.red
+      : crowding?.level === "overcrowded"
+        ? Colors.orange
+        : Colors.amber;
 
   return (
     <TouchableOpacity style={hr.row} onPress={onPress} activeOpacity={0.88}>
-      <View style={[hr.stripe, { backgroundColor: color }]} />
+      <View
+        style={[hr.stripe, { backgroundColor: isBusy ? crowdColor : color }]}
+      />
       <View style={hr.body}>
         <View style={hr.top}>
           <View style={hr.left}>
@@ -644,20 +614,25 @@ function HubRow({
         </View>
 
         <View style={hr.stats}>
+          {waiting > 0 && (
+            <>
+              <Text style={[hr.stat, { color: Colors.amber }]}>
+                {waiting.toLocaleString()} waiting
+              </Text>
+              <Text style={hr.dot}>·</Text>
+            </>
+          )}
+          {/* used/total slots — correct source */}
           <Text style={hr.stat}>
-            <Text style={{ color: Colors.sky }}>
-              {waiting.toLocaleString()}
-            </Text>
-            {" waiting"}
-          </Text>
-          <Text style={hr.dot}>·</Text>
-          <Text style={hr.stat}>
-            {active.length} slot{active.length !== 1 ? "s" : ""}
+            <Text style={{ color: Colors.sky }}>{usedSlots}</Text>
+            <Text style={{ color: Colors.dim }}> / {totalSlots} routes</Text>
           </Text>
           {isBusy && (
             <>
               <Text style={hr.dot}>·</Text>
-              <Text style={[hr.stat, { color: Colors.amber }]}>Hub busy</Text>
+              <Text style={[hr.stat, { color: crowdColor }]}>
+                {crowding?.level === "crisis" ? "Crisis" : "Busy"}
+              </Text>
             </>
           )}
         </View>
@@ -667,11 +642,16 @@ function HubRow({
             <View
               style={[
                 hr.fill,
-                { width: `${flowPct}%` as any, backgroundColor: color },
+                {
+                  width: `${flowPct}%` as any,
+                  backgroundColor: isBusy ? crowdColor : color,
+                },
               ]}
             />
           </View>
-          <Text style={[hr.pct, { color }]}>{flowPct}%</Text>
+          <Text style={[hr.pct, { color: isBusy ? crowdColor : color }]}>
+            {flowPct}%
+          </Text>
         </View>
       </View>
       <Ionicons
@@ -684,14 +664,19 @@ function HubRow({
   );
 }
 
+// ─────────────────────────────────────────────────────────────────
+// MAIN COMPONENT
+// ─────────────────────────────────────────────────────────────────
+
 export default function RoutesSheet() {
   const routes = useRoutes();
   const hubs = useHubs();
   const airline = useAirline();
   const routeEarnings = useRouteEarnings();
-  // Read demands live from store — tracks delivered_pax_today updates from RouteLayer
   const liveDemands = useGameStore((s) => s.demands);
   const dayProgress = useDayProgress();
+  // day derived once here — passed to RouteGroupRow to avoid per-row store subscriptions
+  const day = useGameStore((s) => s.airline?.day ?? 1);
   const tabBarH = useTabBarHeight();
   const dailyEvent = useDailyEvent();
   const activeDemandWave = useActiveDemandWave();
@@ -702,6 +687,7 @@ export default function RoutesSheet() {
   const deactivate = useDeactivateRoute();
 
   const [deactivating, setDeactivating] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"routes" | "hubs">("routes");
   const gameAlert = useGameAlert();
 
   const color = airline?.color ?? Colors.sky;
@@ -723,45 +709,22 @@ export default function RoutesSheet() {
     hubCrowdMul.set(hub.airport.iata, mul);
   });
 
-  const globalRevMul =
-    (dailyEvent?.revenueMultiplier ?? 1.0) *
-    (activeDemandWave?.wave.revenueMultiplier ?? 1.0);
-
+  // ── Build + sort route groups ──────────────────────────────────
+  // Priority: OVERLOADED(0) → NEEDS HELP(1) → BOARDING(2) → FLYING(3) → PENDING(4) → DONE(6)
   const groupedRoutes = useMemo<RouteGroup[]>(() => {
     const map = new Map<string, Route[]>();
-
     activeRoutes.forEach((route) => {
-      // Include via_iata in key — same demand, different via = different group
       const key = `${route.demand.id}__${route.via_iata ?? "direct"}`;
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(route);
     });
 
-    return Array.from(map.entries()).map(([demandId, groupRoutes]) => {
+    const groups = Array.from(map.entries()).map(([demandId, groupRoutes]) => {
       const first = groupRoutes[0];
-
       const hub = hubs.find((h) => h.airport.iata === first.hub_iata);
-
-      // Seasonal multiplier — continent-first, country override
-      const seasonalMul = getSeasonalMultiplier(
-        dayProgress,
-        first.demand.dest?.country,
-        first.demand.dest?.continent,
-      );
-
-      // Condition penalty — worn planes earn less
-      const condition = first.plane.condition ?? 100;
-      const conditionMul =
-        condition <= 15
-          ? 0.7 // critical — -30%
-          : condition <= 40
-            ? 0.85 // worn     — -15%
-            : 1.0; // good     — no penalty
-
-      const dist = first.total_dist_nm ?? first.demand.dist_nm ?? 0;
-      // Read delivered_pax_today from live store — not from stale route.demand snapshot
       const liveDemand =
         liveDemands.find((d) => d.id === first.demand.id) ?? first.demand;
+
       const deliveredPax = liveDemand.delivered_pax_today ?? 0;
       const targetPax = liveDemand.base_pax_day ?? 0;
       const waitingPax = waitingPaxForDemand(liveDemand, dayProgress);
@@ -790,22 +753,10 @@ export default function RoutesSheet() {
         canBoardNow,
         dayProgress,
       );
-      const priceElasticity = first.demand.price_elasticity ?? 1;
-
-      // Sum earnings for all planes in this group from the routeEarnings map
-      // populated by useRevenueTick at end of day — single source of truth
       const totalReward = groupRoutes.reduce(
         (sum, r) => sum + (routeEarnings[r.id] ?? 0),
         0,
       );
-
-      const representativeResult = {
-        utilization: {
-          label: "Healthy",
-          utilization: 1,
-          band: "healthy" as const,
-        },
-      };
 
       return {
         id: demandId,
@@ -813,7 +764,7 @@ export default function RoutesSheet() {
         routes: groupRoutes,
         hub_iata: first.hub_iata,
         via_iata: first.via_iata,
-        total_dist_nm: dist,
+        total_dist_nm: first.total_dist_nm ?? first.demand.dist_nm ?? 0,
         deliveredPax,
         targetPax,
         waitingPax,
@@ -825,10 +776,8 @@ export default function RoutesSheet() {
         totalReward,
         planeLabel: buildPlaneLabel(groupRoutes),
         priceStrategy,
-        utilizationLabel: representativeResult.utilization?.label ?? "Healthy",
-        utilizationPct: Math.round(
-          (representativeResult.utilization?.utilization ?? 1) * 100,
-        ),
+        utilizationLabel: "Healthy",
+        utilizationPct: 100,
         congestionLevel: hubCrowding?.level ?? "normal",
         congestionMultiplier: congestionMul,
         routeId: first.id,
@@ -836,8 +785,12 @@ export default function RoutesSheet() {
         viaPaxRatio: first.via_pax_ratio ?? null,
       };
     });
+
+    // Sort by urgency priority ascending — most urgent first
+    return groups.sort((a, b) => a.status.priority - b.status.priority);
   }, [activeRoutes, hubs, dayProgress, liveDemands, hubCrowdMul]);
 
+  // ── Summary stats ──────────────────────────────────────────────
   const totalMoved = groupedRoutes.reduce((sum, r) => sum + r.deliveredPax, 0);
   const totalTarget = groupedRoutes.reduce((sum, r) => sum + r.targetPax, 0);
   const totalWaiting = groupedRoutes.reduce((sum, r) => sum + r.waitingPax, 0);
@@ -846,23 +799,21 @@ export default function RoutesSheet() {
     0,
   );
   const totalReward = groupedRoutes.reduce((sum, r) => sum + r.totalReward, 0);
-
   const avgFlow =
     totalTarget > 0
       ? Math.min(100, Math.round((totalMoved / totalTarget) * 100))
       : 0;
 
-  const stalledCount = groupedRoutes.filter(
+  const stalledGroups = groupedRoutes.filter(
     (r) => r.status.label === "NEEDS HELP" || r.status.label === "OVERLOADED",
-  ).length;
-
+  );
+  const stalledCount = stalledGroups.length;
   const clearedCount = groupedRoutes.filter(
     (r) => r.status.label === "DONE",
   ).length;
 
   const flowHighlight =
     stalledCount > 0 ? Colors.red : avgFlow >= 80 ? Colors.green : color;
-
   const summaryBorder =
     stalledCount > 0
       ? Colors.red + "55"
@@ -870,31 +821,32 @@ export default function RoutesSheet() {
         ? Colors.green + "44"
         : color + "33";
 
+  // Hubs summary stats
+  const totalHubWaiting = hubs.reduce((sum, hub) => {
+    const hd = liveDemands.filter((d) => d.hub_iata === hub.airport.iata);
+    return (
+      sum + hd.reduce((s, d) => s + waitingPaxForDemand(d, dayProgress), 0)
+    );
+  }, 0);
+  const busyHubCount = hubs.filter((hub) => {
+    const c = hubCrowdingLevel(hub.airport.iata, liveDemands, hub.airport);
+    return c?.level !== "normal";
+  }).length;
+
+  // ── Handlers ──────────────────────────────────────────────────
+
   const handleCreateRoute = useCallback(() => {
     haptics.confirm();
     closeSheet();
     setTimeout(() => startCreation(), 120);
   }, [closeSheet, haptics, startCreation]);
 
-  const [activeTab, setActiveTab] = useState<"routes" | "hubs">("routes");
-
-  const handleUnassign = useCallback(
-    async (group: RouteGroup) => {
-      // Deactivate all routes in the group
-      for (const route of group.routes) {
-        await deactivate(route.id);
-      }
-    },
-    [deactivate],
-  );
-
   const handlePriceChange = useCallback(
     async (group: RouteGroup, strategy: PriceStrategy) => {
       if (strategy === group.priceStrategy) return;
-
       haptics.tap();
 
-      const routeIds = new Set(group.routes.map((route) => route.id));
+      const routeIds = new Set(group.routes.map((r) => r.id));
       const previousRoutes = useGameStore.getState().routes;
 
       useGameStore
@@ -922,7 +874,6 @@ export default function RoutesSheet() {
         });
         return;
       }
-
       haptics.success();
     },
     [gameAlert, haptics],
@@ -931,7 +882,6 @@ export default function RoutesSheet() {
   const handleLongPress = useCallback(
     (group: RouteGroup) => {
       haptics.confirm();
-
       const via = group.via_iata ? ` via ${group.via_iata}` : "";
       const label = `${group.demand.origin.iata}${via} → ${group.demand.dest.iata}`;
 
@@ -946,10 +896,8 @@ export default function RoutesSheet() {
             style: "destructive",
             onPress: async () => {
               setDeactivating(group.id);
-
               for (const route of group.routes) {
                 const { error } = await deactivate(route.id);
-
                 if (error) {
                   setDeactivating(null);
                   gameAlert.show({
@@ -961,7 +909,6 @@ export default function RoutesSheet() {
                   return;
                 }
               }
-
               setDeactivating(null);
               haptics.success();
             },
@@ -971,6 +918,8 @@ export default function RoutesSheet() {
     },
     [deactivate, gameAlert, haptics],
   );
+
+  // ── Render ────────────────────────────────────────────────────
 
   return (
     <>
@@ -984,21 +933,16 @@ export default function RoutesSheet() {
       >
         <View style={s.handle} accessibilityRole="none" />
 
+        {/* ── Header ── */}
         <View style={s.header}>
           <View style={s.hdrL}>
             <Ionicons name="flash-outline" size={21} color={color} />
-            <View>
-              <Text style={s.title}>Operations</Text>
-            </View>
-
+            <Text style={s.title}>Operations</Text>
             {activeRoutes.length > 0 && (
               <View
                 style={[
                   s.badge,
-                  {
-                    backgroundColor: color + "20",
-                    borderColor: color + "44",
-                  },
+                  { backgroundColor: color + "20", borderColor: color + "44" },
                 ]}
               >
                 <Text style={[s.badgeTxt, { color }]}>
@@ -1007,7 +951,6 @@ export default function RoutesSheet() {
               </View>
             )}
           </View>
-
           <TouchableOpacity
             onPress={() => {
               haptics.tap();
@@ -1019,145 +962,166 @@ export default function RoutesSheet() {
           </TouchableOpacity>
         </View>
 
-        {/* Segmented control */}
+        {/* ── Segmented control ── */}
         <View style={s.segWrap}>
-          <TouchableOpacity
-            style={[
-              s.seg,
-              activeTab === "routes" && {
-                backgroundColor: color + "18",
-                borderColor: color + "55",
-              },
-            ]}
-            onPress={() => setActiveTab("routes")}
-            activeOpacity={0.8}
-          >
-            <Text style={[s.segTxt, activeTab === "routes" && { color }]}>
-              Routes
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[
-              s.seg,
-              activeTab === "hubs" && {
-                backgroundColor: color + "18",
-                borderColor: color + "55",
-              },
-            ]}
-            onPress={() => setActiveTab("hubs")}
-            activeOpacity={0.8}
-          >
-            <Text style={[s.segTxt, activeTab === "hubs" && { color }]}>
-              Hubs
-            </Text>
-          </TouchableOpacity>
-        </View>
-
-        {activeTab === "routes" && activeRoutes.length > 0 && (
-          <>
-            <View style={[s.rushStats, { borderColor: summaryBorder }]}>
-              <View style={s.rushStat}>
-                <Text style={[s.rushVal, { color: flowHighlight }]}>
-                  {avgFlow}%
-                </Text>
-                <Text style={s.rushLbl}>Flow</Text>
-              </View>
-              <View style={s.rushDivider} />
-              <View style={s.rushStat}>
-                <Text style={[s.rushVal, { color: Colors.amber }]}>
-                  {totalWaiting.toLocaleString()}
-                </Text>
-                <Text style={s.rushLbl}>Waiting</Text>
-              </View>
-              <View style={s.rushDivider} />
-              <View style={s.rushStat}>
-                <Text style={[s.rushVal, { color: Colors.sky }]}>
-                  {totalCanBoard.toLocaleString()}
-                </Text>
-                <Text style={s.rushLbl}>Ready</Text>
-              </View>
-              <View style={s.rushDivider} />
-              <View style={s.rushStat}>
-                <Text
-                  style={[
-                    s.rushVal,
-                    {
-                      color:
-                        totalReward === 0
-                          ? Colors.dim
-                          : totalReward > 0
-                            ? Colors.green
-                            : Colors.red,
-                    },
-                  ]}
-                >
-                  {totalReward === 0 ? "—" : fmtCash(totalReward)}
-                </Text>
-                <Text style={s.rushLbl}>Earned</Text>
-              </View>
-            </View>
-          </>
-        )}
-
-        {activeTab === "routes" && stalledCount > 0 && (
-          <View style={s.alertBanner}>
-            <Ionicons name="warning-outline" size={16} color={Colors.red} />
-            <View style={{ flex: 1 }}>
-              <Text style={s.alertTitle}>
-                {stalledCount} route group{stalledCount !== 1 ? "s" : ""} need
-                attention
-              </Text>
-              <Text style={s.alertSub}>
-                Passengers are piling up. Try adding more planes or opening new
-                routes.
-              </Text>
-            </View>
-          </View>
-        )}
-
-        {activeTab === "routes" && activeRoutes.length === 0 && (
-          <View style={s.empty}>
-            <Ionicons name="git-network-outline" size={48} color={Colors.dim} />
-            <Text style={s.emptyTitle}>No routes yet</Text>
-            <Text style={s.emptySub}>
-              Tap a hub on the map, pick a destination, assign a plane and your
-              first route will appear here.
-            </Text>
-
+          {(["routes", "hubs"] as const).map((tab) => (
             <TouchableOpacity
-              style={[s.emptyBtn, { borderColor: color + "55" }]}
-              onPress={handleCreateRoute}
+              key={tab}
+              style={[
+                s.seg,
+                activeTab === tab && {
+                  backgroundColor: color + "18",
+                  borderColor: color + "55",
+                },
+              ]}
+              onPress={() => setActiveTab(tab)}
               activeOpacity={0.8}
             >
-              <Ionicons name="map-outline" size={15} color={color} />
-              <Text style={[s.emptyBtnText, { color }]}>Open map</Text>
+              <Text style={[s.segTxt, activeTab === tab && { color }]}>
+                {tab === "routes" ? "Routes" : "Hubs"}
+              </Text>
             </TouchableOpacity>
-          </View>
-        )}
+          ))}
+        </View>
 
-        {activeTab === "routes" && activeRoutes.length > 0 && (
+        {/* ════════════════════════════════════════════════════════
+            ROUTES TAB
+            ════════════════════════════════════════════════════════ */}
+        {activeTab === "routes" && (
           <>
-            <Text style={s.eyebrow}>YOUR ROUTES</Text>
-            <Text style={s.eyebrowSub}>
-              Tap a route to see details · hold to remove
-            </Text>
-
-            <View style={s.section}>
-              {groupedRoutes.map((group) => (
-                <RouteGroupRow
-                  key={group.id}
-                  group={group}
-                  deactivating={deactivating === group.id}
-                  onLongPress={handleLongPress}
-                  onUnassign={handleUnassign}
-                  onPriceChange={handlePriceChange}
+            {activeRoutes.length === 0 ? (
+              <View style={s.empty}>
+                <Ionicons
+                  name="git-network-outline"
+                  size={48}
+                  color={Colors.dim}
                 />
-              ))}
-            </View>
+                <Text style={s.emptyTitle}>No routes yet</Text>
+                <Text style={s.emptySub}>
+                  Tap a hub on the map, pick a destination, assign a plane and
+                  your first route will appear here.
+                </Text>
+                <TouchableOpacity
+                  style={[s.emptyBtn, { borderColor: color + "55" }]}
+                  onPress={handleCreateRoute}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="map-outline" size={15} color={color} />
+                  <Text style={[s.emptyBtnText, { color }]}>Open map</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <>
+                {/* ── Summary stat bar
+                    Flow dominates (larger); Waiting/Ready/Earned secondary ── */}
+                <View style={[s.rushStats, { borderColor: summaryBorder }]}>
+                  {/* Flow — hero stat, wider */}
+                  <View
+                    style={[
+                      s.rushStat,
+                      {
+                        flex: 1.4,
+                        borderRightWidth: StyleSheet.hairlineWidth,
+                        borderRightColor: Colors.border,
+                      },
+                    ]}
+                  >
+                    <Text style={[s.rushValHero, { color: flowHighlight }]}>
+                      {avgFlow}%
+                    </Text>
+                    <Text style={s.rushLbl}>Flow</Text>
+                  </View>
+                  <View style={s.rushStat}>
+                    <Text
+                      style={[
+                        s.rushVal,
+                        { color: totalWaiting > 0 ? Colors.amber : Colors.dim },
+                      ]}
+                    >
+                      {totalWaiting.toLocaleString()}
+                    </Text>
+                    <Text style={s.rushLbl}>Waiting</Text>
+                  </View>
+                  <View style={[s.rushDivider]} />
+                  <View style={s.rushStat}>
+                    <Text style={[s.rushVal, { color: Colors.sky }]}>
+                      {totalCanBoard.toLocaleString()}
+                    </Text>
+                    <Text style={s.rushLbl}>Ready</Text>
+                  </View>
+                  <View style={[s.rushDivider]} />
+                  <View style={s.rushStat}>
+                    <Text
+                      style={[
+                        s.rushVal,
+                        {
+                          color:
+                            totalReward > 0
+                              ? Colors.green
+                              : totalReward < 0
+                                ? Colors.red
+                                : Colors.dim,
+                        },
+                      ]}
+                    >
+                      {totalReward === 0 ? "—" : fmtCash(totalReward)}
+                    </Text>
+                    <Text style={s.rushLbl}>Earned</Text>
+                  </View>
+                </View>
+
+                {/* ── Alert banner — names the stalled routes specifically ── */}
+                {stalledCount > 0 && (
+                  <View style={s.alertBanner}>
+                    <Ionicons
+                      name="warning-outline"
+                      size={16}
+                      color={Colors.red}
+                    />
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.alertTitle}>
+                        {stalledCount} route{stalledCount !== 1 ? "s" : ""} need
+                        attention
+                      </Text>
+                      <Text style={s.alertRoutes}>
+                        {stalledGroups
+                          .map((g) => {
+                            const via = g.via_iata ? ` via ${g.via_iata}` : "";
+                            return `${g.demand.origin.iata}${via}→${g.demand.dest.iata}`;
+                          })
+                          .join("  ·  ")}
+                      </Text>
+                      <Text style={s.alertSub}>
+                        Passengers are piling up. Add planes or open new routes.
+                      </Text>
+                    </View>
+                  </View>
+                )}
+
+                {/* ── Route list — already sorted by urgency ── */}
+                <Text style={s.eyebrow}>YOUR ROUTES</Text>
+                <Text style={s.eyebrowSub}>Tap to expand · hold to remove</Text>
+
+                <View style={s.routeList}>
+                  {groupedRoutes.map((group) => (
+                    <RouteGroupRow
+                      key={group.id}
+                      group={group}
+                      day={day}
+                      deactivating={deactivating === group.id}
+                      onLongPress={handleLongPress}
+                      onPriceChange={handlePriceChange}
+                    />
+                  ))}
+                </View>
+              </>
+            )}
           </>
         )}
 
-        {/* ── Hubs Tab ── */}
+        {/* ════════════════════════════════════════════════════════
+            HUBS TAB
+            ════════════════════════════════════════════════════════ */}
         {activeTab === "hubs" && (
           <>
             {hubs.length === 0 ? (
@@ -1173,21 +1137,83 @@ export default function RoutesSheet() {
                 </Text>
               </View>
             ) : (
-              <View style={s.section}>
-                {hubs.map((hub) => (
-                  <HubRow
-                    key={hub.id}
-                    hub={hub}
-                    demands={liveDemands}
-                    dayProgress={dayProgress}
-                    color={color}
-                    onPress={() => {
-                      closeSheet();
-                      setTimeout(() => openSheet("airport", hub.airport), 120);
-                    }}
-                  />
-                ))}
-              </View>
+              <>
+                {/* ── Hubs overview summary ── */}
+                <View
+                  style={[
+                    s.rushStats,
+                    {
+                      borderColor:
+                        busyHubCount > 0 ? Colors.amber + "55" : color + "33",
+                    },
+                  ]}
+                >
+                  <View
+                    style={[
+                      s.rushStat,
+                      {
+                        flex: 1.2,
+                        borderRightWidth: StyleSheet.hairlineWidth,
+                        borderRightColor: Colors.border,
+                      },
+                    ]}
+                  >
+                    <Text style={[s.rushValHero, { color }]}>
+                      {hubs.length}
+                    </Text>
+                    <Text style={s.rushLbl}>Hubs</Text>
+                  </View>
+                  <View style={s.rushStat}>
+                    <Text
+                      style={[
+                        s.rushVal,
+                        {
+                          color:
+                            totalHubWaiting > 0 ? Colors.amber : Colors.dim,
+                        },
+                      ]}
+                    >
+                      {totalHubWaiting.toLocaleString()}
+                    </Text>
+                    <Text style={s.rushLbl}>Waiting</Text>
+                  </View>
+                  <View style={s.rushDivider} />
+                  <View style={s.rushStat}>
+                    <Text
+                      style={[
+                        s.rushVal,
+                        {
+                          color: busyHubCount > 0 ? Colors.amber : Colors.green,
+                        },
+                      ]}
+                    >
+                      {busyHubCount}
+                    </Text>
+                    <Text style={s.rushLbl}>Busy</Text>
+                  </View>
+                </View>
+
+                <Text style={s.eyebrow}>YOUR HUBS</Text>
+
+                <View style={s.routeList}>
+                  {hubs.map((hub) => (
+                    <HubRow
+                      key={hub.id}
+                      hub={hub}
+                      demands={liveDemands}
+                      dayProgress={dayProgress}
+                      color={color}
+                      onPress={() => {
+                        closeSheet();
+                        setTimeout(
+                          () => openSheet("airport", hub.airport),
+                          120,
+                        );
+                      }}
+                    />
+                  ))}
+                </View>
+              </>
             )}
           </>
         )}
@@ -1198,6 +1224,168 @@ export default function RoutesSheet() {
     </>
   );
 }
+
+// ─────────────────────────────────────────────────────────────────
+// STYLES
+// ─────────────────────────────────────────────────────────────────
+
+const s = StyleSheet.create({
+  root: { flex: 1 },
+  content: { paddingBottom: Spacing.xxl },
+  handle: {
+    alignSelf: "center",
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: "rgba(255,255,255,.12)",
+    marginBottom: Spacing.sm,
+    marginTop: Spacing.xs,
+  },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: Spacing.lg,
+    paddingBottom: Spacing.md,
+  },
+  hdrL: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+    flex: 1,
+  },
+  title: { fontSize: 20, color: Colors.text, fontWeight: "900" },
+  badge: {
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+  },
+  badgeTxt: { fontSize: 11, fontWeight: "900" },
+
+  segWrap: {
+    flexDirection: "row",
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.md,
+    gap: Spacing.xs ?? 4,
+  },
+  seg: {
+    flex: 1,
+    alignItems: "center",
+    paddingVertical: Spacing.sm,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: "rgba(255,255,255,.025)",
+  },
+  segTxt: { fontSize: 12, fontWeight: "700", color: Colors.dim },
+
+  // Summary bar — flow gets flex:1.4 to dominate
+  rushStats: {
+    flexDirection: "row",
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.sm,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    overflow: "hidden",
+    backgroundColor: "rgba(255,255,255,.025)",
+  },
+  rushDivider: {
+    width: StyleSheet.hairlineWidth,
+    backgroundColor: Colors.border,
+    alignSelf: "stretch",
+  },
+  rushStat: {
+    flex: 1,
+    alignItems: "center",
+    paddingVertical: Spacing.md,
+    paddingHorizontal: 4,
+  },
+  rushValHero: { fontSize: 20, fontWeight: "900" }, // Flow — larger
+  rushVal: { fontSize: 15, fontWeight: "900" },
+  rushLbl: {
+    fontSize: 8,
+    color: Colors.dim,
+    marginTop: 4,
+    fontWeight: "900",
+    letterSpacing: 0.8,
+  },
+
+  // Alert banner — includes route names
+  alertBanner: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: Spacing.sm,
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.md,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.red + "33",
+    backgroundColor: Colors.red + "08",
+    padding: Spacing.md,
+  },
+  alertTitle: { fontSize: 12, color: Colors.red, fontWeight: "900" },
+  alertRoutes: {
+    fontSize: 11,
+    color: Colors.red,
+    fontWeight: "700",
+    marginTop: 2,
+    opacity: 0.75,
+  },
+  alertSub: {
+    fontSize: 10,
+    color: Colors.dim,
+    fontWeight: "500",
+    marginTop: 3,
+    lineHeight: 15,
+  },
+
+  eyebrow: {
+    fontSize: 9,
+    color: Colors.dim,
+    letterSpacing: 2.5,
+    paddingHorizontal: Spacing.lg,
+    marginBottom: 4,
+    fontWeight: "900",
+  },
+  eyebrowSub: {
+    fontSize: 10,
+    color: Colors.dim,
+    paddingHorizontal: Spacing.lg,
+    marginBottom: Spacing.sm,
+    fontWeight: "500",
+  },
+
+  // Route/hub list — no extra horizontal padding so stripes are flush
+  routeList: { paddingHorizontal: Spacing.lg },
+
+  empty: {
+    alignItems: "center",
+    justifyContent: "center",
+    padding: Spacing.xxl,
+    gap: Spacing.md,
+    marginTop: Spacing.lg,
+  },
+  emptyTitle: { fontSize: 18, color: Colors.text, fontWeight: "900" },
+  emptySub: {
+    fontSize: 12,
+    color: Colors.dim,
+    textAlign: "center",
+    lineHeight: 18,
+    fontWeight: "500",
+  },
+  emptyBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+    marginTop: Spacing.sm,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+  },
+  emptyBtnText: { fontSize: 13, fontWeight: "800" },
+});
 
 const hr = StyleSheet.create({
   row: {
@@ -1264,6 +1452,7 @@ const rr = StyleSheet.create({
     paddingHorizontal: Spacing.md,
     gap: 7,
   },
+
   top: {
     flexDirection: "row",
     alignItems: "center",
@@ -1289,174 +1478,29 @@ const rr = StyleSheet.create({
     paddingHorizontal: 7,
     paddingVertical: 2,
   },
-  statusTxt: {
-    fontSize: 8,
-    fontWeight: "900",
-    letterSpacing: 0.8,
-  },
-  metaRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-  },
-  meta: {
-    flex: 1,
-    minWidth: 0,
-    fontSize: 11,
-    color: Colors.muted,
-    fontWeight: "700",
-  },
-  condBadge: {
-    fontSize: 9,
-    fontWeight: "800",
-  },
-  dot: {
-    fontSize: 10,
-    color: Colors.dim,
-  },
-  moved: {
-    fontSize: 11,
-    fontWeight: "900",
-  },
-  bottom: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
+  statusTxt: { fontSize: 8, fontWeight: "900", letterSpacing: 0.8 },
+
+  metaRow: { flexDirection: "row", alignItems: "center", gap: 5 },
+  meta: { flex: 1, fontSize: 11, color: Colors.muted, fontWeight: "600" },
+  condBadge: { fontSize: 10, fontWeight: "900", flexShrink: 0 },
+  moved: { fontSize: 11, fontWeight: "900", flexShrink: 0 },
+
+  bottom: { flexDirection: "row", alignItems: "center", gap: 6 },
   progressTrack: {
     flex: 1,
-    height: 5,
+    height: 4,
     borderRadius: Radius.full,
     backgroundColor: "rgba(255,255,255,.08)",
     overflow: "hidden",
   },
-  progressFill: {
-    height: "100%",
-    borderRadius: Radius.full,
-  },
+  progressFill: { height: "100%", borderRadius: Radius.full },
   percent: {
-    minWidth: 34,
+    minWidth: 30,
     textAlign: "right",
     fontSize: 10,
     fontWeight: "900",
-    fontFamily: Typography.mono,
   },
-  cash: {
-    minWidth: 64,
-    textAlign: "right",
-    fontSize: 11,
-    fontWeight: "900",
-    fontFamily: Typography.mono,
-  },
-  expandedExtra: {
-    gap: Spacing.sm,
-    paddingTop: Spacing.sm,
-    borderTopWidth: 0.5,
-    borderTopColor: Colors.border,
-    marginTop: Spacing.sm,
-  },
-  odRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-  },
-  odTxt: {
-    fontSize: 11,
-    color: Colors.sky,
-    flex: 1,
-  },
-  mixTxt: {
-    fontSize: 11,
-    color: Colors.dim,
-  },
-  unassignBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 8,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.red + "33",
-    backgroundColor: Colors.red + "08",
-  },
-  unassignTxt: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: Colors.red,
-  },
-  swapBtnFull: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: "rgba(56,189,248,0.3)",
-    backgroundColor: "rgba(56,189,248,0.08)",
-    alignSelf: "flex-start",
-  },
-  swapFullTxt: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: Colors.sky,
-  },
-  odPill: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 3,
-    backgroundColor: "rgba(56,189,248,0.08)",
-    borderRadius: 5,
-    paddingHorizontal: 5,
-    paddingVertical: 2,
-    borderWidth: 0.5,
-    borderColor: "rgba(56,189,248,0.25)",
-  },
-  odPillTxt: {
-    fontSize: 8,
-    fontWeight: "700",
-    color: Colors.sky,
-  },
-  swapBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 3,
-    backgroundColor: "rgba(56,189,248,0.1)",
-    borderRadius: 6,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderWidth: 0.5,
-    borderColor: "rgba(56,189,248,0.3)",
-  },
-  swapTxt: {
-    fontSize: 9,
-    fontWeight: "700",
-    color: Colors.sky,
-  },
-  hint: {
-    fontSize: 10,
-    color: Colors.dim,
-    fontWeight: "700",
-  },
-  loadingOverlay: {
-    width: 40,
-    alignItems: "center",
-    justifyContent: "center",
-    borderLeftWidth: StyleSheet.hairlineWidth,
-    borderLeftColor: Colors.border,
-  },
-  hintRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: Spacing.sm,
-  },
-  growth: {
-    fontSize: 10,
-    fontWeight: "900",
-    flexShrink: 0,
-  },
+  cash: { minWidth: 54, textAlign: "right", fontSize: 10, fontWeight: "900" },
   seasonBadge: {
     flexDirection: "row",
     alignItems: "center",
@@ -1465,34 +1509,20 @@ const rr = StyleSheet.create({
     paddingHorizontal: 4,
     paddingVertical: 2,
   },
-  seasonTxt: {
-    fontSize: 8,
-    fontWeight: "800",
-  },
-  qualityWrap: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 3,
-  },
-  qualityLabel: {
-    fontSize: 9,
-    fontWeight: "700",
-  },
-  growthWrap: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-  },
-  paxMix: { fontSize: 10, fontWeight: "700" },
-  aiRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-  },
-  aiText: {
-    fontSize: 10,
-    fontWeight: "700",
-  },
+  seasonTxt: { fontSize: 8, fontWeight: "800" },
+
+  hintRow: { gap: 4 },
+  hint: { fontSize: 10, color: Colors.dim, fontWeight: "700" },
+  growthWrap: { flexDirection: "row", alignItems: "center", gap: 4 },
+  growth: { fontSize: 10, fontWeight: "700" },
+  qualityWrap: { flexDirection: "row", alignItems: "center", gap: 3 },
+  qualityLabel: { fontSize: 9, fontWeight: "700" },
+
+  expandedExtra: { gap: 4 },
+  odRow: { flexDirection: "row", alignItems: "center", gap: 4 },
+  odTxt: { fontSize: 10, color: Colors.sky, fontWeight: "700" },
+  mixTxt: { fontSize: 10, color: Colors.dim, fontWeight: "700" },
+
   pricingBox: {
     borderRadius: Radius.md,
     borderWidth: 1,
@@ -1506,11 +1536,7 @@ const rr = StyleSheet.create({
     justifyContent: "space-between",
     gap: Spacing.sm,
   },
-  pricingTitleRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-  },
+  pricingTitleRow: { flexDirection: "row", alignItems: "center", gap: 4 },
   pricingTitle: {
     fontSize: 9,
     fontWeight: "900",
@@ -1524,10 +1550,7 @@ const rr = StyleSheet.create({
     color: Colors.dim,
     fontWeight: "700",
   },
-  priceButtons: {
-    flexDirection: "row",
-    gap: 6,
-  },
+  priceButtons: { flexDirection: "row", gap: 6 },
   priceBtn: {
     flex: 1,
     minHeight: 46,
@@ -1540,247 +1563,19 @@ const rr = StyleSheet.create({
     paddingHorizontal: 4,
     paddingVertical: 6,
   },
-  priceBtnTitle: {
-    marginTop: 2,
-    fontSize: 9,
-    fontWeight: "900",
-  },
+  priceBtnTitle: { marginTop: 2, fontSize: 9, fontWeight: "900" },
   priceBtnSub: {
     marginTop: 1,
     fontSize: 7,
     color: Colors.dim,
     fontWeight: "700",
   },
-});
 
-const s = StyleSheet.create({
-  root: { flex: 1 },
-  content: { paddingBottom: Spacing.xxl },
-  handle: {
-    alignSelf: "center",
-    width: 40,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: "rgba(255,255,255,.12)",
-    marginBottom: Spacing.sm,
-    marginTop: Spacing.xs,
-  },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: Spacing.lg,
-    paddingBottom: Spacing.md,
-  },
-  hdrL: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.sm,
-    flex: 1,
-  },
-  title: {
-    fontSize: 20,
-    color: Colors.text,
-    fontWeight: "900",
-  },
-  subtitle: {
-    fontSize: 10,
-    color: Colors.dim,
-    marginTop: 1,
-  },
-  badge: {
-    paddingHorizontal: 9,
-    paddingVertical: 3,
-    borderRadius: Radius.full,
-    borderWidth: 1,
-  },
-  badgeTxt: {
-    fontSize: 11,
-    fontWeight: "900",
-  },
-  topActions: {
-    paddingHorizontal: Spacing.lg,
-    marginBottom: Spacing.md,
-  },
-  primaryCta: {
-    flexDirection: "row",
+  loadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,.3)",
     alignItems: "center",
     justifyContent: "center",
-    gap: Spacing.sm,
     borderRadius: Radius.lg,
-    paddingVertical: Spacing.md,
-  },
-  primaryCtaText: {
-    fontSize: 13,
-    color: Colors.bg,
-    fontWeight: "900",
-  },
-  rushStats: {
-    flexDirection: "row",
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.sm,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    overflow: "hidden",
-    backgroundColor: "rgba(255,255,255,.025)",
-  },
-  rushDivider: {
-    width: StyleSheet.hairlineWidth,
-    backgroundColor: Colors.border,
-    alignSelf: "stretch",
-  },
-  rushStat: {
-    flex: 1,
-    alignItems: "center",
-    paddingVertical: Spacing.md,
-    paddingHorizontal: 4,
-  },
-  rushVal: {
-    fontSize: 15,
-    fontWeight: "900",
-  },
-  rushLbl: {
-    fontSize: 8,
-    color: Colors.dim,
-    marginTop: 4,
-    fontWeight: "900",
-    letterSpacing: 0.8,
-  },
-  miniBarWrap: {
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.md,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    paddingHorizontal: Spacing.md,
-    paddingTop: Spacing.sm,
-    paddingBottom: Spacing.md,
-    backgroundColor: "rgba(255,255,255,.02)",
-    gap: Spacing.sm,
-  },
-  miniStatPair: {
-    fontSize: 10,
-    textAlign: "center",
-  },
-  miniStatKey: {
-    fontWeight: "900",
-    color: Colors.text,
-    fontFamily: Typography.mono,
-  },
-  miniStatWord: {
-    color: Colors.dim,
-    fontWeight: "600",
-  },
-  miniStatSep: {
-    color: Colors.dim,
-  },
-  throughTrack: {
-    height: 6,
-    borderRadius: Radius.full,
-    backgroundColor: "rgba(255,255,255,.06)",
-    overflow: "hidden",
-  },
-  throughFill: {
-    height: "100%",
-    borderRadius: Radius.full,
-  },
-  alertBanner: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: Spacing.sm,
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.md,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.red + "33",
-    backgroundColor: Colors.red + "08",
-    padding: Spacing.md,
-  },
-  alertTitle: {
-    fontSize: 12,
-    color: Colors.red,
-    fontWeight: "900",
-  },
-  alertSub: {
-    fontSize: 10,
-    color: Colors.dim,
-    marginTop: 3,
-    lineHeight: 15,
-    fontWeight: "500",
-  },
-  eyebrow: {
-    fontSize: 9,
-    color: Colors.dim,
-    letterSpacing: 2.5,
-    paddingHorizontal: Spacing.lg,
-    marginBottom: 4,
-    fontWeight: "900",
-  },
-  eyebrowSub: {
-    fontSize: 10,
-    color: Colors.dim,
-    paddingHorizontal: Spacing.lg,
-    marginBottom: Spacing.sm,
-    fontWeight: "500",
-  },
-  section: {
-    paddingHorizontal: Spacing.lg,
-    marginBottom: Spacing.sm,
-  },
-  segWrap: {
-    flexDirection: "row",
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.md,
-    gap: Spacing.xs ?? 4,
-  },
-  seg: {
-    flex: 1,
-    alignItems: "center",
-    paddingVertical: Spacing.sm,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: "rgba(255,255,255,.025)",
-  },
-  segTxt: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: Colors.dim,
-  },
-  empty: {
-    alignItems: "center",
-    justifyContent: "center",
-    padding: Spacing.xxl,
-    gap: Spacing.md,
-    marginTop: Spacing.lg,
-  },
-  emptyTitle: {
-    fontSize: 18,
-    color: Colors.text,
-    fontWeight: "900",
-  },
-  emptySub: {
-    fontSize: 12,
-    color: Colors.dim,
-    textAlign: "center",
-    lineHeight: 18,
-    fontWeight: "500",
-  },
-  emptyBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.sm,
-    marginTop: Spacing.sm,
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.md,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-  },
-  emptyBtnText: {
-    fontSize: 13,
-    fontWeight: "800",
   },
 });
-// ─────────────────────────────────────────────────────────────────
-// SWAP PLANE MODAL
-// Shows idle compatible planes for this route, sorted by efficiency
-// ─────────────────────────────────────────────────────────────────

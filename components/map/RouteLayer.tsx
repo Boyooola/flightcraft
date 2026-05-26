@@ -241,10 +241,22 @@ export default function RouteLayer({
                 .getState()
                 .demands.find((d) => d.id === route.demand.id) ?? route.demand;
 
-            // Skip boarding if demand already fully cleared
+            // Consider the route cleared when delivered pax has reached
+            // as many as this plane can physically move — not base_pax_day-2.
+            // Using base_pax_day-2 caused capacity-constrained routes
+            // (plane seats < demand) to mark themselves done after one trip.
+            // e.g. CRJ200(50 seats) on 52-pax demand: 50 >= 52-2 → true → stops.
+            //
+            // Now: cleared = delivered >= min(base_pax_day, planeCapacity)
+            // A 50-seat plane on 52-pax demand clears correctly at 50.
+            // A 70-seat plane on 52-pax demand still clears at 52 (full demand).
+            const planeCapacity = route.plane.plane_model.pax_capacity ?? 70;
+            const effectiveCap = Math.min(
+              liveDemand.base_pax_day ?? 1,
+              planeCapacity,
+            );
             const alreadyCleared =
-              (liveDemand.delivered_pax_today ?? 0) >=
-              (liveDemand.base_pax_day ?? 1) - 2;
+              (liveDemand.delivered_pax_today ?? 0) >= effectiveCap;
 
             if (!alreadyCleared) {
               const delieveredPax = boardPassengers({
@@ -339,7 +351,6 @@ export default function RouteLayer({
                 const popupAmount = res.net;
 
                 console.log("pop", popupAmount);
-                earnCash(popupAmount);
 
                 const popId = `pop-${route.id}-${Date.now()}`;
 

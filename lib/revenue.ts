@@ -373,7 +373,7 @@ export function dailyInterest(loan: number, annualRatePct: number): number {
 
 export function fmtCash(value: number): string {
   const sign = value < 0 ? "-" : "";
-  const abs = Math.abs(value);
+  const abs = Math.abs(value ?? 0);
 
   if (abs >= 1_000_000_000) {
     return `${sign}$${(abs / 1_000_000_000).toFixed(1)}B`;
@@ -391,14 +391,14 @@ export function fmtCash(value: number): string {
 }
 
 export function fmtCashExact(value: number): string {
-  const abs = Math.abs(value);
+  const abs = Math.abs(value ?? 0);
   const sign = value < 0 ? "-$" : "+$";
 
   return sign + Math.round(abs).toLocaleString();
 }
 
 export function fmtCashShort(value: number): string {
-  const abs = Math.abs(value);
+  const abs = Math.abs(value ?? 0);
   const sign = value < 0 ? "-$" : "+$";
 
   if (abs >= 1_000_000) {

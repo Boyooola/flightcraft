@@ -1,17 +1,24 @@
 /**
  * hooks/useDailyEvents.ts
  *
- * WorldWide Rush-style daily events + demand waves.
+ * WorldWide Rush-style daily events + demand waves + choice events.
  *
- * Normal days:
- *   - random modifier events
- *   - AI flavor events
+ * Fixes applied:
+ *   FIX 1 — Gambling salt changed from `day` (deterministic/replayable)
+ *            to `Date.now()` (per-session random). Same day no longer
+ *            always produces the same gamble outcome.
  *
- * Wave days:
- *   - demand wave boosts pax_day on selected pending demand slots
- *   - shows a stronger daily event card
+ *   FIX 2 — `store.updatePlaneCondition` replaced with `store.updateOwnedPlane`
+ *            (the actual action in the store). Was throwing at runtime on any
+ *            event with a conditionHitAllPlanes consequence.
  */
 
+import {
+  isChoiceEventDay,
+  pickChoiceEvent,
+  type ChoiceEvent,
+  type ResolvedChoice,
+} from "@/lib/choiceEvents";
 import {
   applyDemandWave,
   generateDemandWave,
@@ -32,12 +39,16 @@ export interface DailyEvent {
   revenueMultiplier?: number;
   cashBonus?: number;
 
-  // Demand-wave metadata.
+  // Demand-wave metadata
   waveKind?: DemandWaveKind;
   waveAddedPax?: number;
   waveAffectedSlots?: number;
   waveAffectedHubs?: string[];
 }
+
+// ─────────────────────────────────────────────────────────────────
+// EVENT POOLS
+// ─────────────────────────────────────────────────────────────────
 
 const POSITIVE_EVENTS: Omit<DailyEvent, "id">[] = [
   {
@@ -162,26 +173,20 @@ export function generateDailyEvent(
   gameSeed: string = "DEFAULT",
 ): DailyEvent {
   const roll = seedHash(gameSeed, "rush-event-roll", day) % 100;
-
   const pick = (arr: Omit<DailyEvent, "id">[]) =>
     arr[seedHash(gameSeed, "rush-event-pick", day) % arr.length];
 
   let base: Omit<DailyEvent, "id">;
+  if (roll < 55) base = pick(POSITIVE_EVENTS);
+  else if (roll < 85) base = pick(NEGATIVE_EVENTS);
+  else base = pick(NEUTRAL_EVENTS);
 
-  // More positive than negative, like an arcade transport game.
-  if (roll < 55) {
-    base = pick(POSITIVE_EVENTS);
-  } else if (roll < 85) {
-    base = pick(NEGATIVE_EVENTS);
-  } else {
-    base = pick(NEUTRAL_EVENTS);
-  }
-
-  return {
-    ...base,
-    id: `event-day-${day}`,
-  };
+  return { ...base, id: `event-day-${day}` };
 }
+
+// ─────────────────────────────────────────────────────────────────
+// DEMAND WAVE
+// ─────────────────────────────────────────────────────────────────
 
 function buildDemandWaveEvent(day: number): DailyEvent | null {
   const store = useGameStore.getState();
@@ -214,9 +219,7 @@ function buildDemandWaveEvent(day: number): DailyEvent | null {
   }
 
   applied.updates.forEach((update) => {
-    store.updateDemand(update.demandId, {
-      base_pax_day: update.newPaxDay,
-    });
+    store.updateDemand(update.demandId, { base_pax_day: update.newPaxDay });
   });
 
   const hubLabel =
@@ -239,6 +242,113 @@ function buildDemandWaveEvent(day: number): DailyEvent | null {
   };
 }
 
+// ─────────────────────────────────────────────────────────────────
+// CHOICE EVENT RESOLUTION
+// ─────────────────────────────────────────────────────────────────
+
+export function resolveChoiceEvent(
+  event: ChoiceEvent,
+  optionId: "a" | "b",
+): ResolvedChoice {
+  const store = useGameStore.getState();
+  const option = event.options.find((o) => o.id === optionId)!;
+  const con = option.consequence;
+  const day = store.airline?.day ?? 1;
+
+  // ── Immediate cash delta ─────────────────────────────────────
+  if (con.cashDelta) {
+    store.earnCash(con.cashDelta);
+  }
+
+  // ── Gambling mechanic ────────────────────────────────────────
+  // FIX 1: Use Date.now() as salt instead of `day`.
+  // `day` is deterministic — same day always gives same roll, so loading
+  // a save or restarting the day always produces the same outcome.
+  // Date.now() makes each resolution genuinely random per session.
+  let gamblingOutcome: number = 0;
+  if (con.cashBonusChance) {
+    const roll = (Date.now() % 10_000) / 10_000; // 0..1 per-session random
+    if (roll < con.cashBonusChance.chance) {
+      gamblingOutcome = con.cashBonusChance.bonus;
+    } else {
+      gamblingOutcome = con.cashBonusChance.failPenalty;
+    }
+    if (gamblingOutcome !== 0) {
+      store.earnCash(gamblingOutcome);
+    }
+  }
+
+  // ── Trust delta — applied to all hubs ───────────────────────
+  if (con.trustDelta) {
+    store.hubs.forEach((hub) => {
+      store.updateHub(hub.id, {
+        trust: Math.max(0, Math.min(100, hub.trust + (con.trustDelta ?? 0))),
+      });
+    });
+  }
+
+  // ── Plane condition hit ──────────────────────────────────────
+  // FIX 2: Use store.updateOwnedPlane (correct action) instead of
+  // store.updatePlaneCondition (didn't exist — would throw at runtime).
+  if (con.conditionHitAllPlanes) {
+    store.ownedPlanes.forEach((plane) => {
+      const newCondition = Math.max(
+        0,
+        Math.min(100, (plane.condition ?? 100) + con.conditionHitAllPlanes!),
+      );
+      store.updateOwnedPlane(plane.id, { condition: newCondition });
+    });
+  }
+
+  // ── Demand boost across all hub demands ─────────────────────
+  if (con.demandBoostHubs) {
+    store.demands.forEach((demand) => {
+      store.updateDemand(demand.id, {
+        base_pax_day: Math.max(
+          0,
+          demand.base_pax_day + (con.demandBoostHubs ?? 0),
+        ),
+      });
+    });
+  }
+
+  // ── Ledger entry ─────────────────────────────────────────────
+  const totalCash = (con.cashDelta ?? 0) + gamblingOutcome;
+  store.addLedgerEntries([
+    {
+      id: `choice-${event.id}-${day}`,
+      day,
+      type: "event",
+      label: `🎯 ${event.title} — ${option.label}`,
+      amount: totalCash,
+      route_id: null,
+    },
+  ]);
+
+  // ── Build resolved record ────────────────────────────────────
+  const resolved: ResolvedChoice = {
+    eventId: event.id,
+    chosenOptionId: optionId,
+    day,
+    consequence: con,
+  };
+
+  if (con.revenueMultiplierDays) {
+    resolved.revenueMultiplierEndsDay = day + con.revenueMultiplierDays.days;
+    resolved.revenueMultiplier = con.revenueMultiplierDays.multiplier;
+  }
+
+  store.setPendingChoiceEvent(null);
+  store.setActiveChoiceConsequence(resolved);
+  store.resumeAfterChoice();
+
+  return resolved;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// MAIN HOOK
+// ─────────────────────────────────────────────────────────────────
+
 export function useDailyEvents() {
   const lastDay = useRef<number>(-1);
 
@@ -252,11 +362,10 @@ export function useDailyEvents() {
         const store = useGameStore.getState();
         const gameSeed = store.airline?.seed ?? "DEFAULT";
 
-        // Clear previous day's event first
         store.setDailyEvent(null);
 
+        // ── Passive event ──────────────────────────────────────
         let event: DailyEvent | null = buildDemandWaveEvent(day);
-
         if (!event) {
           event = generateDailyEvent(day, gameSeed);
         }
@@ -284,6 +393,31 @@ export function useDailyEvents() {
 
         store.addLedgerEntries([ledgerEntry]);
         store.setDailyEvent(event);
+
+        // ── Check lingering consequence expiry ─────────────────
+        const active = store.activeChoiceConsequence;
+        if (
+          active?.revenueMultiplierEndsDay &&
+          day >= active.revenueMultiplierEndsDay
+        ) {
+          store.setActiveChoiceConsequence(null);
+        }
+
+        // ── Choice event ───────────────────────────────────────
+        if (isChoiceEventDay(day)) {
+          const previousIds = store.resolvedChoiceEventIds ?? [];
+          const choiceEvent = pickChoiceEvent({
+            day,
+            gameSeed,
+            hubCount: store.hubs.length,
+            previousEventIds: previousIds,
+          });
+
+          if (choiceEvent) {
+            store.pauseForChoice();
+            store.setPendingChoiceEvent(choiceEvent);
+          }
+        }
       },
     );
 

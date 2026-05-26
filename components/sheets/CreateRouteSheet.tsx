@@ -11,6 +11,7 @@
  */
 
 import { Colors, MIN_TOUCH, Radius, Spacing } from "@/constants/theme";
+import { gameSounds } from "@/hooks/useGameSounds";
 import { useHaptics } from "@/hooks/useHaptics";
 import { useTabBarHeight } from "@/hooks/useSheetLayout";
 import { useCreateCustomRoute } from "@/hooks/useSupabaseWrite";
@@ -572,6 +573,8 @@ export default function CreateRouteSheet() {
         return;
       }
     }
+
+    gameSounds.play("routeCreate");
 
     setCreating(false);
     haptics.success();

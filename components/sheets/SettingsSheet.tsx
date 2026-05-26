@@ -217,7 +217,7 @@ export default function SettingsSheet() {
           color={color}
         />
         <Divider />
-        <SettingRow
+        {/* <SettingRow
           icon="trophy-outline"
           label="Achievements"
           sublabel="Your progress and unlocks"
@@ -231,7 +231,7 @@ export default function SettingsSheet() {
           sublabel="Compare against other airlines"
           onPress={() => openSheet("leaderboard")}
           color={Colors.amber}
-        />
+        /> */}
       </View>
 
       <SectionHeader label="ACCOUNT" />
@@ -337,7 +337,7 @@ export default function SettingsSheet() {
         <SettingRow
           icon="information-circle-outline"
           label="Version"
-          sublabel="0.6.1"
+          sublabel="0.7.0"
           color={Colors.dim}
         />
         <Divider />

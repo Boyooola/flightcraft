@@ -112,8 +112,8 @@ packagingOptions {
         applicationId 'com.stratoslabs.flightcraft'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 19
-        versionName "0.6.1"
+        versionCode 20
+        versionName "0.7.0"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }

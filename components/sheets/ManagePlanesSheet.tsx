@@ -20,33 +20,29 @@ import { fmtCash } from "@/lib/revenue";
 import type { OwnedPlane, Route } from "@/store";
 import {
   useGameStore,
-  useOwnedPlanes,
   useRoutes,
-  useSelectedPlaneGroup,
+  useSelectedPlaneGroup
 } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
 import type { BottomSheetBackdropProps } from "@gorhom/bottom-sheet";
-import BottomSheet, {
+import {
   BottomSheetBackdrop,
   BottomSheetScrollView,
 } from "@gorhom/bottom-sheet";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
 export default function ManagePlanesSheet() {
-  const sheetRef = useRef<BottomSheet>(null);
   const tabBarH = useTabBarHeight();
   const deactivate = useDeactivateRoute();
   const maintain = useMaintenancePlane();
   const sellPlane = useSellPlane();
-  const snapPoints = useMemo(() => ["60%", "85%"], []);
 
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmSell, setConfirmSell] = useState<string | null>(null);
   const openSheet = useGameStore((s) => s.openSheet);
   const closeSheet = useGameStore((s) => s.closeSheet);
   const airline = useGameStore((s) => s.airline);
-  const ownedPlanes = useOwnedPlanes();
   const routes = useRoutes();
   const group = useSelectedPlaneGroup();
   const color = airline?.color ?? "#38bdf8";
@@ -109,6 +105,7 @@ export default function ManagePlanesSheet() {
     }
     setBusy(plane.id);
     setConfirmSell(null);
+    console.log("plane", plane);
     const { error } = await sellPlane(plane.id);
     setBusy(null);
     if (!error) {

@@ -9,18 +9,29 @@
  * Trigger: ALL must be true:
  *   - Day >= 7 (seen demand waves, understands the loop)
  *   - Active routes >= 2 (actually playing)
- *   - Net worth > starting cash (genuinely succeeding)
- *   - Just completed a mission OR hit a day milestone (positive moment)
- *   - Not prompted before (AsyncStorage)
+ *   - Cash > 0 (hasn't gone bankrupt)
+ *   - On a milestone day OR just completed first mission
+ *   - Not prompted before (AsyncStorage flag)
  *   - StoreReview.isAvailableAsync() returns true
  *
  * Fires ONCE per install. Never prompts twice.
  * Falls back to Play Store URL if native prompt unavailable.
+ *
+ * Fixes applied:
+ *   1. justCompletedMission now has its own early-return path —
+ *      was previously unreachable because isMilestoneDay guard fired first.
+ *   2. hasChecked.current moved inside tryPrompt, after AsyncStorage read —
+ *      was set too early, blocking re-evaluation on subsequent days.
+ *   3. netWorth guard replaced — airline.loan is not reliable as start cash.
+ *      Now simply checks cash > 0 (player is solvent).
+ *   4. routes added to useEffect dependency array — was stale.
+ *   5. Prompt delay reduced from 3s to 1.5s — 3s felt too disconnected
+ *      from the positive moment that triggered it.
  */
 
 import { useGameStore, useRoutes } from "@/store";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { Linking } from "react-native";
 
 let StoreReview: any = null;
@@ -32,9 +43,8 @@ const RATE_US_KEY = "@flightcraft:rate_us_shown";
 const PLAY_STORE_URL = "market://details?id=com.stratoslabs.flightcraft";
 const PLAY_STORE_WEB =
   "https://play.google.com/store/apps/details?id=com.stratoslabs.flightcraft";
-
-// Day milestones that trigger the prompt
 const DAY_MILESTONES = [7, 14, 30];
+const PROMPT_DELAY_MS = 1500;
 
 export async function openPlayStorePage() {
   try {
@@ -45,61 +55,68 @@ export async function openPlayStorePage() {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────
+// CORE PROMPT — called once conditions are met
+// Marks shown BEFORE requesting to prevent double-prompt on
+// re-render races. Returns early if already shown.
+// ─────────────────────────────────────────────────────────────────
+
+async function tryShowPrompt() {
+  try {
+    const already = await AsyncStorage.getItem(RATE_US_KEY);
+    if (already) return;
+
+    // Mark as shown before the delay — prevents a second trigger
+    // firing during the 1.5s window if state changes
+    await AsyncStorage.setItem(RATE_US_KEY, String(Date.now()));
+
+    setTimeout(async () => {
+      try {
+        const available = StoreReview && (await StoreReview.isAvailableAsync());
+        if (available) {
+          await StoreReview.requestReview();
+        } else {
+          await openPlayStorePage();
+        }
+      } catch {}
+    }, PROMPT_DELAY_MS);
+  } catch {}
+}
+
+// ─────────────────────────────────────────────────────────────────
+// HOOK
+// ─────────────────────────────────────────────────────────────────
+
 export function useRateUs() {
-  const hasChecked = useRef(false);
   const routes = useRoutes();
   const airline = useGameStore((s) => s.airline);
   const missionsCompleted = useGameStore((s) => s.missionsCompleted ?? 0);
 
   useEffect(() => {
-    if (hasChecked.current) return;
     if (!airline) return;
 
     const day = airline.day;
+    const cash = airline.cash ?? 0;
     const activeRoutes = routes.filter((r) => r.active).length;
-    const netWorth = Math.max(0, airline.cash - airline.loan);
-    const startCash = airline.loan; // loan = starting cash at game start
 
-    // Must be on a positive milestone day
-    const isMilestoneDay = DAY_MILESTONES.includes(day);
-    if (!isMilestoneDay) return;
-
-    // Must be actually playing and succeeding
+    // Minimum bar — player must be genuinely playing and solvent
+    if (day < 7) return;
     if (activeRoutes < 2) return;
-    if (netWorth <= startCash) return; // hasn't grown cash yet
+    if (cash <= 0) return;
 
-    // Bonus trigger: just completed their first mission
-    // (check separately so it can fire on any day)
+    const isMilestoneDay = DAY_MILESTONES.includes(day);
     const justCompletedMission = missionsCompleted >= 1;
-    const shouldTry = isMilestoneDay || justCompletedMission;
-    if (!shouldTry) return;
 
-    hasChecked.current = true;
+    // Either condition independently qualifies —
+    // previously justCompletedMission was unreachable because
+    // the milestone guard returned early before it was evaluated
+    if (!isMilestoneDay && !justCompletedMission) return;
 
-    const tryPrompt = async () => {
-      try {
-        const already = await AsyncStorage.getItem(RATE_US_KEY);
-        if (already) return;
+    // hasChecked is now inside tryShowPrompt (AsyncStorage flag) —
+    // this allows re-evaluation on subsequent milestone days
+    // in case the first attempt failed silently
+    tryShowPrompt();
 
-        // Mark shown BEFORE requesting — prevents double-prompt
-        await AsyncStorage.setItem(RATE_US_KEY, String(Date.now()));
-
-        // 3s delay — let the current moment settle (don't interrupt gameplay)
-        setTimeout(async () => {
-          try {
-            const available =
-              StoreReview && (await StoreReview.isAvailableAsync());
-            if (available) {
-              await StoreReview.requestReview();
-            } else {
-              // Native prompt unavailable — open Play Store directly
-              await openPlayStorePage();
-            }
-          } catch {}
-        }, 3000);
-      } catch {}
-    };
-
-    tryPrompt();
-  }, [airline?.day, missionsCompleted]);
+    // routes included — was missing, causing stale activeRoutes count
+  }, [airline?.day, airline?.cash, missionsCompleted, routes]);
 }

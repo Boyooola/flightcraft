@@ -12,6 +12,7 @@
  */
 
 import { gameSounds } from "@/hooks/useGameSounds";
+import { ResolvedChoice } from "@/lib/choiceEvents";
 import {
   CASH_RESERVE_AFTER_BUY,
   computePaxCeiling,
@@ -27,7 +28,7 @@ import { fmtCash } from "@/lib/revenue";
 import { supabase } from "@/lib/supabase";
 import type { Airport, Demand, HubTier, OwnedPlane, PlaneModel } from "@/store";
 import { useGameStore } from "@/store";
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 
 // ─────────────────────────────────────────────────────────────────
 // BUY HUB
@@ -769,6 +770,8 @@ export function useSaveAirlineDay() {
 
     const { earnedAchievements, missionsCompleted } = store();
 
+    console.log("hubs", hubs);
+
     await supabase
       .from("airlines")
       .update({
@@ -814,6 +817,7 @@ export function useSaveAirlineDay() {
 
     // Sync presence — upsert all rows
     if (presence.length > 0) {
+      console.log("presence", presence);
       await supabase.from("airport_presence").upsert(
         presence
           .filter((p) => !p.id.startsWith("presence-")) // skip optimistic-only rows
@@ -847,27 +851,36 @@ export function useSaveAirlineDay() {
 // ─────────────────────────────────────────────────────────────────
 
 export function useLoadPresence() {
-  const store = useGameStore.getState;
+  const airlineId = useGameStore((s) => s.airline?.id);
 
-  return useCallback(async () => {
-    const { airline, setPresence } = store();
-    if (!airline) return;
+  useEffect(() => {
+    if (!airlineId) return;
 
-    const { data, error } = await supabase
-      .from("airport_presence")
-      .select("id, airport_iata, total_pax_delivered")
-      .eq("airline_id", airline.id);
+    const load = async () => {
+      const { data, error } = await supabase
+        .from("airport_presence")
+        .select("id, airport_iata, total_pax_delivered")
+        .eq("airline_id", airlineId);
 
-    if (error || !data) return;
+      if (error || !data) {
+        console.warn(
+          "[useLoadPresence] failed to load presence:",
+          error?.message,
+        );
+        return;
+      }
 
-    setPresence(
-      data.map((row) => ({
-        id: row.id,
-        airport_iata: row.airport_iata,
-        total_pax_delivered: row.total_pax_delivered,
-      })),
-    );
-  }, []);
+      useGameStore.getState().setPresence(
+        data.map((row) => ({
+          id: row.id,
+          airport_iata: row.airport_iata,
+          total_pax_delivered: row.total_pax_delivered,
+        })),
+      );
+    };
+
+    load();
+  }, [airlineId]);
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -1035,6 +1048,8 @@ export function useSellPlane() {
         setOwnedPlanes,
         earnCash,
         addLedgerEntries,
+        setSelectedPlaneGroup,
+        selectedPlaneGroup,
       } = store();
       if (!airline) return { error: "No airline found" };
 
@@ -1048,6 +1063,9 @@ export function useSellPlane() {
 
       // Optimistic update
       setOwnedPlanes(ownedPlanes.filter((p) => p.id !== planeId));
+      setSelectedPlaneGroup(
+        selectedPlaneGroup?.planes.filter((p) => p.id !== planeId)!,
+      );
       earnCash(salePrice);
       addLedgerEntries([
         {
@@ -1499,8 +1517,6 @@ export function useCreateCustomRoute() {
         demandToUse = syntheticDemand;
       }
 
-      gameSounds.play("routeCreate");
-
       try {
         let demandId: string;
 
@@ -1632,4 +1648,147 @@ export function useCreateCustomRoute() {
     },
     [],
   );
+}
+
+export function useLoadChoiceEventState() {
+  const airlineId = useGameStore((s) => s.airline?.id);
+
+  useEffect(() => {
+    if (!airlineId) return;
+
+    const load = async () => {
+      const { data, error } = await supabase
+        .from("airlines")
+        .select("choice_event_ids, active_choice_consequence")
+        .eq("id", airlineId)
+        .single();
+
+      if (error || !data) {
+        console.warn(
+          "[useLoadChoiceEventState] failed to load:",
+          error?.message,
+        );
+        return;
+      }
+
+      const store = useGameStore.getState();
+
+      // ── resolvedChoiceEventIds ───────────────────────────────
+      // Stored as a JSON array string e.g. '["pilot_overtime","storm_decision"]'
+      if (data.choice_event_ids) {
+        try {
+          const ids = JSON.parse(data.choice_event_ids);
+          if (Array.isArray(ids)) {
+            store.setResolvedChoiceEventIds(ids);
+          }
+        } catch {
+          // Malformed JSON — start fresh, non-critical
+        }
+      }
+
+      // ── activeChoiceConsequence ──────────────────────────────
+      // Stored as a JSON object string or null
+      if (data.active_choice_consequence) {
+        try {
+          const consequence: ResolvedChoice = JSON.parse(
+            data.active_choice_consequence,
+          );
+          const currentDay = store.airline?.day ?? 1;
+
+          // Only restore if the consequence hasn't already expired.
+          // If revenueMultiplierEndsDay has passed, discard it — don't
+          // silently apply a stale penalty/bonus the player forgot about.
+          const isStillActive =
+            !consequence.revenueMultiplierEndsDay ||
+            currentDay < consequence.revenueMultiplierEndsDay;
+
+          if (isStillActive) {
+            store.setActiveChoiceConsequence(consequence);
+          } else {
+            // Expired — clear it from DB too so it doesn't come back
+            await supabase
+              .from("airlines")
+              .update({ active_choice_consequence: null })
+              .eq("id", airlineId);
+          }
+        } catch {
+          // Malformed JSON — discard, non-critical
+        }
+      }
+    };
+
+    load();
+  }, [airlineId]);
+}
+
+// ─────────────────────────────────────────────────────────────────
+// SAVE — persists both fields to Supabase
+// Returns a stable callback so callers can await it
+// ─────────────────────────────────────────────────────────────────
+
+export function useSaveChoiceEventState() {
+  return useCallback(async () => {
+    const store = useGameStore.getState();
+    const airlineId = store.airline?.id;
+    if (!airlineId) return;
+
+    const resolvedIds = store.resolvedChoiceEventIds ?? [];
+    const consequence = store.activeChoiceConsequence;
+
+    // Check if consequence is still valid before saving
+    const currentDay = store.airline?.day ?? 1;
+    const consequenceToSave =
+      consequence &&
+      (!consequence.revenueMultiplierEndsDay ||
+        currentDay < consequence.revenueMultiplierEndsDay)
+        ? consequence
+        : null;
+
+    const { error } = await supabase
+      .from("airlines")
+      .update({
+        choice_event_ids: JSON.stringify(resolvedIds),
+        active_choice_consequence: consequenceToSave
+          ? JSON.stringify(consequenceToSave)
+          : null,
+      })
+      .eq("id", airlineId);
+
+    if (error) {
+      console.warn("[useSaveChoiceEventState] failed to save:", error.message);
+    }
+  }, []);
+}
+
+// ─────────────────────────────────────────────────────────────────
+// AUTO-SAVE — subscribes to store changes and saves automatically
+// Mount this once at the game screen level alongside other loaders.
+// Fires whenever resolvedChoiceEventIds or activeChoiceConsequence change.
+// ─────────────────────────────────────────────────────────────────
+
+export function useAutoSaveChoiceEventState() {
+  const save = useSaveChoiceEventState();
+
+  useEffect(() => {
+    // Subscribe to resolvedChoiceEventIds changes
+    const unsubIds = useGameStore.subscribe(
+      (s) => s.resolvedChoiceEventIds,
+      () => {
+        save();
+      },
+    );
+
+    // Subscribe to activeChoiceConsequence changes
+    const unsubConsequence = useGameStore.subscribe(
+      (s) => s.activeChoiceConsequence,
+      () => {
+        save();
+      },
+    );
+
+    return () => {
+      unsubIds();
+      unsubConsequence();
+    };
+  }, [save]);
 }

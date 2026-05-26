@@ -7,6 +7,7 @@
 
 import type { DailyEvent } from "@/hooks/useDailyEvents";
 import type { AIAirline } from "@/lib/AIAirline";
+import { ChoiceEvent, ResolvedChoice } from "@/lib/choiceEvents";
 import type { AppliedDemandWave } from "@/lib/demandWaves";
 import type { GlobalContractState } from "@/lib/globalContracts";
 import type { Mission } from "@/lib/missions";
@@ -241,6 +242,12 @@ export interface GameStore {
   routeCreationMode: boolean;
   creationWaypoints: Airport[];
 
+  // Choice events
+  pendingChoiceEvent: ChoiceEvent | null;
+  activeChoiceConsequence: ResolvedChoice | null;
+  resolvedChoiceEventIds: string[]; // prevents repeat events
+  speedBeforeChoice: GameSpeed; // restores speed after choice
+
   // ── Actions ───────────────────────────────────────────────────
 
   // Load
@@ -271,6 +278,7 @@ export interface GameStore {
   resetWeeklyProgress: (weekNumber: number) => void;
   setAirline: (airline: AirlineConfig) => void;
   updateAirline: (patch: Partial<AirlineConfig>) => void;
+  setSelectedPlaneGroup: (planes: OwnedPlane[]) => void;
 
   resetTodayCash: (todayCash: number) => void;
   setRouteEarnings: (earnings: Record<string, number>) => void;
@@ -339,6 +347,13 @@ export interface GameStore {
   getPlaneById: (id: string) => PlaneModel | undefined;
   getHubByIata: (iata: string) => OwnedHub | undefined;
   getUnassignedPlanes: () => OwnedPlane[];
+
+  setPendingChoiceEvent: (event: ChoiceEvent | null) => void;
+  setActiveChoiceConsequence: (resolved: ResolvedChoice | null) => void;
+  pauseForChoice: () => void;
+  resumeAfterChoice: () => void;
+  updatePlaneCondition: (planeId: string, newCondition: number) => void;
+  setResolvedChoiceEventIds: (ids: string[]) => void;
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -403,6 +418,10 @@ export const useGameStore = create<GameStore>()(
       pendingDemand: null,
       routeCreationMode: false,
       creationWaypoints: [],
+      pendingChoiceEvent: null,
+      activeChoiceConsequence: null,
+      resolvedChoiceEventIds: [],
+      speedBeforeChoice: 1,
 
       // ── Load ─────────────────────────────────────────────────────
       setLoadStep: (key, status, error) =>
@@ -904,6 +923,21 @@ export const useGameStore = create<GameStore>()(
           "startRouteCreation",
         ),
 
+      setSelectedPlaneGroup(planes) {
+        set(
+          (s) => ({
+            selectedPlaneGroup: s.selectedPlaneGroup
+              ? {
+                  ...s.selectedPlaneGroup,
+                  planes,
+                }
+              : null,
+          }),
+          false,
+          "setSelectedPlaneGroup",
+        );
+      },
+
       addWaypoint: (airport) =>
         set(
           (s) => {
@@ -953,6 +987,61 @@ export const useGameStore = create<GameStore>()(
         const assignedIds = new Set(get().routes.map((r) => r.plane.id));
         return get().ownedPlanes.filter((p) => !assignedIds.has(p.id));
       },
+      setPendingChoiceEvent: (event) =>
+        set({ pendingChoiceEvent: event }, false, "setPendingChoiceEvent"),
+
+      setActiveChoiceConsequence: (resolved) =>
+        set(
+          { activeChoiceConsequence: resolved },
+          false,
+          "setActiveChoiceConsequence",
+        ),
+
+      // Pauses the game and remembers speed so we can restore it
+      pauseForChoice: () =>
+        set(
+          (s) => ({
+            speedBeforeChoice: s.airline?.speed ?? 1,
+            airline: s.airline ? { ...s.airline, speed: 0 } : null,
+          }),
+          false,
+          "pauseForChoice",
+        ),
+
+      // Restores speed and records the resolved event ID
+      resumeAfterChoice: () =>
+        set(
+          (s) => ({
+            airline: s.airline
+              ? { ...s.airline, speed: s.speedBeforeChoice ?? 1 }
+              : null,
+            resolvedChoiceEventIds: s.pendingChoiceEvent
+              ? [...(s.resolvedChoiceEventIds ?? []), s.pendingChoiceEvent.id]
+              : (s.resolvedChoiceEventIds ?? []),
+            pendingChoiceEvent: null,
+          }),
+          false,
+          "resumeAfterChoice",
+        ),
+
+      // Update a single plane's condition
+      updatePlaneCondition: (planeId, newCondition) =>
+        set(
+          (s) => ({
+            ownedPlanes: s.ownedPlanes.map((p) =>
+              p.id === planeId ? { ...p, condition: newCondition } : p,
+            ),
+          }),
+          false,
+          "updatePlaneCondition",
+        ),
+
+      setResolvedChoiceEventIds: (ids) =>
+        set(
+          { resolvedChoiceEventIds: ids },
+          false,
+          "setResolvedChoiceEventIds",
+        ),
     })),
     { name: "FlightcraftStore" },
   ),
@@ -1051,3 +1140,10 @@ export const useAirportPresence = (iata: string | undefined) =>
         0)
       : 0,
   );
+export const usePendingChoiceEvent = () =>
+  useGameStore((s) => s.pendingChoiceEvent);
+
+export const useActiveChoiceConsequence = () =>
+  useGameStore((s) => s.activeChoiceConsequence);
+export const useResolvedChoiceEventIds = () =>
+  useGameStore((s) => s.resolvedChoiceEventIds);

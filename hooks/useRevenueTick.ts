@@ -7,6 +7,12 @@
  * This hook runs once when the day changes: it snapshots yesterday's moved
  * passengers, writes the summary ledger, applies loan drag, emits warnings,
  * spawns new demand, resets daily pax, and persists.
+ *
+ * Choice event change (v2):
+ *   - Reads store.activeChoiceConsequence for a lingering revenue multiplier
+ *   - Multiplied into revMultiplier per route alongside eventMultiplier
+ *   - Expires automatically when day >= revenueMultiplierEndsDay
+ *     (expiry is handled in useDailyEvents subscriber, not here)
  */
 
 import { submitNetWorth } from "@/hooks/usePlayGames";
@@ -185,8 +191,41 @@ export function useRevenueTick() {
       );
     });
 
+    // ── Revenue multipliers ───────────────────────────────────────
+    // eventMultiplier:  today's passive daily event (existing)
+    // choiceMultiplier: lingering effect from a player choice decision
+    //                   expires when day >= revenueMultiplierEndsDay
     const eventMultiplier = store.dailyEvent?.revenueMultiplier ?? 1.0;
+
+    const activeChoiceConsequence = store.activeChoiceConsequence;
+    const choiceMultiplier =
+      activeChoiceConsequence?.revenueMultiplier != null &&
+      activeChoiceConsequence?.revenueMultiplierEndsDay != null &&
+      airline.day < activeChoiceConsequence.revenueMultiplierEndsDay
+        ? activeChoiceConsequence.revenueMultiplier
+        : 1.0;
+
+    // Combined — both apply independently so they stack correctly.
+    // e.g. eventMultiplier 1.2 × choiceMultiplier 0.8 = 0.96 net
+    const globalRevMul = eventMultiplier * choiceMultiplier;
+
     const aiAirlines = store.aiAirlines;
+
+    // Log the choice multiplier to ledger if it's active and non-trivial
+    if (choiceMultiplier !== 1.0 && activeChoiceConsequence) {
+      const daysLeft =
+        (activeChoiceConsequence.revenueMultiplierEndsDay ?? 0) - airline.day;
+      const sign = choiceMultiplier > 1 ? "+" : "";
+      const pct = Math.round((choiceMultiplier - 1) * 100);
+      entries.push({
+        id: `choice-mul-${airline.day}`,
+        day: airline.day,
+        type: "event",
+        label: `🎯 Choice effect: ${sign}${pct}% revenue · ${daysLeft} day${daysLeft !== 1 ? "s" : ""} left`,
+        amount: 0,
+        route_id: null,
+      });
+    }
 
     // Trust = fill-rate based delta clamped by trust_floor.
     // Fill rate = player moved pax / total demand pax at this hub.
@@ -264,12 +303,35 @@ export function useRevenueTick() {
       if (deliveredPax <= 0) stalledRouteCount++;
 
       // Accumulate presence for the destination airport
+      // For connecting routes, also credit the via (stopover) airport
+      // with the passengers who got off there.
       if (deliveredPax > 0) {
-        const destIata = demand.dest.iata;
-        presencePaxByIata.set(
-          destIata,
-          (presencePaxByIata.get(destIata) ?? 0) + deliveredPax,
-        );
+        if (route.via_iata && (route.via_pax_ratio ?? 0) > 0) {
+          // Connecting route: split pax between via stop and final dest
+          const viaPax = Math.round(deliveredPax * route.via_pax_ratio!);
+          const destPax = deliveredPax - viaPax;
+
+          // Via airport gets the dropoff pax
+          if (viaPax > 0) {
+            presencePaxByIata.set(
+              route.via_iata,
+              (presencePaxByIata.get(route.via_iata) ?? 0) + viaPax,
+            );
+          }
+          // Final destination gets the through pax
+          if (destPax > 0) {
+            presencePaxByIata.set(
+              demand.dest.iata,
+              (presencePaxByIata.get(demand.dest.iata) ?? 0) + destPax,
+            );
+          }
+        } else {
+          // Direct route: all pax credited to the destination
+          presencePaxByIata.set(
+            demand.dest.iata,
+            (presencePaxByIata.get(demand.dest.iata) ?? 0) + deliveredPax,
+          );
+        }
       }
 
       const routeCrowding = crowdingByHub.get(route.hub_iata);
@@ -288,7 +350,8 @@ export function useRevenueTick() {
         demand.dest.iata,
       );
 
-      const revMultiplier = crowdMultiplier * eventMultiplier * marketShare;
+      // globalRevMul now includes both eventMultiplier and choiceMultiplier
+      const revMultiplier = crowdMultiplier * globalRevMul * marketShare;
       const routeDist = route.total_dist_nm ?? demand.dist_nm;
       const plane = route.plane.plane_model;
       const res = calcRouteRevenue({
@@ -589,6 +652,21 @@ export function useRevenueTick() {
       else if (level === "crisis") crisisHubs++;
     });
 
+    const choiceEffectSummary =
+      choiceMultiplier !== 1.0 &&
+      activeChoiceConsequence?.revenueMultiplierEndsDay
+        ? (() => {
+            const pct = Math.round((choiceMultiplier - 1) * 100);
+            const daysLeft =
+              activeChoiceConsequence.revenueMultiplierEndsDay - airline.day;
+            return {
+              pctLabel: pct >= 0 ? `+${pct}%` : `${pct}%`,
+              daysLeft: Math.max(0, daysLeft),
+              color: pct >= 0 ? "#22c55e" : "#ef4444",
+            };
+          })()
+        : null;
+
     emitDaySummaryToast({
       id: `day-summary-${airline.day}`,
       day: airline.day,
@@ -606,6 +684,7 @@ export function useRevenueTick() {
       busyHubs: busyCount,
       overcrowdedHubs: overcrowdedCount,
       crisisHubs: crisisHubs,
+      choiceEffect: choiceEffectSummary,
     });
 
     // Seasonal note — shown once at start of each new month (every ~30 days)
