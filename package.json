@@ -20,7 +20,7 @@
     "@rnmapbox/maps": "^10.3.0",
     "@sentry/react-native": "~7.2.0",
     "@supabase/supabase-js": "^2.104.0",
-    "expo": "~54.0.34",
+    "expo": "~57.0.12",
     "expo-asset": "~12.0.13",
     "expo-audio": "~1.1.1",
     "expo-constants": "~18.0.13",
