@@ -38,12 +38,15 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+          cache: gradle
 
       # ----------------------------
       # 🤖 ANDROID SDK
       # ----------------------------
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
 
       # ----------------------------
       # 📦 INSTALL DEPENDENCIES
@@ -58,12 +61,11 @@ jobs:
         run: chmod +x android/gradlew
 
       # ----------------------------
-      # 🧹 CLEAN (IMPORTANT)
+      # 🧹 CLEAN ANDROID BUILD
       # ----------------------------
       - name: Clean Android build
-        run: |
-          cd android
-          ./gradlew clean
+        working-directory: android
+        run: ./gradlew clean --no-daemon
 
       # ----------------------------
       # 🔐 VERIFY KEYSTORE
@@ -77,6 +79,9 @@ jobs:
       # ----------------------------
       # 🔐 SET SIGNING PROPERTIES
       # ----------------------------
+      # Uncomment this section if your Gradle configuration
+      # expects these values in gradle.properties.
+      #
       # - name: Set Gradle signing properties
       #   run: |
       #     echo "MYAPP_UPLOAD_STORE_PASSWORD=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" >> android/gradle.properties
@@ -88,9 +93,8 @@ jobs:
       # ----------------------------
       - name: Build Dev APK
         if: github.ref_name == 'dev'
-        run: |
-          cd android
-          ./gradlew assembleDebug
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon
 
       - name: Upload Dev APK
         if: github.ref_name == 'dev'
@@ -98,15 +102,15 @@ jobs:
         with:
           name: dev-apk
           path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
 
       # ----------------------------
       # 🚀 PRODUCTION BUILD (AAB)
       # ----------------------------
       - name: Build Release AAB
         if: github.ref_name == 'master'
-        run: |
-          cd android
-          ./gradlew bundleRelease
+        working-directory: android
+        run: ./gradlew bundleRelease --no-daemon
 
       - name: Upload AAB
         if: github.ref_name == 'master'
@@ -114,3 +118,4 @@ jobs:
         with:
           name: release-aab
           path: android/app/build/outputs/bundle/release/*.aab
+          if-no-files-found: error
