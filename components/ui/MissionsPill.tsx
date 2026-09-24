@@ -1,22 +1,29 @@
 /**
- * components/ui/MissionsPill.tsx
- *
- * Worldwide Rush-style mission pill.
- *
- * Positioned below the taller 2-row TopHUD.
+ * One-tap access to the daily dispatch board with live mission readiness.
  */
 
-import { Colors, Radius, Spacing } from "@/constants/theme";
+import {
+  Colors,
+  MIN_TOUCH,
+  Palette,
+  Radius,
+  Shadow,
+  Spacing,
+  Typography,
+} from "@/constants/theme";
+import { useHaptics } from "@/hooks/useHaptics";
 import { useHudHeight } from "@/hooks/useSheetLayout";
 import type { Mission } from "@/lib/missions";
+import type { Demand, OwnedHub, Route } from "@/store";
 import {
-  useAirline,
+  useActiveSheet,
   useBoughtPlaneToday,
   useDailyMissions,
   useDemands,
   useGameStore,
   useHubs,
   useRouteCreationActive,
+  useRouteEarnings,
   useRoutes,
 } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
@@ -24,80 +31,77 @@ import { useMemo } from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
 const FLOAT_GAP = Spacing.sm;
-const PILL_HEIGHT = 36;
+const PILL_HEIGHT = 44;
 
-function computeLiveComplete(
-  mission: Mission,
-  ctx: {
-    demands: any[];
-    routes: any[];
-    hubs: any[];
-    loan: number;
-    ledger: any[];
-    day: number;
-    boughtPlane: boolean;
-  },
-): boolean {
+interface LiveMissionContext {
+  demands: Demand[];
+  routes: Route[];
+  hubs: OwnedHub[];
+  loan: number;
+  routeEarnings: Record<string, number>;
+  boughtPlane: boolean;
+}
+
+function isMissionReady(mission: Mission, context: LiveMissionContext) {
   if (mission.completed) return true;
 
-  const t = mission.target;
+  const target = mission.target;
 
   switch (mission.type) {
     case "route_create":
-      if (t.originIata && t.destIata) {
-        return ctx.routes.some(
-          (r) =>
-            r.active &&
-            r.demand.origin.iata === t.originIata &&
-            r.demand.dest.iata === t.destIata,
+      if (target.originIata && target.destIata) {
+        return context.routes.some(
+          (route) =>
+            route.active &&
+            route.demand.origin.iata === target.originIata &&
+            route.demand.dest.iata === target.destIata,
         );
       }
-      return ctx.routes.some((r) => r.active && r.demand.haul === t.haul);
+      return context.routes.some(
+        (route) => route.active && route.demand.haul === target.haul,
+      );
 
     case "pax_carry": {
-      const moved = ctx.demands.reduce(
-        (sum, d) => sum + (d.delivered_pax_today ?? 0),
+      const moved = context.demands.reduce(
+        (total, demand) => total + (demand.delivered_pax_today ?? 0),
         0,
       );
-      return moved >= (t.paxTarget ?? 0);
+      return moved >= (target.paxTarget ?? 0);
     }
 
     case "revenue_earn": {
-      const earned = ctx.ledger
-        .filter(
-          (e) =>
-            e.day === ctx.day &&
-            e.type === "revenue" &&
-            !e.label?.startsWith("Mission:"),
-        )
-        .reduce((sum, e) => sum + e.amount, 0);
-
-      return earned >= (t.revenueTarget ?? 0);
+      const earned = Object.values(context.routeEarnings).reduce(
+        (total, amount) => total + amount,
+        0,
+      );
+      return earned >= (target.revenueTarget ?? 0);
     }
 
     case "trust_grow": {
-      const hub = ctx.hubs.find((h) => h.airport.iata === t.hubIata);
-      return hub ? hub.trust >= (t.trustTarget ?? 0) : false;
+      const hub = context.hubs.find(
+        (item) => item.airport.iata === target.hubIata,
+      );
+      return (hub?.trust ?? 0) >= (target.trustTarget ?? 0);
     }
 
     case "loan_repay":
-      return ctx.loan <= 0;
+      return context.loan <= 0;
 
     case "fill_rate":
-      return ctx.demands.some((d) => {
-        if (d.base_pax_day <= 0) return false;
-        return (
-          ((d.delivered_pax_today ?? 0) / d.base_pax_day) * 100 >=
-          (t.fillTarget ?? 0)
-        );
+      return context.demands.some((demand) => {
+        if (demand.base_pax_day <= 0) return false;
+        const fill =
+          ((demand.delivered_pax_today ?? 0) / demand.base_pax_day) * 100;
+        return fill >= (target.fillTarget ?? 0);
       });
 
     case "plane_buy":
-      return ctx.boughtPlane;
+      return context.boughtPlane;
 
-    case "no_crowding":
+    // These two missions are intentionally judged when the day closes.
     case "clear_crowding":
-      return mission.completed;
+    case "no_crowding":
+      return false;
 
     default:
       return false;
@@ -105,84 +109,84 @@ function computeLiveComplete(
 }
 
 export default function MissionsPill() {
-  const airline = useAirline();
   const missions = useDailyMissions();
-  const isCreating = useRouteCreationActive();
-  const openSheet = useGameStore((s) => s.openSheet);
-  const hudH = useHudHeight();
-
   const demands = useDemands();
   const routes = useRoutes();
   const hubs = useHubs();
-  const loan = useGameStore((s) => s.airline?.loan ?? 0);
+  const routeEarnings = useRouteEarnings();
   const boughtPlane = useBoughtPlaneToday();
-  const ledger = useGameStore((s) => s.ledger);
-  const day = useGameStore((s) => s.airline?.day ?? 1);
+  const isCreating = useRouteCreationActive();
+  const activeSheet = useActiveSheet();
+  const loan = useGameStore((state) => state.airline?.loan ?? 0);
+  const openSheet = useGameStore((state) => state.openSheet);
+  const hudHeight = useHudHeight();
+  const haptics = useHaptics();
 
-  const liveCount = useMemo(() => {
-    return missions.filter((mission) =>
-      computeLiveComplete(mission, {
-        demands,
-        routes,
-        hubs,
-        loan,
-        ledger,
-        day,
-        boughtPlane,
-      }),
-    ).length;
-  }, [missions, demands, routes, hubs, loan, ledger, day, boughtPlane]);
+  const readyCount = useMemo(
+    () =>
+      missions.filter((mission) =>
+        isMissionReady(mission, {
+          demands,
+          routes,
+          hubs,
+          loan,
+          routeEarnings,
+          boughtPlane,
+        }),
+      ).length,
+    [boughtPlane, demands, hubs, loan, missions, routeEarnings, routes],
+  );
 
-  if (isCreating || missions.length === 0) return null;
+  if (activeSheet || isCreating || missions.length === 0) return null;
 
-  const color = airline?.color ?? Colors.sky;
   const total = missions.length;
-  const allDone = liveCount >= total;
-  const accent = allDone ? "#22c55e" : color;
+  const allReady = readyCount >= total;
+  const accent = allReady ? Colors.green : Colors.sky;
+  const progress = `${Math.round((readyCount / total) * 100)}%` as const;
+
+  const openMissions = () => {
+    haptics.tap();
+    openSheet("missions");
+  };
 
   return (
     <TouchableOpacity
-      style={[
-        s.pill,
-        {
-          top: hudH + FLOAT_GAP,
-          borderColor: accent + "55",
-          backgroundColor: allDone ? "#22c55e18" : "rgba(8,15,30,0.94)",
-        },
-      ]}
-      onPress={() => openSheet("missions")}
-      activeOpacity={0.88}
+      accessibilityHint="Opens the daily mission dispatch board"
+      accessibilityLabel={`Daily missions. ${readyCount} of ${total} ready.`}
+      accessibilityRole="button"
+      activeOpacity={0.78}
+      onPress={openMissions}
+      style={[styles.pill, { top: hudHeight + FLOAT_GAP }]}
     >
-      <View style={[s.iconWrap, { backgroundColor: accent + "18" }]}>
+      <View
+        style={[
+          styles.icon,
+          { backgroundColor: allReady ? Palette.greenSoft : Palette.blueSoft },
+        ]}
+      >
         <Ionicons
-          name={allDone ? "checkmark-circle" : "flash-outline"}
-          size={13}
+          name={allReady ? "checkmark" : "flag-outline"}
+          size={18}
           color={accent}
         />
       </View>
 
-      <View style={s.body}>
-        <Text style={[s.label, { color: accent }]} numberOfLines={1}>
-          {allDone ? "All done!" : "Missions"}
+      <View style={styles.body}>
+        <Text style={[styles.kicker, { color: accent }]}>DAILY MISSIONS</Text>
+        <Text style={styles.title} numberOfLines={1}>
+          {allReady ? "Ready to settle" : `${readyCount}/${total} ready`}
         </Text>
-        <Text style={s.sub}>
-          {liveCount}/{total} complete
-        </Text>
-      </View>
-
-      <View style={s.dotsRow}>
-        {Array.from({ length: total }).map((_, i) => (
+        <View style={styles.progressTrack}>
           <View
-            key={i}
             style={[
-              s.dot,
-              {
-                backgroundColor: i < liveCount ? accent : accent + "30",
-              },
+              styles.progressFill,
+              { width: progress, backgroundColor: accent },
             ]}
           />
-        ))}
+        </View>
       </View>
+
+      <Ionicons name="chevron-forward" size={17} color={Colors.muted} />
     </TouchableOpacity>
   );
 }
@@ -190,58 +194,59 @@ export default function MissionsPill() {
 export const MISSIONS_PILL_HEIGHT = PILL_HEIGHT;
 export const MISSIONS_PILL_GAP = FLOAT_GAP;
 
-const s = StyleSheet.create({
+const styles = StyleSheet.create({
   pill: {
     position: "absolute",
     right: Spacing.md,
     zIndex: 30,
-    minHeight: PILL_HEIGHT,
+    minWidth: 174,
+    maxWidth: 220,
+    minHeight: Math.max(PILL_HEIGHT, MIN_TOUCH),
     flexDirection: "row",
     alignItems: "center",
-    gap: 7,
-    paddingHorizontal: Spacing.sm + 3,
-    paddingVertical: (Spacing.xs ?? 4) + 2,
-    borderRadius: Radius.full,
+    gap: Spacing.sm,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: Spacing.sm,
+    backgroundColor: Colors.panel,
     borderWidth: 1,
-    maxWidth: 220,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.32,
-    shadowRadius: 7,
-    elevation: 7,
+    borderColor: Colors.border,
+    borderRadius: Radius.lg,
+    ...Shadow.card,
   },
-  iconWrap: {
-    width: 22,
-    height: 22,
-    borderRadius: 999,
+  icon: {
+    width: 32,
+    height: 32,
+    flexShrink: 0,
     alignItems: "center",
     justifyContent: "center",
-    flexShrink: 0,
+    borderRadius: Radius.md,
   },
   body: {
-    gap: 1,
+    flex: 1,
     minWidth: 0,
   },
-  label: {
-    fontSize: 11,
-    fontWeight: "900",
-    lineHeight: 13,
-  },
-  sub: {
+  kicker: {
     fontSize: 8,
-    color: Colors.dim,
-    fontWeight: "700",
     lineHeight: 10,
+    fontWeight: Typography.weight.bold,
+    letterSpacing: 0.8,
   },
-  dotsRow: {
-    flexDirection: "row",
-    gap: 3,
-    alignItems: "center",
-    flexShrink: 0,
+  title: {
+    marginTop: Spacing.xxs,
+    color: Colors.text,
+    fontSize: 12,
+    lineHeight: 15,
+    fontWeight: Typography.weight.bold,
   },
-  dot: {
-    width: 5,
-    height: 5,
-    borderRadius: 999,
+  progressTrack: {
+    height: 3,
+    marginTop: Spacing.xs,
+    overflow: "hidden",
+    backgroundColor: Colors.inset,
+    borderRadius: Radius.full,
+  },
+  progressFill: {
+    height: "100%",
+    borderRadius: Radius.full,
   },
 });

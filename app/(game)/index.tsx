@@ -13,7 +13,6 @@ import SheetManager from "@/components/sheets/SheetManager";
 import BankruptScreen from "@/components/ui/BankruptScreen";
 import ChoiceEventModal from "@/components/ui/ChoiceEventModal";
 import DailyEventCard from "@/components/ui/DailyEventCard";
-import DaySummaryCard from "@/components/ui/DaySummaryCard";
 import GoalsOverlay from "@/components/ui/GoalsOverlay";
 import LoadingScreen from "@/components/ui/LoadingScreen";
 import MissionsPill from "@/components/ui/MissionsPill";
@@ -21,6 +20,7 @@ import RouteCreationBanner from "@/components/ui/RouteCreationBanner";
 import SeasonPill from "@/components/ui/SeasonPill";
 import SurgeIndicator from "@/components/ui/SurgeIndicator";
 import ToastStack from "@/components/ui/ToastStack";
+import { Colors } from "@/constants/theme";
 import { useAICompetition } from "@/hooks/useAICompetition";
 import { useAITick } from "@/hooks/useAITick";
 import { useAchievementChecker } from "@/hooks/useAchievementChecker";
@@ -100,7 +100,6 @@ function GameContent() {
       {phase === "playing" && <DailyEventCard />}
       {phase === "playing" && <SurgeIndicator />}
       {phase === "playing" && <SeasonPill />}
-      {phase === "playing" && <DaySummaryCard />}
       {phase === "playing" && <ToastStack />}
       {(phase === "playing" || phase === "tutorial") && <RouteCreationBanner />}
       {phase === "tutorial" && mapReady && <TutorialScreen />}
@@ -124,5 +123,5 @@ export default function GameScreen() {
 }
 
 const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: "#04090f" },
+  root: { flex: 1, backgroundColor: Colors.bg },
 });

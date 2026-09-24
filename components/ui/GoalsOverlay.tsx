@@ -1,34 +1,40 @@
 /**
- * components/ui/GoalsOverlay.tsx
- *
- * WorldWide Rush-style goals overlay.
- *
- * Positioned below the taller 2-row TopHUD and stacked under MissionsPill.
+ * Compact network-plan shortcut and long-term operations overview.
  */
 
-import { Colors, Radius, Spacing } from "@/constants/theme";
+import {
+  Colors,
+  MIN_TOUCH,
+  Palette,
+  Radius,
+  Shadow,
+  Spacing,
+  Typography,
+} from "@/constants/theme";
+import { useHaptics } from "@/hooks/useHaptics";
 import { useHudHeight } from "@/hooks/useSheetLayout";
 import { ACHIEVEMENTS } from "@/lib/achievements";
 import {
   contractDaysLeft,
   contractProgressLabel,
   contractProgressPct,
+  type GlobalContractState,
 } from "@/lib/globalContracts";
 import { fmtCash } from "@/lib/revenue";
 import {
+  useActiveSheet,
   useAirline,
   useCash,
   useDemands,
   useEarnedAchievements,
   useGlobalContract,
   useHubs,
-  useLoan,
   useOwnedPlanes,
   useRouteCreationActive,
   useRoutes,
 } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Modal,
   ScrollView,
@@ -38,35 +44,38 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { MISSIONS_PILL_GAP, MISSIONS_PILL_HEIGHT } from "./MissionsPill";
 
-const FLOAT_GAP = Spacing.sm;
-const MISSIONS_PILL_HEIGHT = 36;
-const GOAL_TOP_OFFSET = FLOAT_GAP + MISSIONS_PILL_HEIGHT + FLOAT_GAP;
+type IconName = keyof typeof Ionicons.glyphMap;
 
 interface Goal {
   id: string;
   category: string;
-  icon: string;
+  icon: IconName;
   label: string;
   current: number;
   target: number;
-  reward: string;
+  outcome: string;
   priority: number;
 }
 
-function pct(goal: Goal) {
-  return Math.min(100, Math.round((goal.current / goal.target) * 100));
+const GOAL_TOP_OFFSET = MISSIONS_PILL_GAP + MISSIONS_PILL_HEIGHT + Spacing.sm;
+
+function goalProgress(goal: Goal) {
+  if (goal.target <= 0) return 0;
+  return Math.max(
+    0,
+    Math.min(100, Math.round((goal.current / goal.target) * 100)),
+  );
 }
 
 function buildGoals(state: {
   cash: number;
-  netWorth: number;
   routes: number;
   hubs: number;
   planes: number;
-  achPoints: number;
+  achievementPoints: number;
   pendingDemands: number;
-  servedDemands: number;
   totalDemandPax: number;
   deliveredDemandPax: number;
 }): Goal[] {
@@ -74,13 +83,13 @@ function buildGoals(state: {
 
   if (state.pendingDemands > 0) {
     goals.push({
-      id: "clear-demand-slot",
+      id: "serve-next-demand",
       category: "Priority",
-      icon: "flash-outline",
-      label: "Serve one more route destination",
-      current: state.servedDemands,
-      target: state.servedDemands + 1,
-      reward: "Unlocks new demand",
+      icon: "navigate-outline",
+      label: "Serve the next demand destination",
+      current: 0,
+      target: 1,
+      outcome: "Opens capacity for new demand",
       priority: 100,
     });
   }
@@ -90,31 +99,33 @@ function buildGoals(state: {
       id: "move-waiting-pax",
       category: "Passengers",
       icon: "people-outline",
-      label: "Move waiting passengers",
+      label: "Move today’s waiting passengers",
       current: state.deliveredDemandPax,
       target: state.totalDemandPax,
-      reward: "Trust and cash",
+      outcome: "Improves trust and revenue",
       priority: 95,
     });
   }
 
-  const routeTargets = [1, 3, 5, 10, 20, 35, 50];
-  const nextRoute = routeTargets.find((t) => state.routes < t);
+  const nextRoute = [1, 3, 5, 10, 20, 35, 50].find(
+    (target) => state.routes < target,
+  );
   if (nextRoute) {
     goals.push({
       id: `routes-${nextRoute}`,
-      category: "Routes",
+      category: "Network",
       icon: "git-network-outline",
-      label: `Open ${nextRoute} active route${nextRoute !== 1 ? "s" : ""}`,
+      label: `Operate ${nextRoute} active route${nextRoute === 1 ? "" : "s"}`,
       current: state.routes,
       target: nextRoute,
-      reward: nextRoute >= 10 ? "Wider network" : "More passengers",
-      priority: 85,
+      outcome: "Expands passenger reach",
+      priority: 80,
     });
   }
 
-  const planeTargets = [1, 3, 5, 10, 20, 30];
-  const nextPlane = planeTargets.find((t) => state.planes < t);
+  const nextPlane = [1, 3, 5, 10, 20, 30].find(
+    (target) => state.planes < target,
+  );
   if (nextPlane) {
     goals.push({
       id: `planes-${nextPlane}`,
@@ -123,97 +134,168 @@ function buildGoals(state: {
       label: `Own ${nextPlane} aircraft`,
       current: state.planes,
       target: nextPlane,
-      reward: "Move more passengers",
-      priority: 75,
+      outcome: "Adds operating capacity",
+      priority: 70,
     });
   }
 
-  const hubTargets = [1, 2, 3, 5, 10];
-  const nextHub = hubTargets.find((t) => state.hubs < t);
+  const nextHub = [1, 2, 3, 5, 10].find((target) => state.hubs < target);
   if (nextHub) {
     goals.push({
       id: `hubs-${nextHub}`,
       category: "Hubs",
       icon: "business-outline",
-      label: `Own ${nextHub} hub${nextHub !== 1 ? "s" : ""}`,
+      label: `Own ${nextHub} hub${nextHub === 1 ? "" : "s"}`,
       current: state.hubs,
       target: nextHub,
-      reward: "More route destinations",
-      priority: 70,
+      outcome: "Unlocks more destinations",
+      priority: 60,
     });
   }
 
-  const cashTargets = [100_000, 500_000, 1_000_000, 5_000_000, 10_000_000];
-  const nextCash = cashTargets.find((t) => state.cash < t);
+  const nextCash = [100_000, 500_000, 1_000_000, 5_000_000, 10_000_000].find(
+    (target) => state.cash < target,
+  );
   if (nextCash) {
     goals.push({
       id: `cash-${nextCash}`,
       category: "Cash",
-      icon: "cash-outline",
-      label: `Reach ${fmtCash(nextCash)} cash`,
-      current: state.cash,
+      icon: "wallet-outline",
+      label: `Build a ${fmtCash(nextCash)} reserve`,
+      current: Math.max(0, state.cash),
       target: nextCash,
-      reward: "Buy better planes",
-      priority: 55,
+      outcome: "Funds aircraft and expansion",
+      priority: 50,
     });
   }
 
-  const achTargets = [100, 250, 500, 1000, 2000];
-  const nextAch = achTargets.find((t) => state.achPoints < t);
-  if (nextAch) {
+  const nextAchievement = [100, 250, 500, 1000, 2000].find(
+    (target) => state.achievementPoints < target,
+  );
+  if (nextAchievement) {
     goals.push({
-      id: `ach-${nextAch}`,
-      category: "Achievements",
+      id: `achievements-${nextAchievement}`,
+      category: "Milestone",
       icon: "trophy-outline",
-      label: `Earn ${nextAch} achievement points`,
-      current: state.achPoints,
-      target: nextAch,
-      reward: "Achievement milestone",
+      label: `Earn ${nextAchievement} achievement points`,
+      current: state.achievementPoints,
+      target: nextAchievement,
+      outcome: "Marks airline progress",
       priority: 40,
     });
   }
 
-  return goals.sort((a, b) => {
-    const priorityDiff = b.priority - a.priority;
-    if (priorityDiff !== 0) return priorityDiff;
-    return pct(b) - pct(a);
-  });
+  return goals
+    .sort((left, right) => {
+      const priority = right.priority - left.priority;
+      return priority || goalProgress(right) - goalProgress(left);
+    })
+    .slice(0, 5);
 }
 
-function GoalRow({ goal, color }: { goal: Goal; color: string }) {
-  const progress = pct(goal);
-  const hot = goal.category === "Priority" || goal.category === "Passengers";
-  const accent = hot ? "#22c55e" : color;
+function GoalRow({ goal }: { goal: Goal }) {
+  const progress = goalProgress(goal);
+  const priority =
+    goal.category === "Priority" || goal.category === "Passengers";
+  const accent = priority ? Colors.green : Colors.sky;
+  const surface = priority ? Palette.greenSoft : Palette.blueSoft;
+  const width = `${progress}%` as `${number}%`;
 
   return (
-    <View style={[gr.row, hot && gr.hotRow]}>
-      <View style={[gr.iconWrap, { backgroundColor: accent + "18" }]}>
-        <Ionicons name={goal.icon as any} size={15} color={accent} />
+    <View style={styles.goal}>
+      <View style={[styles.goalIcon, { backgroundColor: surface }]}>
+        <Ionicons name={goal.icon} size={17} color={accent} />
       </View>
 
-      <View style={gr.body}>
-        <View style={gr.topRow}>
-          <Text style={[gr.category, { color: accent }]}>{goal.category}</Text>
-          <Text style={[gr.pct, { color: accent }]}>{progress}%</Text>
+      <View style={styles.goalBody}>
+        <View style={styles.goalHeading}>
+          <Text style={[styles.goalCategory, { color: accent }]}>
+            {goal.category.toUpperCase()}
+          </Text>
+          <Text style={[styles.goalPercent, { color: accent }]}>
+            {progress}%
+          </Text>
         </View>
 
-        <Text style={gr.label} numberOfLines={1}>
-          {goal.label}
-        </Text>
+        <Text style={styles.goalTitle}>{goal.label}</Text>
 
-        <View style={gr.barTrack}>
+        <View style={styles.progressTrack}>
           <View
-            style={[
-              gr.barFill,
-              {
-                width: `${progress}%` as any,
-                backgroundColor: accent,
-              },
-            ]}
+            style={[styles.progressFill, { width, backgroundColor: accent }]}
           />
         </View>
 
-        <Text style={gr.reward}>{goal.reward}</Text>
+        <Text style={styles.goalOutcome}>{goal.outcome}</Text>
+      </View>
+    </View>
+  );
+}
+
+function contractColor(contract: GlobalContractState) {
+  if (contract.status === "completed") return Colors.green;
+  if (contract.status === "failed") return Colors.red;
+  return Colors.amber;
+}
+
+function ContractCard({
+  contract,
+  day,
+}: {
+  contract: GlobalContractState;
+  day: number;
+}) {
+  const progress = contractProgressPct(contract);
+  const accent = contractColor(contract);
+  const surface =
+    contract.status === "completed"
+      ? Palette.greenSoft
+      : contract.status === "failed"
+        ? Palette.redSoft
+        : Palette.orangeSoft;
+  const width = `${progress}%` as `${number}%`;
+  const status =
+    contract.status === "active"
+      ? `${contractDaysLeft(contract, day)} days left`
+      : contract.status === "completed"
+        ? "Completed"
+        : "Expired";
+
+  return (
+    <View style={[styles.contract, { borderLeftColor: accent }]}>
+      <View style={styles.contractHeading}>
+        <View style={[styles.contractIcon, { backgroundColor: surface }]}>
+          <Ionicons name={contract.icon as IconName} size={19} color={accent} />
+        </View>
+
+        <View style={styles.contractCopy}>
+          <Text style={[styles.contractKicker, { color: accent }]}>
+            GLOBAL CONTRACT
+          </Text>
+          <Text style={styles.contractTitle}>{contract.title}</Text>
+        </View>
+
+        <View style={[styles.contractStatus, { backgroundColor: surface }]}>
+          <Text style={[styles.contractStatusText, { color: accent }]}>
+            {status}
+          </Text>
+        </View>
+      </View>
+
+      <Text style={styles.contractDescription}>{contract.desc}</Text>
+
+      <View style={styles.progressTrack}>
+        <View
+          style={[styles.progressFill, { width, backgroundColor: accent }]}
+        />
+      </View>
+
+      <View style={styles.contractFooter}>
+        <Text style={styles.contractProgress}>
+          {contractProgressLabel(contract)}
+        </Text>
+        <Text style={[styles.contractPercent, { color: accent }]}>
+          {progress}%
+        </Text>
       </View>
     </View>
   );
@@ -221,242 +303,195 @@ function GoalRow({ goal, color }: { goal: Goal; color: string }) {
 
 export default function GoalsOverlay() {
   const insets = useSafeAreaInsets();
-  const hudH = useHudHeight();
+  const hudHeight = useHudHeight();
   const airline = useAirline();
   const cash = useCash();
-  const loan = useLoan();
   const routes = useRoutes();
   const hubs = useHubs();
   const planes = useOwnedPlanes();
   const demands = useDemands();
-  const earned = useEarnedAchievements();
-  const isCreating = useRouteCreationActive();
+  const earnedAchievements = useEarnedAchievements();
   const globalContract = useGlobalContract();
+  const isCreating = useRouteCreationActive();
+  const activeSheet = useActiveSheet();
+  const haptics = useHaptics();
   const [open, setOpen] = useState(false);
 
-  if (isCreating || !airline) return null;
+  useEffect(() => {
+    if (activeSheet || isCreating) setOpen(false);
+  }, [activeSheet, isCreating]);
 
-  const color = airline.color ?? Colors.sky;
-  const activeRoutes = routes.filter((r) => r.active).length;
-  const pendingDemands = demands.filter((d) => d.status === "pending");
-  const servedDemands = demands.filter((d) => d.status === "served").length;
-
+  const activeRoutes = routes.filter((route) => route.active).length;
+  const pendingDemands = demands.filter(
+    (demand) => demand.status === "pending",
+  );
   const totalDemandPax = pendingDemands.reduce(
-    (sum, d) => sum + Math.max(0, d.base_pax_day),
+    (total, demand) => total + Math.max(0, demand.base_pax_day),
     0,
   );
-
   const deliveredDemandPax = pendingDemands.reduce(
-    (sum, d) => sum + Math.max(0, d.delivered_pax_today ?? 0),
+    (total, demand) => total + Math.max(0, demand.delivered_pax_today ?? 0),
     0,
   );
+  const achievementPoints = ACHIEVEMENTS.filter(
+    (achievement) => earnedAchievements[achievement.id] !== undefined,
+  ).reduce((total, achievement) => total + achievement.points, 0);
 
-  const achPoints = ACHIEVEMENTS.filter(
-    (a) => earned[a.id] !== undefined,
-  ).reduce((sum, a) => sum + a.points, 0);
+  const goals = useMemo(
+    () =>
+      buildGoals({
+        cash,
+        routes: activeRoutes,
+        hubs: hubs.length,
+        planes: planes.length,
+        achievementPoints,
+        pendingDemands: pendingDemands.length,
+        totalDemandPax,
+        deliveredDemandPax,
+      }),
+    [
+      achievementPoints,
+      activeRoutes,
+      cash,
+      deliveredDemandPax,
+      hubs.length,
+      pendingDemands.length,
+      planes.length,
+      totalDemandPax,
+    ],
+  );
 
-  const goals = buildGoals({
-    cash,
-    netWorth: Math.max(0, cash - loan),
-    routes: activeRoutes,
-    hubs: hubs.length,
-    planes: planes.length,
-    achPoints,
-    pendingDemands: pendingDemands.length,
-    servedDemands,
-    totalDemandPax,
-    deliveredDemandPax,
-  });
+  const nextGoal = goals[0] ?? null;
+  if (!airline || (!nextGoal && !globalContract)) return null;
 
-  const nextGoal = goals[0];
-  if (!nextGoal) return null;
+  const cardProgress = globalContract
+    ? contractProgressPct(globalContract)
+    : nextGoal
+      ? goalProgress(nextGoal)
+      : 0;
+  const cardLabel = globalContract?.title ?? nextGoal?.label ?? "Network plan";
+  const cardAccent = globalContract
+    ? contractColor(globalContract)
+    : Colors.sky;
 
-  const nextPct = pct(nextGoal);
-  const activeContract =
-    globalContract?.status === "active" ? globalContract : null;
-  const contractPct = activeContract ? contractProgressPct(activeContract) : 0;
-  const pillPctText = activeContract ? `${contractPct}%` : `${nextPct}%`;
-  const pillLabel = activeContract ? activeContract.title : nextGoal.label;
+  const openPlan = () => {
+    haptics.tap();
+    setOpen(true);
+  };
+
+  const closePlan = () => {
+    haptics.tap();
+    setOpen(false);
+  };
 
   return (
     <>
-      <TouchableOpacity
-        style={[
-          s.pill,
-          {
-            top: hudH + GOAL_TOP_OFFSET,
-            borderColor: color + "55",
-          },
-        ]}
-        onPress={() => setOpen(true)}
-        activeOpacity={0.88}
-      >
-        <View style={[s.pulseDot, { backgroundColor: color }]} />
-        <Text style={[s.pillPct, { color }]}>{pillPctText}</Text>
-        <Text style={s.pillLabel} numberOfLines={1}>
-          {pillLabel}
-        </Text>
-      </TouchableOpacity>
+      {!activeSheet && !isCreating ? (
+        <TouchableOpacity
+          accessibilityHint="Opens long-term goals and global contracts"
+          accessibilityLabel={`Network plan. ${cardLabel}. ${cardProgress} percent complete.`}
+          accessibilityRole="button"
+          activeOpacity={0.78}
+          onPress={openPlan}
+          style={[styles.pill, { top: hudHeight + GOAL_TOP_OFFSET }]}
+        >
+          <View
+            style={[styles.pillIcon, { backgroundColor: Palette.orangeSoft }]}
+          >
+            <Ionicons name="compass-outline" size={17} color={cardAccent} />
+          </View>
+          <View style={styles.pillBody}>
+            <Text style={[styles.pillKicker, { color: cardAccent }]}>
+              NETWORK PLAN · {cardProgress}%
+            </Text>
+            <Text style={styles.pillLabel} numberOfLines={1}>
+              {cardLabel}
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={Colors.muted} />
+        </TouchableOpacity>
+      ) : null}
 
       <Modal
-        visible={open}
-        transparent
         animationType="slide"
-        onRequestClose={() => setOpen(false)}
+        onRequestClose={closePlan}
+        statusBarTranslucent
+        transparent
+        visible={open}
       >
-        <View style={s.modalBackdrop}>
+        <View style={styles.backdrop}>
+          <TouchableOpacity
+            accessibilityLabel="Close network plan"
+            accessibilityRole="button"
+            activeOpacity={1}
+            onPress={closePlan}
+            style={StyleSheet.absoluteFillObject}
+          />
+
           <View
+            accessibilityViewIsModal
             style={[
-              s.panel,
-              {
-                paddingBottom: insets.bottom + Spacing.lg,
-              },
+              styles.panel,
+              { paddingBottom: Math.max(insets.bottom, Spacing.md) },
             ]}
           >
-            <View style={s.panelHeader}>
-              <View style={s.panelHdrL}>
-                <Ionicons name="flash-outline" size={19} color={color} />
-                <View>
-                  <Text style={s.panelTitle}>Goals</Text>
-                  <Text style={s.panelSub}>Keep passengers moving</Text>
-                </View>
-              </View>
+            <View style={styles.handle} />
 
+            <View style={styles.header}>
+              <View style={styles.headerMark}>
+                <Ionicons name="compass-outline" size={22} color={Colors.sky} />
+              </View>
+              <View style={styles.headerCopy}>
+                <Text style={styles.headerKicker}>OPERATIONS BRIEF</Text>
+                <Text style={styles.headerTitle}>Network plan</Text>
+                <Text style={styles.headerSubtitle}>
+                  Your clearest next steps for growth
+                </Text>
+              </View>
               <TouchableOpacity
-                onPress={() => setOpen(false)}
-                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                accessibilityLabel="Close network plan"
+                accessibilityRole="button"
+                onPress={closePlan}
+                style={styles.closeButton}
               >
-                <Ionicons name="close" size={22} color={Colors.dim} />
+                <Ionicons name="close" size={21} color={Colors.text} />
               </TouchableOpacity>
             </View>
 
-            <View style={[s.statBar, { borderColor: color + "33" }]}>
-              {[
-                { label: "Demand", val: pendingDemands.length },
-                { label: "Routes", val: activeRoutes },
-                { label: "Cash", val: fmtCash(cash) },
-              ].map(({ label, val }) => (
-                <View key={label} style={s.stat}>
-                  <Text style={[s.statVal, { color }]}>{val}</Text>
-                  <Text style={s.statLbl}>{label}</Text>
-                </View>
-              ))}
+            <View style={styles.stats}>
+              <View style={styles.stat}>
+                <Text style={styles.statValue}>{pendingDemands.length}</Text>
+                <Text style={styles.statLabel}>DEMANDS</Text>
+              </View>
+              <View style={styles.statDivider} />
+              <View style={styles.stat}>
+                <Text style={styles.statValue}>{activeRoutes}</Text>
+                <Text style={styles.statLabel}>ROUTES</Text>
+              </View>
+              <View style={styles.statDivider} />
+              <View style={styles.stat}>
+                <Text style={styles.statValue}>{fmtCash(cash)}</Text>
+                <Text style={styles.statLabel}>CASH</Text>
+              </View>
             </View>
 
-            {globalContract && (
-              <View
-                style={[
-                  s.contractCard,
-                  {
-                    borderColor:
-                      globalContract.status === "completed"
-                        ? Colors.green + "44"
-                        : globalContract.status === "failed"
-                          ? Colors.red + "44"
-                          : color + "44",
-                  },
-                ]}
-              >
-                <View style={s.contractTop}>
-                  <View
-                    style={[
-                      s.contractIcon,
-                      {
-                        backgroundColor:
-                          globalContract.status === "failed"
-                            ? Colors.red + "18"
-                            : color + "18",
-                      },
-                    ]}
-                  >
-                    <Ionicons
-                      name={globalContract.icon as any}
-                      size={17}
-                      color={
-                        globalContract.status === "failed" ? Colors.red : color
-                      }
-                    />
-                  </View>
+            <ScrollView
+              contentContainerStyle={styles.scrollContent}
+              showsVerticalScrollIndicator={false}
+            >
+              {globalContract ? (
+                <>
+                  <Text style={styles.sectionLabel}>CURRENT CONTRACT</Text>
+                  <ContractCard contract={globalContract} day={airline.day} />
+                </>
+              ) : null}
 
-                  <View style={{ flex: 1 }}>
-                    <Text
-                      style={[
-                        s.contractTag,
-                        {
-                          color:
-                            globalContract.status === "completed"
-                              ? Colors.green
-                              : globalContract.status === "failed"
-                                ? Colors.red
-                                : color,
-                        },
-                      ]}
-                    >
-                      Global contract
-                    </Text>
-                    <Text style={s.contractTitle} numberOfLines={1}>
-                      {globalContract.title}
-                    </Text>
-                  </View>
-
-                  <Text
-                    style={[
-                      s.contractPct,
-                      {
-                        color:
-                          globalContract.status === "completed"
-                            ? Colors.green
-                            : globalContract.status === "failed"
-                              ? Colors.red
-                              : color,
-                      },
-                    ]}
-                  >
-                    {contractProgressPct(globalContract)}%
-                  </Text>
-                </View>
-
-                <Text style={s.contractDesc}>{globalContract.desc}</Text>
-
-                <View style={s.contractBar}>
-                  <View
-                    style={[
-                      s.contractFill,
-                      {
-                        width: `${contractProgressPct(globalContract)}%` as any,
-                        backgroundColor:
-                          globalContract.status === "completed"
-                            ? Colors.green
-                            : globalContract.status === "failed"
-                              ? Colors.red
-                              : color,
-                      },
-                    ]}
-                  />
-                </View>
-
-                <View style={s.contractFooter}>
-                  <Text style={s.contractMeta}>
-                    {contractProgressLabel(globalContract)}
-                  </Text>
-                  <Text style={s.contractMeta}>
-                    {globalContract.status === "active"
-                      ? `${contractDaysLeft(globalContract, airline.day)}d left`
-                      : globalContract.status === "completed"
-                        ? "Completed ✓"
-                        : "Failed"}
-                  </Text>
-                </View>
+              <Text style={styles.sectionLabel}>NEXT PRIORITIES</Text>
+              <View style={styles.goalList}>
+                {goals.map((goal) => (
+                  <GoalRow goal={goal} key={goal.id} />
+                ))}
               </View>
-            )}
-
-            <Text style={s.sectionHdr}>What to do next</Text>
-
-            <ScrollView showsVerticalScrollIndicator={false}>
-              {goals.map((goal) => (
-                <GoalRow key={goal.id} goal={goal} color={color} />
-              ))}
-              <View style={{ height: 20 }} />
             </ScrollView>
           </View>
         </View>
@@ -465,230 +500,302 @@ export default function GoalsOverlay() {
   );
 }
 
-const gr = StyleSheet.create({
-  row: {
-    flexDirection: "row",
-    gap: Spacing.sm,
-    paddingVertical: Spacing.sm,
-    paddingHorizontal: Spacing.xs ?? 4,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.border,
-  },
-  hotRow: {
-    backgroundColor: "rgba(34,197,94,0.035)",
-  },
-  iconWrap: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
-    alignItems: "center",
-    justifyContent: "center",
-    flexShrink: 0,
-  },
-  body: {
-    flex: 1,
-    gap: 4,
-  },
-  topRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
-  category: {
-    fontSize: 8,
-    letterSpacing: 2,
-    fontWeight: "800",
-  },
-  pct: {
-    fontSize: 10,
-    fontWeight: "800",
-  },
-  label: {
-    fontSize: 13,
-    color: Colors.text,
-    fontWeight: "700",
-  },
-  barTrack: {
-    height: 4,
-    backgroundColor: "rgba(255,255,255,.08)",
-    borderRadius: 999,
-    overflow: "hidden",
-  },
-  barFill: {
-    height: "100%",
-    borderRadius: 999,
-  },
-  reward: {
-    fontSize: 10,
-    color: Colors.dim,
-  },
-});
-
-const s = StyleSheet.create({
+const styles = StyleSheet.create({
   pill: {
     position: "absolute",
     right: Spacing.md,
     zIndex: 29,
+    minHeight: MIN_TOUCH,
+    width: 210,
     flexDirection: "row",
     alignItems: "center",
-    gap: 5,
-    minHeight: 32,
-    paddingHorizontal: Spacing.sm + 2,
-    paddingVertical: Spacing.xs + 2,
-    borderRadius: Radius.full,
+    gap: Spacing.sm,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: Spacing.xs,
+    backgroundColor: Colors.panel,
     borderWidth: 1,
-    backgroundColor: "rgba(8,15,30,0.94)",
-    maxWidth: 220,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.35,
-    shadowRadius: 7,
-    elevation: 7,
+    borderColor: Colors.border,
+    borderRadius: Radius.lg,
+    ...Shadow.card,
   },
-  pulseDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 999,
+  pillIcon: {
+    width: 32,
+    height: 32,
     flexShrink: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: Radius.md,
   },
-  pillPct: {
-    fontSize: 10,
-    fontWeight: "900",
-    flexShrink: 0,
-  },
-  pillLabel: {
-    fontSize: 9,
-    color: Colors.muted,
+  pillBody: {
     flex: 1,
-    fontWeight: "700",
     minWidth: 0,
   },
-
-  contractCard: {
-    borderRadius: Radius.xl,
-    borderWidth: 1,
-    backgroundColor: "rgba(255,255,255,0.035)",
-    padding: Spacing.md,
-    marginBottom: Spacing.md,
-    gap: Spacing.sm,
+  pillKicker: {
+    fontSize: 7,
+    lineHeight: 10,
+    fontWeight: Typography.weight.bold,
+    letterSpacing: 0.65,
   },
-  contractTop: {
+  pillLabel: {
+    marginTop: Spacing.xxs,
+    color: Colors.text,
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: Typography.weight.semibold,
+  },
+  backdrop: {
+    flex: 1,
+    justifyContent: "flex-end",
+    backgroundColor: Colors.overlay,
+  },
+  panel: {
+    maxHeight: "82%",
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.sm,
+    backgroundColor: Colors.surface,
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
+    borderTopWidth: 1,
+    borderColor: Colors.border,
+    ...Shadow.floating,
+  },
+  handle: {
+    width: 38,
+    height: 4,
+    alignSelf: "center",
+    marginBottom: Spacing.md,
+    backgroundColor: Colors.borderSection,
+    borderRadius: Radius.full,
+  },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+    marginBottom: Spacing.md,
+  },
+  headerMark: {
+    width: 44,
+    height: 44,
+    flexShrink: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: Palette.blueSoft,
+    borderRadius: Radius.md,
+  },
+  headerCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  headerKicker: {
+    color: Colors.sky,
+    fontSize: 8,
+    lineHeight: 11,
+    fontWeight: Typography.weight.bold,
+    letterSpacing: 1,
+  },
+  headerTitle: {
+    color: Colors.text,
+    fontSize: 20,
+    lineHeight: 25,
+    fontWeight: Typography.weight.bold,
+  },
+  headerSubtitle: {
+    color: Colors.muted,
+    fontSize: 11,
+    lineHeight: 15,
+  },
+  closeButton: {
+    width: MIN_TOUCH,
+    height: MIN_TOUCH,
+    flexShrink: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: Radius.full,
+  },
+  stats: {
+    minHeight: 64,
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: Spacing.lg,
+    backgroundColor: Colors.inset,
+    borderRadius: Radius.lg,
+  },
+  stat: {
+    flex: 1,
+    alignItems: "center",
+    paddingHorizontal: Spacing.xs,
+  },
+  statValue: {
+    color: Colors.text,
+    fontFamily: Typography.mono,
+    fontSize: 14,
+    lineHeight: 19,
+    fontWeight: Typography.weight.bold,
+  },
+  statLabel: {
+    marginTop: Spacing.xxs,
+    color: Colors.muted,
+    fontSize: 7,
+    lineHeight: 10,
+    fontWeight: Typography.weight.bold,
+    letterSpacing: 0.7,
+  },
+  statDivider: {
+    width: 1,
+    height: 32,
+    backgroundColor: Colors.border,
+  },
+  scrollContent: {
+    paddingBottom: Spacing.xl,
+  },
+  sectionLabel: {
+    marginBottom: Spacing.sm,
+    color: Colors.muted,
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: Typography.weight.bold,
+    letterSpacing: 1.1,
+  },
+  contract: {
+    gap: Spacing.sm,
+    marginBottom: Spacing.lg,
+    padding: Spacing.md,
+    backgroundColor: Colors.panel,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderLeftWidth: 5,
+    borderRadius: Radius.lg,
+    ...Shadow.card,
+  },
+  contractHeading: {
     flexDirection: "row",
     alignItems: "center",
     gap: Spacing.sm,
   },
   contractIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 11,
+    width: 38,
+    height: 38,
+    flexShrink: 0,
     alignItems: "center",
     justifyContent: "center",
+    borderRadius: Radius.md,
   },
-  contractTag: {
+  contractCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  contractKicker: {
     fontSize: 8,
-    letterSpacing: 1.8,
-    fontWeight: "900",
+    lineHeight: 11,
+    fontWeight: Typography.weight.bold,
+    letterSpacing: 0.8,
   },
   contractTitle: {
-    fontSize: 14,
+    marginTop: Spacing.xxs,
     color: Colors.text,
-    fontWeight: "900",
-    marginTop: 1,
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: Typography.weight.bold,
   },
-  contractPct: {
-    fontSize: 17,
-    fontWeight: "900",
+  contractStatus: {
+    flexShrink: 0,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: Spacing.xs,
+    borderRadius: Radius.full,
   },
-  contractDesc: {
-    fontSize: 11,
+  contractStatusText: {
+    fontSize: 8,
+    lineHeight: 11,
+    fontWeight: Typography.weight.bold,
+  },
+  contractDescription: {
     color: Colors.muted,
+    fontSize: 11,
     lineHeight: 16,
   },
-  contractBar: {
+  progressTrack: {
     height: 5,
-    borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,.08)",
     overflow: "hidden",
+    backgroundColor: Colors.inset,
+    borderRadius: Radius.full,
   },
-  contractFill: {
+  progressFill: {
     height: "100%",
-    borderRadius: 999,
+    borderRadius: Radius.full,
   },
   contractFooter: {
     flexDirection: "row",
+    alignItems: "center",
     justifyContent: "space-between",
     gap: Spacing.sm,
   },
-  contractMeta: {
-    fontSize: 10,
-    color: Colors.dim,
-    fontWeight: "800",
-  },
-
-  modalBackdrop: {
+  contractProgress: {
     flex: 1,
-    justifyContent: "flex-end",
-    backgroundColor: "rgba(0,0,0,0.62)",
-  },
-  panel: {
-    backgroundColor: "rgba(8,15,30,0.98)",
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    borderTopWidth: 1,
-    borderColor: Colors.border,
-    paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.lg,
-    maxHeight: "75%",
-  },
-  panelHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: Spacing.md,
-  },
-  panelHdrL: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.sm,
-  },
-  panelTitle: {
-    fontSize: 20,
-    color: Colors.text,
-    fontWeight: "800",
-  },
-  panelSub: {
-    fontSize: 10,
-    color: Colors.dim,
-    marginTop: 1,
-  },
-
-  statBar: {
-    flexDirection: "row",
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    marginBottom: Spacing.md,
-    overflow: "hidden",
-    backgroundColor: "rgba(255,255,255,0.025)",
-  },
-  stat: {
-    flex: 1,
-    alignItems: "center",
-    paddingVertical: Spacing.sm,
-  },
-  statVal: {
-    fontSize: 16,
-    fontWeight: "900",
-  },
-  statLbl: {
-    fontSize: 8,
-    color: Colors.dim,
-    letterSpacing: 1,
-    marginTop: 2,
-  },
-  sectionHdr: {
+    color: Colors.muted,
+    fontFamily: Typography.mono,
     fontSize: 9,
-    color: Colors.dim,
-    letterSpacing: 2.5,
-    marginBottom: Spacing.xs,
-    fontWeight: "800",
+  },
+  contractPercent: {
+    fontFamily: Typography.mono,
+    fontSize: 11,
+    fontWeight: Typography.weight.bold,
+  },
+  goalList: {
+    overflow: "hidden",
+    backgroundColor: Colors.panel,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.lg,
+    ...Shadow.card,
+  },
+  goal: {
+    flexDirection: "row",
+    gap: Spacing.sm,
+    padding: Spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+  },
+  goalIcon: {
+    width: 36,
+    height: 36,
+    flexShrink: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: Radius.md,
+  },
+  goalBody: {
+    flex: 1,
+    minWidth: 0,
+  },
+  goalHeading: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: Spacing.sm,
+  },
+  goalCategory: {
+    fontSize: 8,
+    lineHeight: 11,
+    fontWeight: Typography.weight.bold,
+    letterSpacing: 0.8,
+  },
+  goalPercent: {
+    fontFamily: Typography.mono,
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: Typography.weight.bold,
+  },
+  goalTitle: {
+    marginTop: Spacing.xxs,
+    color: Colors.text,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: Typography.weight.semibold,
+  },
+  goalOutcome: {
+    marginTop: Spacing.xs,
+    color: Colors.muted,
+    fontSize: 9,
+    lineHeight: 13,
   },
 });
