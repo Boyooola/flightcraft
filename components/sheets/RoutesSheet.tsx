@@ -1,5 +1,12 @@
 import { GameAlert, useGameAlert } from "@/components/ui/GameAlert";
-import { Colors, Radius, Spacing } from "@/constants/theme";
+import {
+  Colors,
+  Palette,
+  Radius,
+  Shadow,
+  Spacing,
+  Typography,
+} from "@/constants/theme";
 import { useHaptics } from "@/hooks/useHaptics";
 import { useTabBarHeight } from "@/hooks/useSheetLayout";
 import { useDeactivateRoute } from "@/hooks/useSupabaseWrite";
@@ -12,9 +19,7 @@ import { getSeasonForRoute } from "@/lib/seasons";
 import { supabase } from "@/lib/supabase";
 import type { Demand, OwnedHub, Route } from "@/store";
 import {
-  useActiveDemandWave,
   useAirline,
-  useDailyEvent,
   useDayProgress,
   useGameStore,
   useHubs,
@@ -38,12 +43,7 @@ import {
 
 type RouteFlowStatus = {
   label:
-    | "DONE"
-    | "OVERLOADED"
-    | "NEEDS HELP"
-    | "BOARDING"
-    | "FLYING"
-    | "PENDING";
+    "DONE" | "OVERLOADED" | "NEEDS HELP" | "BOARDING" | "FLYING" | "PENDING";
   color: string;
   priority: number;
   hint: string;
@@ -57,7 +57,6 @@ type RouteGroup = {
   routes: Route[];
   hub_iata: string;
   via_iata: string | null;
-  total_dist_nm: number;
   deliveredPax: number;
   targetPax: number;
   waitingPax: number;
@@ -71,8 +70,6 @@ type RouteGroup = {
   priceStrategy: PriceStrategy;
   congestionLevel: string;
   congestionMultiplier: number;
-  routeId: string;
-  currentPlaneId: string;
   viaPaxRatio: number | null;
 };
 
@@ -225,13 +222,13 @@ function routeQuality(popularity: number): {
   color: string;
 } {
   if (popularity >= 40)
-    return { stars: 5, label: "Outstanding", color: "#22c55e" };
+    return { stars: 5, label: "Outstanding", color: Colors.green };
   if (popularity >= 15)
-    return { stars: 4, label: "Great service", color: "#4ade80" };
-  if (popularity >= 0) return { stars: 3, label: "Good", color: "#94a3b8" };
+    return { stars: 4, label: "Great service", color: Colors.green };
+  if (popularity >= 0) return { stars: 3, label: "Good", color: Colors.muted };
   if (popularity >= -10)
-    return { stars: 2, label: "Needs attention", color: "#f59e0b" };
-  return { stars: 1, label: "Poor service", color: "#ef4444" };
+    return { stars: 2, label: "Needs attention", color: Colors.amber };
+  return { stars: 1, label: "Poor service", color: Colors.red };
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -299,13 +296,17 @@ function RouteGroupRow({
   );
   const condBadge =
     minCondition <= 15
-      ? { color: Colors.red, txt: `🔧 ${minCondition}%` }
+      ? { color: Colors.red, txt: `COND ${minCondition}%` }
       : minCondition <= 40
-        ? { color: Colors.amber, txt: `🔧 ${minCondition}%` }
+        ? { color: Colors.amber, txt: `COND ${minCondition}%` }
         : null;
 
   return (
     <TouchableOpacity
+      accessibilityHint="Tap for details. Long press to remove this route group."
+      accessibilityLabel={`${group.demand.origin.iata} to ${group.demand.dest.iata}, ${group.status.label}`}
+      accessibilityRole="button"
+      accessibilityState={{ expanded }}
       style={[
         rr.card,
         isProblem && rr.problem,
@@ -595,7 +596,13 @@ function HubRow({
         : Colors.amber;
 
   return (
-    <TouchableOpacity style={hr.row} onPress={onPress} activeOpacity={0.88}>
+    <TouchableOpacity
+      accessibilityLabel={`${hub.airport.iata} hub in ${hub.airport.city}, ${hub.trust}% trust`}
+      accessibilityRole="button"
+      style={hr.row}
+      onPress={onPress}
+      activeOpacity={0.78}
+    >
       <View
         style={[hr.stripe, { backgroundColor: isBusy ? crowdColor : color }]}
       />
@@ -678,8 +685,6 @@ export default function RoutesSheet() {
   // day derived once here — passed to RouteGroupRow to avoid per-row store subscriptions
   const day = useGameStore((s) => s.airline?.day ?? 1);
   const tabBarH = useTabBarHeight();
-  const dailyEvent = useDailyEvent();
-  const activeDemandWave = useActiveDemandWave();
   const closeSheet = useGameStore((s) => s.closeSheet);
   const openSheet = useGameStore((s) => s.openSheet);
   const startCreation = useGameStore((s) => s.startRouteCreation);
@@ -691,23 +696,31 @@ export default function RoutesSheet() {
   const gameAlert = useGameAlert();
 
   const color = airline?.color ?? Colors.sky;
-  const activeRoutes = routes.filter((r) => r.active);
+  const activeRoutes = useMemo(
+    () => routes.filter((route) => route.active),
+    [routes],
+  );
 
-  const hubCrowdMul = new Map<string, number>();
-  hubs.forEach((hub) => {
-    const crowding = hubCrowdingLevel(
-      hub.airport.iata,
-      liveDemands,
-      hub.airport,
-    );
-    const mul =
-      crowding?.level === "crisis"
-        ? 0.8
-        : crowding?.level === "overcrowded"
-          ? 0.9
-          : 1.0;
-    hubCrowdMul.set(hub.airport.iata, mul);
-  });
+  const hubCrowdMul = useMemo(() => {
+    const multipliers = new Map<string, number>();
+
+    hubs.forEach((hub) => {
+      const crowding = hubCrowdingLevel(
+        hub.airport.iata,
+        liveDemands,
+        hub.airport,
+      );
+      const multiplier =
+        crowding?.level === "crisis"
+          ? 0.8
+          : crowding?.level === "overcrowded"
+            ? 0.9
+            : 1.0;
+      multipliers.set(hub.airport.iata, multiplier);
+    });
+
+    return multipliers;
+  }, [hubs, liveDemands]);
 
   // ── Build + sort route groups ──────────────────────────────────
   // Priority: OVERLOADED(0) → NEEDS HELP(1) → BOARDING(2) → FLYING(3) → PENDING(4) → DONE(6)
@@ -764,7 +777,6 @@ export default function RoutesSheet() {
         routes: groupRoutes,
         hub_iata: first.hub_iata,
         via_iata: first.via_iata,
-        total_dist_nm: first.total_dist_nm ?? first.demand.dist_nm ?? 0,
         deliveredPax,
         targetPax,
         waitingPax,
@@ -776,19 +788,22 @@ export default function RoutesSheet() {
         totalReward,
         planeLabel: buildPlaneLabel(groupRoutes),
         priceStrategy,
-        utilizationLabel: "Healthy",
-        utilizationPct: 100,
         congestionLevel: hubCrowding?.level ?? "normal",
         congestionMultiplier: congestionMul,
-        routeId: first.id,
-        currentPlaneId: first.plane.id,
         viaPaxRatio: first.via_pax_ratio ?? null,
       };
     });
 
     // Sort by urgency priority ascending — most urgent first
     return groups.sort((a, b) => a.status.priority - b.status.priority);
-  }, [activeRoutes, hubs, dayProgress, liveDemands, hubCrowdMul]);
+  }, [
+    activeRoutes,
+    dayProgress,
+    hubCrowdMul,
+    hubs,
+    liveDemands,
+    routeEarnings,
+  ]);
 
   // ── Summary stats ──────────────────────────────────────────────
   const totalMoved = groupedRoutes.reduce((sum, r) => sum + r.deliveredPax, 0);
@@ -808,10 +823,6 @@ export default function RoutesSheet() {
     (r) => r.status.label === "NEEDS HELP" || r.status.label === "OVERLOADED",
   );
   const stalledCount = stalledGroups.length;
-  const clearedCount = groupedRoutes.filter(
-    (r) => r.status.label === "DONE",
-  ).length;
-
   const flowHighlight =
     stalledCount > 0 ? Colors.red : avgFlow >= 80 ? Colors.green : color;
   const summaryBorder =
@@ -931,34 +942,35 @@ export default function RoutesSheet() {
         ]}
         showsVerticalScrollIndicator={false}
       >
-        <View style={s.handle} accessibilityRole="none" />
-
-        {/* ── Header ── */}
         <View style={s.header}>
-          <View style={s.hdrL}>
-            <Ionicons name="flash-outline" size={21} color={color} />
-            <Text style={s.title}>Operations</Text>
-            {activeRoutes.length > 0 && (
-              <View
-                style={[
-                  s.badge,
-                  { backgroundColor: color + "20", borderColor: color + "44" },
-                ]}
-              >
-                <Text style={[s.badgeTxt, { color }]}>
-                  {activeRoutes.length}
-                </Text>
-              </View>
-            )}
+          <View
+            style={[
+              s.headerMark,
+              { borderColor: color, backgroundColor: color + "14" },
+            ]}
+          >
+            <Ionicons name="git-branch-outline" size={20} color={color} />
+          </View>
+          <View style={s.headerCopy}>
+            <Text style={s.kicker}>NETWORK CONTROL</Text>
+            <Text style={s.title}>Route Operations</Text>
+            <Text style={s.subtitle} numberOfLines={1}>
+              {groupedRoutes.length} corridor
+              {groupedRoutes.length === 1 ? "" : "s"} · {activeRoutes.length}{" "}
+              aircraft assigned
+            </Text>
           </View>
           <TouchableOpacity
+            accessibilityLabel="Close route operations"
+            accessibilityRole="button"
+            style={s.closeButton}
             onPress={() => {
               haptics.tap();
               closeSheet();
             }}
-            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            activeOpacity={0.68}
           >
-            <Ionicons name="close" size={22} color={Colors.dim} />
+            <Ionicons name="close" size={20} color={Colors.muted} />
           </TouchableOpacity>
         </View>
 
@@ -967,17 +979,13 @@ export default function RoutesSheet() {
           {(["routes", "hubs"] as const).map((tab) => (
             <TouchableOpacity
               key={tab}
-              style={[
-                s.seg,
-                activeTab === tab && {
-                  backgroundColor: color + "18",
-                  borderColor: color + "55",
-                },
-              ]}
+              style={[s.seg, activeTab === tab && s.segActive]}
               onPress={() => setActiveTab(tab)}
-              activeOpacity={0.8}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: activeTab === tab }}
+              activeOpacity={0.72}
             >
-              <Text style={[s.segTxt, activeTab === tab && { color }]}>
+              <Text style={[s.segTxt, activeTab === tab && s.segTxtActive]}>
                 {tab === "routes" ? "Routes" : "Hubs"}
               </Text>
             </TouchableOpacity>
@@ -1002,12 +1010,18 @@ export default function RoutesSheet() {
                   your first route will appear here.
                 </Text>
                 <TouchableOpacity
-                  style={[s.emptyBtn, { borderColor: color + "55" }]}
+                  accessibilityLabel="Start creating a route on the map"
+                  accessibilityRole="button"
+                  style={s.emptyBtn}
                   onPress={handleCreateRoute}
-                  activeOpacity={0.8}
+                  activeOpacity={0.72}
                 >
-                  <Ionicons name="map-outline" size={15} color={color} />
-                  <Text style={[s.emptyBtnText, { color }]}>Open map</Text>
+                  <Ionicons
+                    name="map-outline"
+                    size={16}
+                    color={Colors.textOnColor}
+                  />
+                  <Text style={s.emptyBtnText}>Open map</Text>
                 </TouchableOpacity>
               </View>
             ) : (
@@ -1230,65 +1244,107 @@ export default function RoutesSheet() {
 // ─────────────────────────────────────────────────────────────────
 
 const s = StyleSheet.create({
-  root: { flex: 1 },
-  content: { paddingBottom: Spacing.xxl },
-  handle: {
-    alignSelf: "center",
-    width: 40,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: "rgba(255,255,255,.12)",
-    marginBottom: Spacing.sm,
-    marginTop: Spacing.xs,
+  root: {
+    flex: 1,
+    backgroundColor: Colors.surface,
+  },
+  content: {
+    paddingTop: Spacing.xs,
+    paddingBottom: Spacing.xxl,
   },
   header: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
+    gap: Spacing.md,
     paddingHorizontal: Spacing.lg,
-    paddingBottom: Spacing.md,
+    paddingTop: Spacing.xs,
+    paddingBottom: Spacing.lg,
   },
-  hdrL: {
-    flexDirection: "row",
+  headerMark: {
+    width: 42,
+    height: 42,
     alignItems: "center",
-    gap: Spacing.sm,
+    justifyContent: "center",
+    borderWidth: 1.5,
+    borderRadius: Radius.md,
+  },
+  headerCopy: {
     flex: 1,
+    minWidth: 0,
   },
-  title: { fontSize: 20, color: Colors.text, fontWeight: "900" },
-  badge: {
-    paddingHorizontal: 9,
-    paddingVertical: 3,
-    borderRadius: Radius.full,
+  kicker: {
+    color: Colors.muted,
+    fontFamily: Typography.mono,
+    fontSize: 8,
+    fontWeight: "700",
+    letterSpacing: 1.25,
+    lineHeight: 11,
+  },
+  title: {
+    color: Colors.text,
+    fontFamily: Typography.display,
+    fontSize: 24,
+    letterSpacing: 0.3,
+    lineHeight: 27,
+  },
+  subtitle: {
+    color: Colors.muted,
+    fontSize: 10,
+    fontWeight: "500",
+    lineHeight: 14,
+  },
+  closeButton: {
+    width: 44,
+    height: 44,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: Colors.panel,
     borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.full,
   },
-  badgeTxt: { fontSize: 11, fontWeight: "900" },
 
   segWrap: {
     flexDirection: "row",
     marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.md,
-    gap: Spacing.xs ?? 4,
+    marginBottom: Spacing.lg,
+    padding: 3,
+    gap: 3,
+    backgroundColor: Colors.inset,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.md,
   },
   seg: {
     flex: 1,
+    minHeight: 42,
     alignItems: "center",
-    paddingVertical: Spacing.sm,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: "rgba(255,255,255,.025)",
+    justifyContent: "center",
+    borderRadius: Radius.sm,
   },
-  segTxt: { fontSize: 12, fontWeight: "700", color: Colors.dim },
+  segActive: {
+    backgroundColor: Colors.sky,
+  },
+  segTxt: {
+    color: Colors.muted,
+    fontFamily: Typography.mono,
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 0.4,
+  },
+  segTxtActive: {
+    color: Colors.textOnColor,
+  },
 
-  // Summary bar — flow gets flex:1.4 to dominate
   rushStats: {
     flexDirection: "row",
     marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.sm,
+    marginBottom: Spacing.md,
     borderRadius: Radius.lg,
     borderWidth: 1,
     overflow: "hidden",
-    backgroundColor: "rgba(255,255,255,.025)",
+    backgroundColor: Colors.panel,
+    ...Shadow.card,
   },
   rushDivider: {
     width: StyleSheet.hairlineWidth,
@@ -1301,17 +1357,26 @@ const s = StyleSheet.create({
     paddingVertical: Spacing.md,
     paddingHorizontal: 4,
   },
-  rushValHero: { fontSize: 20, fontWeight: "900" }, // Flow — larger
-  rushVal: { fontSize: 15, fontWeight: "900" },
+  rushValHero: {
+    fontFamily: Typography.mono,
+    fontSize: 20,
+    fontWeight: "700",
+  },
+  rushVal: {
+    fontFamily: Typography.mono,
+    fontSize: 14,
+    fontWeight: "700",
+  },
   rushLbl: {
+    color: Colors.muted,
+    fontFamily: Typography.mono,
     fontSize: 8,
-    color: Colors.dim,
     marginTop: 4,
-    fontWeight: "900",
+    fontWeight: "700",
     letterSpacing: 0.8,
+    textTransform: "uppercase",
   },
 
-  // Alert banner — includes route names
   alertBanner: {
     flexDirection: "row",
     alignItems: "flex-start",
@@ -1320,43 +1385,44 @@ const s = StyleSheet.create({
     marginBottom: Spacing.md,
     borderRadius: Radius.lg,
     borderWidth: 1,
-    borderColor: Colors.red + "33",
-    backgroundColor: Colors.red + "08",
+    borderColor: Colors.red + "40",
+    backgroundColor: Palette.redSoft,
     padding: Spacing.md,
   },
-  alertTitle: { fontSize: 12, color: Colors.red, fontWeight: "900" },
+  alertTitle: { fontSize: 12, color: Colors.red, fontWeight: "700" },
   alertRoutes: {
     fontSize: 11,
     color: Colors.red,
+    fontFamily: Typography.mono,
     fontWeight: "700",
     marginTop: 2,
     opacity: 0.75,
   },
   alertSub: {
     fontSize: 10,
-    color: Colors.dim,
+    color: Colors.muted,
     fontWeight: "500",
     marginTop: 3,
     lineHeight: 15,
   },
 
   eyebrow: {
+    color: Colors.muted,
+    fontFamily: Typography.mono,
     fontSize: 9,
-    color: Colors.dim,
-    letterSpacing: 2.5,
+    letterSpacing: 1.5,
     paddingHorizontal: Spacing.lg,
     marginBottom: 4,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   eyebrowSub: {
     fontSize: 10,
-    color: Colors.dim,
+    color: Colors.muted,
     paddingHorizontal: Spacing.lg,
     marginBottom: Spacing.sm,
     fontWeight: "500",
   },
 
-  // Route/hub list — no extra horizontal padding so stripes are flush
   routeList: { paddingHorizontal: Spacing.lg },
 
   empty: {
@@ -1366,25 +1432,34 @@ const s = StyleSheet.create({
     gap: Spacing.md,
     marginTop: Spacing.lg,
   },
-  emptyTitle: { fontSize: 18, color: Colors.text, fontWeight: "900" },
+  emptyTitle: {
+    color: Colors.text,
+    fontFamily: Typography.display,
+    fontSize: 22,
+  },
   emptySub: {
     fontSize: 12,
-    color: Colors.dim,
+    color: Colors.muted,
     textAlign: "center",
     lineHeight: 18,
     fontWeight: "500",
   },
   emptyBtn: {
+    minHeight: 44,
     flexDirection: "row",
     alignItems: "center",
     gap: Spacing.sm,
     marginTop: Spacing.sm,
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.md,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
+    backgroundColor: Colors.sky,
+    borderRadius: Radius.md,
   },
-  emptyBtnText: { fontSize: 13, fontWeight: "800" },
+  emptyBtnText: {
+    color: Colors.textOnColor,
+    fontSize: 13,
+    fontWeight: "700",
+  },
 });
 
 const hr = StyleSheet.create({
@@ -1396,10 +1471,11 @@ const hr = StyleSheet.create({
     borderColor: Colors.border,
     overflow: "hidden",
     marginBottom: Spacing.sm,
-    backgroundColor: "rgba(255,255,255,.025)",
+    backgroundColor: Colors.panel,
+    ...Shadow.card,
   },
   stripe: { width: 4, alignSelf: "stretch" },
-  body: { flex: 1, padding: Spacing.md, gap: 5 },
+  body: { flex: 1, padding: Spacing.md, gap: 6 },
   top: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -1407,23 +1483,42 @@ const hr = StyleSheet.create({
   },
   left: { gap: 2 },
   right: { alignItems: "flex-end" },
-  iata: { fontSize: 16, fontWeight: "900", color: Colors.text },
-  city: { fontSize: 10, color: Colors.dim },
-  trust: { fontSize: 14, fontWeight: "900" },
-  trustLbl: { fontSize: 8, color: Colors.dim },
+  iata: {
+    color: Colors.text,
+    fontFamily: Typography.mono,
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  city: { fontSize: 10, color: Colors.muted },
+  trust: {
+    fontFamily: Typography.mono,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  trustLbl: {
+    color: Colors.muted,
+    fontFamily: Typography.mono,
+    fontSize: 8,
+    textTransform: "uppercase",
+  },
   stats: { flexDirection: "row", alignItems: "center", gap: 5 },
   stat: { fontSize: 10, color: Colors.muted },
   dot: { fontSize: 10, color: Colors.dim },
   barRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   track: {
     flex: 1,
-    height: 3,
-    borderRadius: 2,
-    backgroundColor: "rgba(255,255,255,.08)",
+    height: 4,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.border,
     overflow: "hidden",
   },
-  fill: { height: "100%" as any, borderRadius: 2 },
-  pct: { fontSize: 9, fontWeight: "700", minWidth: 24 },
+  fill: { height: "100%" as any, borderRadius: Radius.full },
+  pct: {
+    minWidth: 28,
+    fontFamily: Typography.mono,
+    fontSize: 9,
+    fontWeight: "700",
+  },
 });
 
 const rr = StyleSheet.create({
@@ -1434,15 +1529,16 @@ const rr = StyleSheet.create({
     borderColor: Colors.border,
     overflow: "hidden",
     marginBottom: Spacing.sm,
-    backgroundColor: "rgba(255,255,255,.025)",
+    backgroundColor: Colors.panel,
+    ...Shadow.card,
   },
   problem: {
-    borderColor: Colors.red + "33",
-    backgroundColor: Colors.red + "06",
+    borderColor: Colors.red + "45",
+    backgroundColor: Palette.redSoft,
   },
   cleared: {
-    borderColor: Colors.green + "28",
-    backgroundColor: Colors.green + "05",
+    borderColor: Colors.green + "38",
+    backgroundColor: Palette.greenSoft,
   },
   stripe: { width: 4 },
   body: {
@@ -1468,8 +1564,9 @@ const rr = StyleSheet.create({
   },
   iata: {
     fontSize: 15,
-    color: Colors.sky,
-    fontWeight: "900",
+    color: Colors.skyDark,
+    fontFamily: Typography.mono,
+    fontWeight: "700",
     letterSpacing: 0.4,
   },
   status: {
@@ -1478,19 +1575,34 @@ const rr = StyleSheet.create({
     paddingHorizontal: 7,
     paddingVertical: 2,
   },
-  statusTxt: { fontSize: 8, fontWeight: "900", letterSpacing: 0.8 },
+  statusTxt: {
+    fontFamily: Typography.mono,
+    fontSize: 8,
+    fontWeight: "700",
+    letterSpacing: 0.6,
+  },
 
   metaRow: { flexDirection: "row", alignItems: "center", gap: 5 },
   meta: { flex: 1, fontSize: 11, color: Colors.muted, fontWeight: "600" },
-  condBadge: { fontSize: 10, fontWeight: "900", flexShrink: 0 },
-  moved: { fontSize: 11, fontWeight: "900", flexShrink: 0 },
+  condBadge: {
+    flexShrink: 0,
+    fontFamily: Typography.mono,
+    fontSize: 8,
+    fontWeight: "700",
+  },
+  moved: {
+    flexShrink: 0,
+    fontFamily: Typography.mono,
+    fontSize: 10,
+    fontWeight: "700",
+  },
 
   bottom: { flexDirection: "row", alignItems: "center", gap: 6 },
   progressTrack: {
     flex: 1,
     height: 4,
     borderRadius: Radius.full,
-    backgroundColor: "rgba(255,255,255,.08)",
+    backgroundColor: Colors.border,
     overflow: "hidden",
   },
   progressFill: { height: "100%", borderRadius: Radius.full },
@@ -1498,9 +1610,16 @@ const rr = StyleSheet.create({
     minWidth: 30,
     textAlign: "right",
     fontSize: 10,
-    fontWeight: "900",
+    fontFamily: Typography.mono,
+    fontWeight: "700",
   },
-  cash: { minWidth: 54, textAlign: "right", fontSize: 10, fontWeight: "900" },
+  cash: {
+    minWidth: 54,
+    textAlign: "right",
+    fontFamily: Typography.mono,
+    fontSize: 10,
+    fontWeight: "700",
+  },
   seasonBadge: {
     flexDirection: "row",
     alignItems: "center",
@@ -1512,7 +1631,7 @@ const rr = StyleSheet.create({
   seasonTxt: { fontSize: 8, fontWeight: "800" },
 
   hintRow: { gap: 4 },
-  hint: { fontSize: 10, color: Colors.dim, fontWeight: "700" },
+  hint: { fontSize: 10, color: Colors.muted, fontWeight: "600" },
   growthWrap: { flexDirection: "row", alignItems: "center", gap: 4 },
   growth: { fontSize: 10, fontWeight: "700" },
   qualityWrap: { flexDirection: "row", alignItems: "center", gap: 3 },
@@ -1521,14 +1640,14 @@ const rr = StyleSheet.create({
   expandedExtra: { gap: 4 },
   odRow: { flexDirection: "row", alignItems: "center", gap: 4 },
   odTxt: { fontSize: 10, color: Colors.sky, fontWeight: "700" },
-  mixTxt: { fontSize: 10, color: Colors.dim, fontWeight: "700" },
+  mixTxt: { fontSize: 10, color: Colors.muted, fontWeight: "600" },
 
   pricingBox: {
     borderRadius: Radius.md,
     borderWidth: 1,
-    backgroundColor: "rgba(255,255,255,.018)",
-    padding: 8,
-    gap: 7,
+    backgroundColor: Colors.bg,
+    padding: Spacing.sm,
+    gap: Spacing.sm,
   },
   pricingHeader: {
     flexDirection: "row",
@@ -1539,7 +1658,8 @@ const rr = StyleSheet.create({
   pricingTitleRow: { flexDirection: "row", alignItems: "center", gap: 4 },
   pricingTitle: {
     fontSize: 9,
-    fontWeight: "900",
+    fontFamily: Typography.mono,
+    fontWeight: "700",
     letterSpacing: 1,
     textTransform: "uppercase",
   },
@@ -1547,33 +1667,33 @@ const rr = StyleSheet.create({
     flex: 1,
     textAlign: "right",
     fontSize: 9,
-    color: Colors.dim,
+    color: Colors.muted,
     fontWeight: "700",
   },
   priceButtons: { flexDirection: "row", gap: 6 },
   priceBtn: {
     flex: 1,
-    minHeight: 46,
+    minHeight: 48,
     borderRadius: Radius.md,
     borderWidth: 1,
     borderColor: Colors.border,
-    backgroundColor: "rgba(255,255,255,.025)",
+    backgroundColor: Colors.panel,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 4,
     paddingVertical: 6,
   },
-  priceBtnTitle: { marginTop: 2, fontSize: 9, fontWeight: "900" },
+  priceBtnTitle: { marginTop: 2, fontSize: 9, fontWeight: "700" },
   priceBtnSub: {
     marginTop: 1,
     fontSize: 7,
-    color: Colors.dim,
+    color: Colors.muted,
     fontWeight: "700",
   },
 
   loadingOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0,0,0,.3)",
+    backgroundColor: Colors.overlayLight,
     alignItems: "center",
     justifyContent: "center",
     borderRadius: Radius.lg,

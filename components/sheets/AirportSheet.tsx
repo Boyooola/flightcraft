@@ -1,5 +1,13 @@
 import { GameAlert, useGameAlert } from "@/components/ui/GameAlert";
-import { Colors, MIN_TOUCH, Radius, Spacing } from "@/constants/theme";
+import {
+  Colors,
+  MIN_TOUCH,
+  Palette,
+  Radius,
+  Shadow,
+  Spacing,
+  Typography,
+} from "@/constants/theme";
 import { useGameSounds } from "@/hooks/useGameSounds";
 import { useHaptics } from "@/hooks/useHaptics";
 import { useTabBarHeight } from "@/hooks/useSheetLayout";
@@ -58,24 +66,24 @@ import CountryFlag from "react-native-country-flag";
 const CROWDING_CFG = {
   busy: {
     color: Colors.amber,
-    bg: Colors.amber + "10",
-    border: Colors.amber + "33",
+    bg: Palette.orangeSoft,
+    border: Colors.amber,
     icon: "alert-circle-outline" as const,
     label: "Getting Busy",
     note: "Trust growth slowed",
   },
   overcrowded: {
     color: Colors.orange,
-    bg: Colors.orange + "10",
-    border: Colors.orange + "33",
+    bg: Palette.orangeSoft,
+    border: Colors.orange,
     icon: "warning-outline" as const,
     label: "Overcrowded",
     note: "Trust −1/day · Revenue −10%",
   },
   crisis: {
     color: Colors.red,
-    bg: Colors.red + "10",
-    border: Colors.red + "33",
+    bg: Palette.redSoft,
+    border: Colors.red,
     icon: "skull-outline" as const,
     label: "Capacity Crisis",
     note: "Trust −3/day · Revenue −20%",
@@ -97,22 +105,14 @@ function usePreviewDemands(airport: Airport | null, allAirports: Airport[]) {
       0,
       true,
     );
-  }, [airport?.iata]);
+  }, [airport, allAirports]);
 }
 
 // ─────────────────────────────────────────────────────────────────
 // TRUST BAR
 // ─────────────────────────────────────────────────────────────────
 
-function TrustBar({
-  trust,
-  floor,
-  color,
-}: {
-  trust: number;
-  floor: number;
-  color: string;
-}) {
+function TrustBar({ trust, floor }: { trust: number; floor: number }) {
   const pct = Math.round(trust);
   const trustColor =
     pct >= 70 ? Colors.green : pct >= 45 ? Colors.amber : Colors.red;
@@ -141,16 +141,17 @@ const tb = StyleSheet.create({
   wrap: { gap: 4 },
   labelRow: { flexDirection: "row", justifyContent: "space-between" },
   label: {
+    fontFamily: Typography.mono,
     fontSize: 8,
-    color: Colors.dim,
-    fontWeight: "900",
+    color: Colors.muted,
+    fontWeight: "700",
     letterSpacing: 1.5,
   },
-  value: { fontSize: 10, fontWeight: "900" },
+  value: { fontFamily: Typography.mono, fontSize: 10, fontWeight: "700" },
   track: {
     height: 6,
     borderRadius: Radius.full,
-    backgroundColor: "rgba(255,255,255,.08)",
+    backgroundColor: Colors.inset,
     overflow: "visible",
     position: "relative",
   },
@@ -160,11 +161,11 @@ const tb = StyleSheet.create({
     top: -2,
     width: 1.5,
     height: 10,
-    backgroundColor: Colors.dim,
+    backgroundColor: Colors.muted,
     opacity: 0.6,
   },
   floorRow: { flexDirection: "row" },
-  floorLabel: { fontSize: 8, color: Colors.dim, fontWeight: "700" },
+  floorLabel: { fontSize: 8, color: Colors.muted, fontWeight: "700" },
 });
 
 // ─────────────────────────────────────────────────────────────────
@@ -176,14 +177,12 @@ function CongestionBanner({
   hubDemands,
   routes,
   ownedPlanes,
-  color,
   onCreateRoute,
 }: {
   crowding: NonNullable<ReturnType<typeof hubCrowdingLevel>>;
   hubDemands: Demand[];
   routes: Route[];
   ownedPlanes: ReturnType<typeof useOwnedPlanes>;
-  color: string;
   onCreateRoute: (d: Demand) => void;
 }) {
   if (crowding.level === "normal") return null;
@@ -296,6 +295,8 @@ function CongestionBanner({
               </Text>
               {sug.cta && sug.demand && (
                 <TouchableOpacity
+                  accessibilityLabel={`${sug.cta} for ${sug.demand.dest.iata}`}
+                  accessibilityRole="button"
                   style={[cb.sugCta, { borderColor: cfg.color + "55" }]}
                   onPress={() => onCreateRoute(sug.demand!)}
                   activeOpacity={0.8}
@@ -322,19 +323,26 @@ const cb = StyleSheet.create({
     borderLeftWidth: 3,
     padding: Spacing.md,
     gap: 7,
+    ...Shadow.card,
   },
   topRow: { flexDirection: "row", alignItems: "center", gap: 6 },
-  title: { fontSize: 13, fontWeight: "900", flex: 1 },
-  cap: { fontSize: 10, color: Colors.dim, fontWeight: "800" },
+  title: { fontSize: 13, fontWeight: "700", flex: 1 },
+  cap: {
+    fontFamily: Typography.mono,
+    fontSize: 9,
+    color: Colors.muted,
+    fontWeight: "700",
+  },
   chips: { flexDirection: "row", flexWrap: "wrap", gap: 5 },
   chip: { paddingHorizontal: 7, paddingVertical: 3, borderRadius: Radius.full },
-  chipTxt: { fontSize: 9, fontWeight: "800", letterSpacing: 0.3 },
+  chipTxt: { fontFamily: Typography.mono, fontSize: 8, fontWeight: "700" },
   waiting: { fontSize: 11, color: Colors.muted, lineHeight: 15 },
   suggestions: { gap: 5, marginTop: 2 },
   sugHeading: {
     fontSize: 8,
-    fontWeight: "900",
-    color: Colors.dim,
+    fontFamily: Typography.mono,
+    fontWeight: "700",
+    color: Colors.muted,
     letterSpacing: 1.5,
   },
   sugRow: { flexDirection: "row", alignItems: "center", gap: 7 },
@@ -348,6 +356,7 @@ const cb = StyleSheet.create({
   },
   sugText: { flex: 1, fontSize: 10, color: Colors.muted, lineHeight: 14 },
   sugCta: {
+    minHeight: 34,
     borderWidth: 1,
     borderRadius: Radius.md,
     paddingHorizontal: 7,
@@ -558,10 +567,13 @@ function DepartureRow({
         ) : hub ? (
           <View style={dep.actionRow}>
             <TouchableOpacity
-              style={[
-                dep.createBtn,
-                { borderColor: color + "55", backgroundColor: color + "10" },
-              ]}
+              accessibilityLabel={
+                noPlaneInRange
+                  ? `${demand.dest.iata} is out of aircraft range`
+                  : `Create route to ${demand.dest.iata}`
+              }
+              accessibilityRole="button"
+              style={[dep.createBtn, noPlaneInRange && dep.createBtnDisabled]}
               onPress={() => onCreateRoute(demand)}
               activeOpacity={0.84}
               disabled={noPlaneInRange}
@@ -569,13 +581,10 @@ function DepartureRow({
               <Ionicons
                 name="git-branch-outline"
                 size={12}
-                color={noPlaneInRange ? Colors.dim : color}
+                color={noPlaneInRange ? Colors.muted : Colors.textOnColor}
               />
               <Text
-                style={[
-                  dep.createTxt,
-                  { color: noPlaneInRange ? Colors.dim : color },
-                ]}
+                style={[dep.createTxt, noPlaneInRange && dep.createTxtDisabled]}
               >
                 {noPlaneInRange ? "Out of range" : "Create Route"}
               </Text>
@@ -595,11 +604,17 @@ function DepartureRow({
 const dep = StyleSheet.create({
   row: {
     flexDirection: "row",
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.border,
+    overflow: "hidden",
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.sm,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.panel,
+    ...Shadow.card,
   },
   // Overloaded rows get a very subtle tint so they stand out in the list
-  rowUrgent: { backgroundColor: Colors.red + "06" },
+  rowUrgent: { backgroundColor: Palette.redSoft },
   stripe: { width: 3, alignSelf: "stretch" },
   body: {
     flex: 1,
@@ -616,23 +631,25 @@ const dep = StyleSheet.create({
     gap: 7,
   },
   iata: {
+    fontFamily: Typography.mono,
     fontSize: 15,
-    color: Colors.sky,
-    fontWeight: "900",
+    color: Colors.skyDark,
+    fontWeight: "700",
     letterSpacing: 0.5,
   },
-  city: { fontSize: 10, color: Colors.dim, marginTop: 1 },
+  city: { fontSize: 10, color: Colors.muted, marginTop: 1 },
   right: { alignItems: "flex-end", minWidth: 76 },
-  pax: { fontSize: 15, fontWeight: "900" },
-  small: { fontSize: 9, color: Colors.dim, marginTop: 1 },
+  pax: { fontFamily: Typography.mono, fontSize: 14, fontWeight: "700" },
+  small: { fontSize: 9, color: Colors.muted, marginTop: 1 },
   waiting: {
     fontSize: 9,
     color: Colors.red,
-    fontWeight: "900",
+    fontFamily: Typography.mono,
+    fontWeight: "700",
     letterSpacing: 0.8,
   },
   overloadedPill: {
-    backgroundColor: Colors.red + "20",
+    backgroundColor: Palette.redSoft,
     borderRadius: 3,
     paddingHorizontal: 5,
     paddingVertical: 1,
@@ -640,7 +657,7 @@ const dep = StyleSheet.create({
   overloadedTxt: {
     fontSize: 7,
     color: Colors.red,
-    fontWeight: "900",
+    fontWeight: "700",
     letterSpacing: 1,
   },
   progressRow: { flexDirection: "row", alignItems: "center", gap: 7 },
@@ -648,7 +665,7 @@ const dep = StyleSheet.create({
     flex: 1,
     height: 4,
     borderRadius: Radius.full,
-    backgroundColor: "rgba(255,255,255,.08)",
+    backgroundColor: Colors.inset,
     overflow: "hidden",
   },
   fill: { height: "100%", borderRadius: Radius.full },
@@ -656,14 +673,16 @@ const dep = StyleSheet.create({
     minWidth: 32,
     textAlign: "right",
     fontSize: 10,
-    fontWeight: "900",
+    fontFamily: Typography.mono,
+    fontWeight: "700",
   },
   revenue: {
     minWidth: 58,
     textAlign: "right",
     fontSize: 10,
     color: Colors.green,
-    fontWeight: "900",
+    fontFamily: Typography.mono,
+    fontWeight: "700",
   },
   seasonBadge: {
     flexDirection: "row",
@@ -673,19 +692,26 @@ const dep = StyleSheet.create({
     paddingHorizontal: 4,
     paddingVertical: 1,
   },
-  seasonTxt: { fontSize: 8, fontWeight: "800" },
-  meta: { fontSize: 10, color: Colors.dim, fontWeight: "700" },
+  seasonTxt: { fontFamily: Typography.mono, fontSize: 8, fontWeight: "700" },
+  meta: { fontSize: 10, color: Colors.muted, fontWeight: "700" },
   actionRow: { flexDirection: "row", alignItems: "center", gap: Spacing.sm },
   createBtn: {
+    minHeight: MIN_TOUCH,
     flexDirection: "row",
     alignItems: "center",
     gap: 5,
     paddingHorizontal: 10,
     paddingVertical: 7,
     borderRadius: Radius.md,
-    borderWidth: 1,
+    backgroundColor: Colors.sky,
   },
-  createTxt: { fontSize: 11, fontWeight: "900" },
+  createBtnDisabled: { backgroundColor: Colors.inset },
+  createTxt: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: Colors.textOnColor,
+  },
+  createTxtDisabled: { color: Colors.muted },
   rangeHint: { flex: 1, fontSize: 9, color: Colors.purple, fontWeight: "700" },
 });
 
@@ -699,7 +725,6 @@ function ArrivalsSummary({
   aiArrivals,
   demands,
   color,
-  dayProgress,
 }: {
   playerArrivals: Route[];
   connectingRoutes: Route[];
@@ -712,7 +737,6 @@ function ArrivalsSummary({
   }[];
   demands: Demand[];
   color: string;
-  dayProgress: number;
 }) {
   const playerGrouped = useMemo(() => {
     const map = new Map<
@@ -878,7 +902,10 @@ const arr = StyleSheet.create({
     paddingVertical: Spacing.sm,
     paddingHorizontal: Spacing.md,
     borderRadius: Radius.lg,
-    backgroundColor: "rgba(255,255,255,.025)",
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.panel,
+    ...Shadow.card,
   },
   dot: { width: 6, height: 6, borderRadius: 3, flexShrink: 0 },
   info: {
@@ -892,15 +919,15 @@ const arr = StyleSheet.create({
   origin: { fontSize: 12, color: Colors.text, fontWeight: "600" },
   pax: { fontSize: 11, color: Colors.muted, fontWeight: "600", flexShrink: 0 },
   badge: {
-    backgroundColor: "rgba(255,255,255,.08)",
+    backgroundColor: Colors.inset,
     borderRadius: 4,
     paddingHorizontal: 5,
     paddingVertical: 1,
   },
   badgeTxt: {
     fontSize: 8,
-    color: Colors.dim,
-    fontWeight: "800",
+    color: Colors.muted,
+    fontWeight: "700",
     letterSpacing: 0.5,
   },
   totalRow: {
@@ -910,10 +937,10 @@ const arr = StyleSheet.create({
   },
   totalTxt: { fontSize: 11, color: Colors.muted, fontWeight: "700" },
   empty: { padding: Spacing.xl, alignItems: "center", gap: 2 },
-  emptyTxt: { fontSize: 13, color: Colors.dim, fontWeight: "700" },
+  emptyTxt: { fontSize: 13, color: Colors.muted, fontWeight: "700" },
   emptySub: {
     fontSize: 11,
-    color: Colors.dim,
+    color: Colors.muted,
     opacity: 0.6,
     marginTop: 3,
     textAlign: "center",
@@ -957,6 +984,7 @@ export default function AirportSheet() {
   const [nicknameInput, setNicknameInput] = useState("");
 
   const previewDemands = usePreviewDemands(airport, airports);
+  const paxDelivered = useAirportPresence(airport?.iata);
   const color = airline?.color ?? Colors.sky;
 
   const hub = airport
@@ -996,17 +1024,13 @@ export default function AirportSheet() {
     return withRoutes.sort((a, b) => {
       const urgency = (item: typeof a) => {
         const served = item.routes.length > 0;
-        if (!served) return demand_out_of_range(item.demand) ? 3 : 2;
+        if (!served) return item.demand.dist_nm > maxPlaneRange ? 3 : 2;
         const waiting = waitingPaxForDemand(item.demand, dayProgress);
         return waiting > 100 ? 0 : 1;
       };
       return urgency(a) - urgency(b);
     });
-  }, [isOwned, hubDemands, previewDemands, routes, dayProgress]);
-
-  function demand_out_of_range(d: Demand) {
-    return d.dist_nm > maxPlaneRange;
-  }
+  }, [isOwned, hubDemands, previewDemands, routes, dayProgress, maxPlaneRange]);
 
   // Used-slots count for stat row
   const usedSlots = hubDemands.filter((d) =>
@@ -1063,7 +1087,7 @@ export default function AirportSheet() {
       });
     });
     return result;
-  }, [aiAirlines, airports, airport?.iata]);
+  }, [aiAirlines, airports, airport]);
 
   if (!airport) return null;
 
@@ -1073,8 +1097,6 @@ export default function AirportSheet() {
     ai.hubIatas.includes(airport.iata),
   ).length;
   const paxNeeded = presenceThreshold(airport, aiHubCount);
-  // eslint-disable-next-line react-hooks/rules-of-hooks
-  const paxDelivered = useAirportPresence(airport.iata);
   const presenceReady = isFirstHub || paxDelivered >= paxNeeded;
   const paxRemaining = Math.max(0, paxNeeded - paxDelivered);
   const presencePct = isFirstHub
@@ -1224,8 +1246,13 @@ export default function AirportSheet() {
       {/* ── HEADER ─────────────────────────────────────────────── */}
       <View style={s.header}>
         <View style={s.headerLeft}>
-          <CountryFlag isoCode={airport.country} size={28} />
+          <View style={s.flagMark}>
+            <CountryFlag isoCode={airport.country} size={25} />
+          </View>
           <View style={s.headerText}>
+            <Text style={s.headerKicker}>
+              {isOwned ? "HUB OPERATIONS" : "AIRPORT PROFILE"}
+            </Text>
             <View style={s.iataRow}>
               <Text style={s.iata}>{airport.iata}</Text>
               {isOwned && (
@@ -1266,6 +1293,8 @@ export default function AirportSheet() {
                     // avoidance. User taps the pencil to trigger, focus is implicit.
                   />
                   <TouchableOpacity
+                    accessibilityLabel="Save hub nickname"
+                    accessibilityRole="button"
                     onPress={handleNicknameSave}
                     hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                   >
@@ -1274,6 +1303,8 @@ export default function AirportSheet() {
                 </View>
               ) : (
                 <TouchableOpacity
+                  accessibilityLabel="Edit hub nickname"
+                  accessibilityRole="button"
                   onPress={handleNicknameEdit}
                   activeOpacity={0.7}
                   style={s.nicknameRow}
@@ -1298,6 +1329,8 @@ export default function AirportSheet() {
         </View>
 
         <TouchableOpacity
+          accessibilityLabel="Close airport details"
+          accessibilityRole="button"
           onPress={() => {
             haptics.tap();
             closeSheet();
@@ -1305,7 +1338,7 @@ export default function AirportSheet() {
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
           style={s.closeBtn}
         >
-          <Ionicons name="close" size={22} color={Colors.dim} />
+          <Ionicons name="close" size={22} color={Colors.text} />
         </TouchableOpacity>
       </View>
 
@@ -1316,7 +1349,6 @@ export default function AirportSheet() {
           hubDemands={hubDemands}
           routes={routes}
           ownedPlanes={ownedPlanes}
-          color={color}
           onCreateRoute={handleCreateRoute}
         />
       )}
@@ -1392,9 +1424,17 @@ export default function AirportSheet() {
           )}
 
           <TouchableOpacity
+            accessibilityLabel={
+              !presenceReady
+                ? `Fly ${paxRemaining} more passengers here first`
+                : !canAfford
+                  ? `Not enough cash to open ${airport.iata} hub`
+                  : `Open ${airport.iata} hub for ${fmtCash(cost)}`
+            }
+            accessibilityRole="button"
             style={[
               s.buyBtn,
-              { backgroundColor: canBuy ? color : "rgba(255,255,255,.06)" },
+              { backgroundColor: canBuy ? Colors.sky : Colors.dim },
               (!canBuy || buying) && { opacity: 0.5 },
             ]}
             onPress={handleBuy}
@@ -1402,7 +1442,7 @@ export default function AirportSheet() {
             activeOpacity={0.86}
           >
             {buying ? (
-              <ActivityIndicator color={Colors.bg} size="small" />
+              <ActivityIndicator color={Colors.textOnColor} size="small" />
             ) : (
               <>
                 <Ionicons
@@ -1410,14 +1450,9 @@ export default function AirportSheet() {
                     presenceReady ? "add-circle-outline" : "airplane-outline"
                   }
                   size={18}
-                  color={canBuy ? Colors.bg : Colors.dim}
+                  color={Colors.textOnColor}
                 />
-                <Text
-                  style={[
-                    s.buyText,
-                    { color: canBuy ? Colors.bg : Colors.dim },
-                  ]}
-                >
+                <Text style={[s.buyText, { color: Colors.textOnColor }]}>
                   {!presenceReady
                     ? `Fly ${paxRemaining.toLocaleString()} more passengers here first`
                     : !canAfford
@@ -1448,11 +1483,7 @@ export default function AirportSheet() {
       {/* ── HUB PANEL (owned) ─────────────────────────────────── */}
       {isOwned && hub && (
         <View style={s.hubPanel}>
-          <TrustBar
-            trust={hub.trust}
-            floor={hub.trust_floor ?? 0}
-            color={color}
-          />
+          <TrustBar trust={hub.trust} floor={hub.trust_floor ?? 0} />
 
           {/* Stat row — route slots shown as used/total */}
           <View style={s.statRow}>
@@ -1565,6 +1596,8 @@ export default function AirportSheet() {
               )}
 
               <TouchableOpacity
+                accessibilityLabel={`Upgrade hub to tier ${tierNum + 1}`}
+                accessibilityRole="button"
                 style={[
                   s.upgradeBtn,
                   {
@@ -1688,12 +1721,13 @@ export default function AirportSheet() {
         aiArrivals={aiArrivals}
         demands={demands}
         color={color}
-        dayProgress={dayProgress}
       />
 
       {/* ── SELL — quiet, text-style, bottom of sheet ─────────── */}
       {isOwned && hub && (
         <TouchableOpacity
+          accessibilityLabel={`Sell ${airport.iata} hub`}
+          accessibilityRole="button"
           style={s.sellHubBtn}
           onPress={handleSell}
           disabled={selling}
@@ -1731,21 +1765,51 @@ export default function AirportSheet() {
 // ─────────────────────────────────────────────────────────────────
 
 const s = StyleSheet.create({
-  root: { flex: 1 },
+  root: { flex: 1, backgroundColor: Colors.surface },
   content: { paddingBottom: Spacing.xxl },
 
   header: {
     flexDirection: "row",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
+    alignItems: "center",
     paddingHorizontal: Spacing.lg,
     paddingTop: Spacing.sm,
     paddingBottom: Spacing.md,
     gap: Spacing.sm,
   },
-  headerLeft: { flexDirection: "row", gap: Spacing.sm, flex: 1, minWidth: 0 },
+  headerLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.md,
+    flex: 1,
+    minWidth: 0,
+  },
+  flagMark: {
+    width: MIN_TOUCH,
+    height: MIN_TOUCH,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.panel,
+    overflow: "hidden",
+    ...Shadow.card,
+  },
   headerText: { flex: 1, minWidth: 0 },
-  closeBtn: { padding: 4, marginTop: 2 },
+  headerKicker: {
+    color: Colors.skyDark,
+    fontFamily: Typography.mono,
+    fontSize: 8,
+    letterSpacing: 1.3,
+  },
+  closeBtn: {
+    width: MIN_TOUCH,
+    height: MIN_TOUCH,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: Radius.full,
+    backgroundColor: Colors.inset,
+  },
   iataRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -1753,9 +1817,10 @@ const s = StyleSheet.create({
     flexWrap: "wrap",
   },
   iata: {
-    fontSize: 28,
+    fontFamily: Typography.display,
+    fontSize: 30,
+    lineHeight: 32,
     color: Colors.text,
-    fontWeight: "900",
     letterSpacing: 1,
   },
   pill: {
@@ -1767,9 +1832,14 @@ const s = StyleSheet.create({
     borderRadius: Radius.full,
     borderWidth: 1,
   },
-  pillText: { fontSize: 9, fontWeight: "900", letterSpacing: 0.5 },
+  pillText: {
+    fontFamily: Typography.mono,
+    fontSize: 8,
+    fontWeight: "700",
+    letterSpacing: 0.5,
+  },
   name: { fontSize: 13, color: Colors.text, fontWeight: "700", marginTop: 2 },
-  location: { fontSize: 10, color: Colors.dim, lineHeight: 15, marginTop: 1 },
+  location: { fontSize: 10, color: Colors.muted, lineHeight: 15, marginTop: 1 },
 
   nicknameRow: {
     flexDirection: "row",
@@ -1779,7 +1849,7 @@ const s = StyleSheet.create({
   },
   nicknameTxt: {
     fontSize: 11,
-    color: Colors.dim,
+    color: Colors.muted,
     fontWeight: "700",
     fontStyle: "italic",
   },
@@ -1809,9 +1879,16 @@ const s = StyleSheet.create({
 
   // Buy section
   buySection: {
-    paddingHorizontal: Spacing.lg,
+    marginHorizontal: Spacing.lg,
+    paddingHorizontal: Spacing.md,
     marginBottom: Spacing.md,
     gap: Spacing.sm,
+    paddingVertical: Spacing.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.panel,
+    ...Shadow.card,
   },
   buyTop: {
     flexDirection: "row",
@@ -1819,21 +1896,27 @@ const s = StyleSheet.create({
     justifyContent: "space-between",
   },
   metaLbl: {
+    fontFamily: Typography.mono,
     fontSize: 8,
-    color: Colors.dim,
+    color: Colors.muted,
     letterSpacing: 1.5,
     marginBottom: 4,
-    fontWeight: "900",
+    fontWeight: "700",
   },
-  bigMoney: { fontSize: 22, fontWeight: "900", letterSpacing: 0.3 },
+  bigMoney: {
+    fontFamily: Typography.mono,
+    fontSize: 19,
+    fontWeight: "700",
+    letterSpacing: 0.3,
+  },
   errorBox: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    backgroundColor: Colors.red + "0a",
+    backgroundColor: Palette.redSoft,
     borderRadius: Radius.md,
     borderWidth: 1,
-    borderColor: Colors.red + "33",
+    borderColor: Colors.red,
     padding: Spacing.sm,
   },
   errorText: { flex: 1, fontSize: 11, color: Colors.red, fontWeight: "700" },
@@ -1845,7 +1928,12 @@ const s = StyleSheet.create({
     borderRadius: Radius.lg,
     minHeight: MIN_TOUCH + 4,
   },
-  buyText: { fontSize: 14, fontWeight: "900", letterSpacing: 0.4 },
+  buyText: {
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 0.2,
+    textAlign: "center",
+  },
 
   presenceBlock: { gap: 5 },
   presenceLabelRow: {
@@ -1854,21 +1942,22 @@ const s = StyleSheet.create({
     alignItems: "center",
   },
   presenceLabel: {
+    fontFamily: Typography.mono,
     fontSize: 8,
-    color: Colors.dim,
-    fontWeight: "900",
+    color: Colors.muted,
+    fontWeight: "700",
     letterSpacing: 1.5,
   },
-  presenceValue: { fontSize: 10, fontWeight: "800" },
+  presenceValue: { fontSize: 10, fontWeight: "700" },
   presenceTrack: {
     height: 5,
     borderRadius: Radius.full,
-    backgroundColor: "rgba(255,255,255,.08)",
+    backgroundColor: Colors.inset,
     overflow: "hidden",
   },
   presenceFill: { height: "100%", borderRadius: Radius.full },
   presenceFloorRow: { flexDirection: "row", justifyContent: "space-between" },
-  presenceFloorLbl: { fontSize: 8, color: Colors.dim, fontWeight: "700" },
+  presenceFloorLbl: { fontSize: 8, color: Colors.muted, fontWeight: "700" },
 
   // Unlock preview note on unowned airports
   previewNote: {
@@ -1877,29 +1966,41 @@ const s = StyleSheet.create({
     gap: 5,
     paddingVertical: 6,
   },
-  previewNoteTxt: { fontSize: 11, color: Colors.dim, fontWeight: "700" },
+  previewNoteTxt: { fontSize: 11, color: Colors.muted, fontWeight: "700" },
 
   // Hub panel
   hubPanel: {
     marginHorizontal: Spacing.lg,
     marginBottom: Spacing.md,
     gap: Spacing.md,
+    padding: Spacing.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.panel,
+    ...Shadow.card,
   },
 
   statRow: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "rgba(255,255,255,.04)",
+    backgroundColor: Colors.bg,
     borderRadius: Radius.md,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Colors.border,
     paddingVertical: Spacing.sm,
   },
   stat: { flex: 1, alignItems: "center", gap: 2 },
-  statVal: { fontSize: 16, fontWeight: "900", color: Colors.text },
+  statVal: {
+    fontFamily: Typography.mono,
+    fontSize: 15,
+    fontWeight: "700",
+    color: Colors.text,
+  },
   statLbl: {
+    fontFamily: Typography.mono,
     fontSize: 8,
-    color: Colors.dim,
+    color: Colors.muted,
     fontWeight: "700",
     letterSpacing: 0.5,
   },
@@ -1924,10 +2025,10 @@ const s = StyleSheet.create({
     paddingHorizontal: Spacing.md,
     paddingVertical: 10,
   },
-  upgradeTxt: { fontSize: 13, fontWeight: "900" },
+  upgradeTxt: { fontSize: 13, fontWeight: "700" },
   upgradeDetail: {
     fontSize: 10,
-    color: Colors.dim,
+    color: Colors.muted,
     fontWeight: "700",
     marginTop: 1,
   },
@@ -1940,9 +2041,9 @@ const s = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: Radius.full,
-    backgroundColor: "rgba(255,255,255,.05)",
+    backgroundColor: Colors.inset,
   },
-  maxTxt: { fontSize: 10, fontWeight: "800" },
+  maxTxt: { fontSize: 10, fontWeight: "700" },
 
   // Section headers
   sectionHeader: {
@@ -1954,26 +2055,32 @@ const s = StyleSheet.create({
   },
   sectionTitleRow: { flexDirection: "row", alignItems: "center", gap: 5 },
   eyebrow: {
+    fontFamily: Typography.mono,
     fontSize: 9,
-    color: Colors.dim,
+    color: Colors.skyDark,
     letterSpacing: 2.5,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   waitingBadge: {
-    backgroundColor: Colors.red + "18",
+    backgroundColor: Palette.redSoft,
     borderRadius: Radius.full,
     borderWidth: 1,
-    borderColor: Colors.red + "44",
+    borderColor: Colors.red,
     paddingHorizontal: 8,
     paddingVertical: 2,
   },
-  waitingBadgeTxt: { fontSize: 9, color: Colors.red, fontWeight: "900" },
+  waitingBadgeTxt: {
+    fontFamily: Typography.mono,
+    fontSize: 9,
+    color: Colors.red,
+    fontWeight: "700",
+  },
 
   emptyBoard: { padding: Spacing.xl, alignItems: "center", gap: 2 },
-  emptyTxt: { fontSize: 13, color: Colors.dim, fontWeight: "700" },
+  emptyTxt: { fontSize: 13, color: Colors.muted, fontWeight: "700" },
   emptySub: {
     fontSize: 11,
-    color: Colors.dim,
+    color: Colors.muted,
     opacity: 0.6,
     marginTop: 4,
     textAlign: "center",
@@ -1990,8 +2097,8 @@ const s = StyleSheet.create({
     paddingVertical: Spacing.md,
     borderRadius: Radius.md,
     borderWidth: 1,
-    borderColor: Colors.red + "33",
-    backgroundColor: Colors.red + "08",
+    borderColor: Colors.red,
+    backgroundColor: Palette.redSoft,
   },
   sellHubTitle: { fontSize: 13, fontWeight: "700", color: Colors.red },
   sellHubSub: {

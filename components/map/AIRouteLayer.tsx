@@ -6,6 +6,7 @@
  * All AI routes visible (no cap).
  */
 
+import { Colors } from "@/constants/theme";
 import { buildAIRoutes } from "@/lib/AIAirline";
 import type { Airport } from "@/store";
 import { useAIAirlines, useAirports } from "@/store";
@@ -113,35 +114,14 @@ export default function AIRouteLayer({
     [allRoutes],
   );
 
-  // GeoJSON for hub dots
-  const hubGeoJSON = useMemo<GeoJSON.FeatureCollection>(() => {
-    const seen = new Set<string>();
-    const features: GeoJSON.Feature[] = [];
-    aiAirlines.forEach((ai) => {
-      ai.hubIatas.forEach((iata) => {
-        if (seen.has(iata)) return;
-        const ap = airports.find((a) => a.iata === iata);
-        if (!ap) return;
-        seen.add(iata);
-        features.push({
-          type: "Feature",
-          id: `ai-hub-${iata}`,
-          geometry: { type: "Point", coordinates: [ap.lng, ap.lat] },
-          properties: { color: ai.color, label: ai.name.charAt(0) },
-        });
-      });
-    });
-    return { type: "FeatureCollection", features };
-  }, [aiAirlines, airports]);
-
   // Animation loop — lighter interval
   useEffect(() => {
-    if (paused) return;
-
     if (allRoutes.length === 0) {
       setPlanes([]);
       return;
     }
+
+    if (paused) return;
 
     const tick = () => {
       const now = Date.now();
@@ -174,7 +154,7 @@ export default function AIRouteLayer({
 
     const id = setInterval(tick, ANIM_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [allRoutes, speed]);
+  }, [allRoutes, paused, speed]);
 
   const planeGeoJSON = useMemo<GeoJSON.FeatureCollection>(
     () => ({
@@ -197,23 +177,46 @@ export default function AIRouteLayer({
       {allRoutes.length > 0 && (
         <MapboxGL.ShapeSource id="ai-routes-source" shape={arcGeoJSON}>
           <MapboxGL.LineLayer
-            id="ai-routes-glow"
+            id="ai-routes-casing"
+            existing={false}
             style={{
-              lineColor: ["get", "color"],
-              lineWidth: 4,
-              lineOpacity: 0.04,
-              lineBlur: 4,
+              lineColor: Colors.surface,
+              lineWidth: [
+                "interpolate",
+                ["linear"],
+                ["zoom"],
+                1,
+                2.5,
+                6,
+                3.5,
+                10,
+                5,
+              ],
+              lineOpacity: paused ? 0.25 : 0.52,
               lineCap: "round",
+              lineJoin: "round",
             }}
           />
           <MapboxGL.LineLayer
             id="ai-routes-line"
+            existing={false}
             style={{
               lineColor: ["get", "color"],
-              lineWidth: 1,
-              lineOpacity: 0.2,
-              lineDasharray: [2, 5],
+              lineWidth: [
+                "interpolate",
+                ["linear"],
+                ["zoom"],
+                1,
+                0.8,
+                6,
+                1.2,
+                10,
+                1.8,
+              ],
+              lineOpacity: paused ? 0.14 : 0.32,
+              lineDasharray: [1.5, 3.5],
               lineCap: "round",
+              lineJoin: "round",
             }}
           />
         </MapboxGL.ShapeSource>
@@ -224,11 +227,24 @@ export default function AIRouteLayer({
         <MapboxGL.ShapeSource id="ai-planes-source" shape={planeGeoJSON}>
           <MapboxGL.SymbolLayer
             id="ai-plane-icon"
+            existing={false}
             style={{
               iconImage: "airport-15",
-              iconSize: 0.8,
+              iconSize: [
+                "interpolate",
+                ["linear"],
+                ["zoom"],
+                1,
+                0.65,
+                6,
+                0.9,
+                10,
+                1.2,
+              ],
               iconColor: ["get", "color"],
-              iconOpacity: 0.7,
+              iconHaloColor: Colors.surface,
+              iconHaloWidth: 1,
+              iconOpacity: paused ? 0.35 : 0.68,
               iconRotate: ["get", "rotation"],
               iconRotationAlignment: "map",
               iconAllowOverlap: true,
@@ -239,32 +255,6 @@ export default function AIRouteLayer({
         </MapboxGL.ShapeSource>
       )}
 
-      {/* AI hub dots */}
-      {aiAirlines.length > 0 && (
-        <MapboxGL.ShapeSource id="ai-hubs-source" shape={hubGeoJSON}>
-          <MapboxGL.CircleLayer
-            id="ai-hubs-glow"
-            style={{
-              circleRadius: 8,
-              circleColor: ["get", "color"],
-              circleOpacity: 0.12,
-              circleBlur: 1,
-              circlePitchAlignment: "map",
-            }}
-          />
-          <MapboxGL.CircleLayer
-            id="ai-hubs-dot"
-            style={{
-              circleRadius: 4,
-              circleColor: ["get", "color"],
-              circleOpacity: 0.5,
-              circleStrokeColor: "rgba(0,0,0,0.4)",
-              circleStrokeWidth: 1,
-              circlePitchAlignment: "map",
-            }}
-          />
-        </MapboxGL.ShapeSource>
-      )}
     </>
   );
 }

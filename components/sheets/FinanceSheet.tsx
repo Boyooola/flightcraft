@@ -1,24 +1,20 @@
-/**
- * components/sheets/FinanceSheet.tsx
- *
- * Worldwide Rush-style finance sheet.
- *
- * Focus:
- *   - cash earned from moving passengers
- *   - best earning routes
- *   - recent rewards/events
- *   - quick Bank / Rankings buttons
- */
-
-import { Colors, Radius, Spacing } from "@/constants/theme";
+import {
+  Colors,
+  MIN_TOUCH,
+  Palette,
+  Radius,
+  Shadow,
+  Spacing,
+  Typography,
+} from "@/constants/theme";
 import { useTabBarHeight } from "@/hooks/useSheetLayout";
 import { dailyInterest, fmtCash, fmtCashShort } from "@/lib/revenue";
+import type { Route } from "@/store";
 import {
   useAirline,
   useCash,
   useDay,
   useGameStore,
-  useHubs,
   useLedger,
   useLoan,
   useOwnedPlanes,
@@ -59,7 +55,7 @@ function CashBar({ data, color }: { data: number[]; color: string }) {
   );
 }
 
-function RouteRewardRow({ route, reward }: { route: any; reward: number }) {
+function RouteRewardRow({ route, reward }: { route: Route; reward: number }) {
   return (
     <View style={rr.row}>
       <View style={rr.left}>
@@ -172,7 +168,6 @@ export default function FinanceSheet() {
   const airline = useAirline();
   const ledger = useLedger();
   const routes = useRoutes();
-  const hubs = useHubs();
   const cash = useCash();
   const loan = useLoan();
   const day = useDay();
@@ -219,21 +214,6 @@ export default function FinanceSheet() {
     });
   }, [ledger, day]);
 
-  if (routeRewards.length === 0) {
-    return (
-      <BottomSheetScrollView contentContainerStyle={es.wrap}>
-        <View style={es.empty}>
-          <Ionicons name="cash-outline" size={48} color={Colors.dim} />
-          <Text style={es.emptyTitle}>No revenue yet</Text>
-          <Text style={es.emptySub}>
-            Create routes and assign planes to start earning. Your daily summary
-            will appear here.
-          </Text>
-        </View>
-      </BottomSheetScrollView>
-    );
-  }
-
   const totalRouteReward = routeRewards.reduce((sum, r) => sum + r.reward, 0);
 
   const activeRoutes = routes.filter((r) => r.active);
@@ -248,7 +228,10 @@ export default function FinanceSheet() {
   }, 0);
   const dailyNet = totalRouteReward - interest - maintenanceCost;
   const netWorth = cash - loan;
-  const bestRoute = routeRewards[0].reward >= 0 ? routeRewards[0] : null;
+  const bestRoute =
+    routeRewards.length > 0 && routeRewards[0].reward >= 0
+      ? routeRewards[0]
+      : null;
 
   return (
     <BottomSheetScrollView
@@ -260,50 +243,73 @@ export default function FinanceSheet() {
       showsVerticalScrollIndicator={false}
     >
       <View style={s.header}>
-        <View style={s.hdrL}>
-          <Ionicons name="flash-outline" size={21} color={color} />
-          <View>
-            <Text style={s.title}>Finances</Text>
-            <Text style={s.subtitle}>Earnings and history</Text>
-          </View>
+        <View
+          style={[
+            s.headerMark,
+            { borderColor: color, backgroundColor: color + "14" },
+          ]}
+        >
+          <Ionicons name="stats-chart-outline" size={20} color={color} />
         </View>
-
-        <View style={s.hdrRight}>
-          <TouchableOpacity
-            style={[s.smallBtn, { borderColor: Colors.amber + "55" }]}
-            onPress={() => openSheet("bank")}
-          >
-            <MaterialCommunityIcons
-              name="bank-outline"
-              size={14}
-              color={Colors.amber}
-            />
-            <Text style={[s.smallBtnTxt, { color: Colors.amber }]}>Bank</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[s.smallBtn, { borderColor: color + "55" }]}
-            onPress={() => openSheet("leaderboard")}
-          >
-            <MaterialCommunityIcons
-              name="trophy-outline"
-              size={14}
-              color={color}
-            />
-            <Text style={[s.smallBtnTxt, { color }]}>Rank</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            onPress={closeSheet}
-            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-          >
-            <Ionicons name="close" size={22} color={Colors.dim} />
-          </TouchableOpacity>
+        <View style={s.headerCopy}>
+          <Text style={s.kicker}>FINANCIAL CONTROL</Text>
+          <Text style={s.title}>Airline Finances</Text>
+          <Text style={s.subtitle}>Day {day} · cash flow and performance</Text>
         </View>
+        <TouchableOpacity
+          accessibilityLabel="Close airline finances"
+          accessibilityRole="button"
+          onPress={closeSheet}
+          style={s.closeButton}
+        >
+          <Ionicons name="close" size={22} color={Colors.text} />
+        </TouchableOpacity>
       </View>
 
-      <View style={s.hero}>
-        <Text style={s.heroLabel}>Today&apos;s earnings</Text>
+      <View style={s.quickActions}>
+        <TouchableOpacity
+          accessibilityLabel="Open bank"
+          accessibilityRole="button"
+          style={s.quickButton}
+          onPress={() => openSheet("bank")}
+        >
+          <View style={[s.quickIcon, { backgroundColor: Palette.orangeSoft }]}>
+            <MaterialCommunityIcons
+              name="bank-outline"
+              size={17}
+              color={Colors.amber}
+            />
+          </View>
+          <View style={s.quickCopy}>
+            <Text style={s.quickTitle}>Bank</Text>
+            <Text style={s.quickSubtitle}>Loans and repayments</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={Colors.muted} />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          accessibilityLabel="Open airline rankings"
+          accessibilityRole="button"
+          style={s.quickButton}
+          onPress={() => openSheet("leaderboard")}
+        >
+          <View style={[s.quickIcon, { backgroundColor: Colors.skyDim }]}>
+            <MaterialCommunityIcons
+              name="trophy-outline"
+              size={17}
+              color={Colors.sky}
+            />
+          </View>
+          <View style={s.quickCopy}>
+            <Text style={s.quickTitle}>Rankings</Text>
+            <Text style={s.quickSubtitle}>Compare airline value</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={Colors.muted} />
+        </TouchableOpacity>
+      </View>
+
+      <View style={[s.hero, dailyNet >= 0 ? s.heroPositive : s.heroNegative]}>
+        <Text style={s.heroLabel}>TODAY&apos;S RESULT</Text>
         <Text
           style={[
             s.heroValue,
@@ -337,6 +343,20 @@ export default function FinanceSheet() {
               <Text style={s.heroLineLabel}>Loan interest</Text>
               <Text style={[s.heroLineValue, { color: Colors.red }]}>
                 -{fmtCash(interest)}
+              </Text>
+            </View>
+          )}
+
+          {maintenanceCost > 0 && (
+            <View style={s.heroLine}>
+              <Ionicons
+                name="construct-outline"
+                size={12}
+                color={Colors.amber}
+              />
+              <Text style={s.heroLineLabel}>Idle aircraft upkeep</Text>
+              <Text style={[s.heroLineValue, { color: Colors.red }]}>
+                -{fmtCash(maintenanceCost)}
               </Text>
             </View>
           )}
@@ -409,8 +429,14 @@ export default function FinanceSheet() {
         </View>
       ) : (
         <View style={s.empty}>
-          <MaterialCommunityIcons name="routes" size={36} color={Colors.dim} />
-          <Text style={s.emptyTitle}>No cash flow yet</Text>
+          <View style={s.emptyIcon}>
+            <MaterialCommunityIcons
+              name="routes"
+              size={28}
+              color={Colors.sky}
+            />
+          </View>
+          <Text style={s.emptyTitle}>No route revenue yet</Text>
           <Text style={s.emptySub}>
             Open a hub, create a route, and assign a plane to start earning.
           </Text>
@@ -458,35 +484,41 @@ const rr = StyleSheet.create({
   row: {
     flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 11,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.border,
+    padding: Spacing.md,
+    marginBottom: Spacing.sm,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.panel,
     gap: Spacing.sm,
+    ...Shadow.card,
   },
   left: { flex: 1, gap: 2 },
   route: {
-    fontSize: 13,
-    color: Colors.sky,
-    fontWeight: "800",
+    fontFamily: Typography.mono,
+    fontSize: 12,
+    color: Colors.skyDark,
+    fontWeight: "700",
     letterSpacing: 0.4,
   },
   meta: {
     fontSize: 10,
-    color: Colors.dim,
+    color: Colors.muted,
   },
   rewardPill: {
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
     borderRadius: Radius.full,
-    backgroundColor: Colors.green + "14",
+    backgroundColor: Palette.greenSoft,
     paddingHorizontal: 9,
     paddingVertical: 5,
   },
   reward: {
+    fontFamily: Typography.mono,
     fontSize: 12,
     color: Colors.green,
-    fontWeight: "900",
+    fontWeight: "700",
   },
 });
 
@@ -495,9 +527,10 @@ const lr = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: Spacing.sm,
-    paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.border,
+    padding: Spacing.sm,
+    marginBottom: Spacing.xs,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.panel,
   },
   icon: {
     width: 30,
@@ -508,101 +541,139 @@ const lr = StyleSheet.create({
   },
   body: { flex: 1, minWidth: 0 },
   label: { fontSize: 12, color: Colors.text },
-  day: { fontSize: 9, color: Colors.dim, marginTop: 1 },
-  amount: { fontSize: 13, fontWeight: "900" },
+  day: { fontSize: 9, color: Colors.muted, marginTop: 1 },
+  amount: { fontFamily: Typography.mono, fontSize: 12, fontWeight: "700" },
 });
 
 const sc = StyleSheet.create({
   card: {
     flex: 1,
-    backgroundColor: "rgba(255,255,255,.035)",
+    backgroundColor: Colors.panel,
     borderRadius: Radius.lg,
     borderWidth: 1,
     borderColor: Colors.border,
     padding: Spacing.md,
     alignItems: "center",
     gap: 3,
+    ...Shadow.card,
   },
   label: {
+    fontFamily: Typography.mono,
     fontSize: 8,
-    color: Colors.dim,
+    color: Colors.muted,
     letterSpacing: 1.4,
-    fontWeight: "900",
   },
   value: {
-    fontSize: 18,
-    fontWeight: "900",
+    fontFamily: Typography.mono,
+    fontSize: 15,
+    fontWeight: "700",
   },
   sub: {
     fontSize: 9,
-    color: Colors.dim,
+    color: Colors.muted,
     textAlign: "center",
   },
 });
 
 const s = StyleSheet.create({
-  root: { flex: 1 },
+  root: { flex: 1, backgroundColor: Colors.surface },
   content: { paddingBottom: Spacing.xxl },
 
   header: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
     paddingHorizontal: Spacing.lg,
     paddingTop: Spacing.sm,
     paddingBottom: Spacing.md,
+    gap: Spacing.md,
   },
-  hdrL: {
-    flexDirection: "row",
+  headerMark: {
+    width: MIN_TOUCH,
+    height: MIN_TOUCH,
     alignItems: "center",
-    gap: Spacing.sm,
+    justifyContent: "center",
+    borderWidth: 1,
+    borderRadius: Radius.md,
+  },
+  headerCopy: { flex: 1 },
+  kicker: {
+    color: Colors.skyDark,
+    fontFamily: Typography.mono,
+    fontSize: 8,
+    letterSpacing: 1.3,
   },
   title: {
-    fontSize: 20,
+    fontFamily: Typography.display,
+    fontSize: 28,
+    lineHeight: 31,
+    letterSpacing: 0.4,
     color: Colors.text,
-    fontWeight: "900",
   },
   subtitle: {
     fontSize: 10,
-    color: Colors.dim,
+    color: Colors.muted,
   },
-  hdrRight: {
+  closeButton: {
+    width: MIN_TOUCH,
+    height: MIN_TOUCH,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: Radius.full,
+    backgroundColor: Colors.inset,
+  },
+  quickActions: {
+    flexDirection: "row",
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.md,
+    gap: Spacing.sm,
+  },
+  quickButton: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
     gap: Spacing.sm,
-  },
-  smallBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    paddingHorizontal: Spacing.sm + 2,
-    paddingVertical: 6,
-    borderRadius: Radius.md,
+    minHeight: 54,
+    padding: Spacing.sm,
+    borderRadius: Radius.lg,
     borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.panel,
+    ...Shadow.card,
   },
-  smallBtnTxt: {
-    fontSize: 11,
-    fontWeight: "800",
+  quickIcon: {
+    width: 34,
+    height: 34,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: Radius.md,
   },
+  quickCopy: { flex: 1, minWidth: 0 },
+  quickTitle: { color: Colors.text, fontSize: 11, fontWeight: "700" },
+  quickSubtitle: { color: Colors.muted, fontSize: 8, marginTop: 2 },
 
   hero: {
     marginHorizontal: Spacing.lg,
     marginBottom: Spacing.md,
     borderRadius: Radius.xl,
     borderWidth: 1,
-    borderColor: Colors.green + "30",
-    backgroundColor: "rgba(34,197,94,0.055)",
     padding: Spacing.lg,
+    ...Shadow.card,
   },
+  heroPositive: {
+    borderColor: Colors.green,
+    backgroundColor: Palette.greenSoft,
+  },
+  heroNegative: { borderColor: Colors.red, backgroundColor: Palette.redSoft },
   heroLabel: {
+    fontFamily: Typography.mono,
     fontSize: 9,
-    color: Colors.dim,
+    color: Colors.muted,
     letterSpacing: 2,
-    fontWeight: "900",
   },
   heroValue: {
-    fontSize: 34,
-    fontWeight: "900",
+    fontFamily: Typography.mono,
+    fontSize: 30,
+    fontWeight: "700",
     marginTop: 4,
   },
   heroBreakdown: {
@@ -620,8 +691,9 @@ const s = StyleSheet.create({
     color: Colors.muted,
   },
   heroLineValue: {
-    fontSize: 12,
-    fontWeight: "900",
+    fontFamily: Typography.mono,
+    fontSize: 11,
+    fontWeight: "700",
   },
 
   statsRow: {
@@ -642,14 +714,15 @@ const s = StyleSheet.create({
     marginBottom: Spacing.sm,
   },
   sectionTitle: {
+    fontFamily: Typography.mono,
     fontSize: 9,
-    color: Colors.dim,
+    color: Colors.skyDark,
     letterSpacing: 2.2,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   sectionHint: {
     fontSize: 9,
-    color: Colors.dim,
+    color: Colors.muted,
   },
 
   bestCard: {
@@ -660,8 +733,9 @@ const s = StyleSheet.create({
     marginBottom: Spacing.md,
     borderRadius: Radius.lg,
     borderWidth: 1,
-    backgroundColor: "rgba(255,255,255,.035)",
+    backgroundColor: Colors.panel,
     padding: Spacing.md,
+    ...Shadow.card,
   },
   bestIcon: {
     width: 36,
@@ -669,61 +743,53 @@ const s = StyleSheet.create({
     borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(255,255,255,.05)",
+    backgroundColor: Colors.skyDim,
   },
   bestTitle: {
     fontSize: 10,
-    color: Colors.dim,
+    color: Colors.muted,
     marginBottom: 2,
   },
   bestRoute: {
-    fontSize: 13,
+    fontFamily: Typography.mono,
+    fontSize: 12,
     color: Colors.text,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   bestCash: {
+    fontFamily: Typography.mono,
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "700",
   },
 
   empty: {
     alignItems: "center",
     padding: Spacing.xxl,
     gap: Spacing.sm,
+    marginHorizontal: Spacing.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.xl,
+    backgroundColor: Colors.panel,
+    ...Shadow.card,
+  },
+  emptyIcon: {
+    width: 58,
+    height: 58,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: Radius.full,
+    backgroundColor: Colors.skyDim,
   },
   emptyTitle: {
     fontSize: 15,
     color: Colors.text,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   emptySub: {
     fontSize: 12,
-    color: Colors.dim,
-    textAlign: "center",
-    lineHeight: 18,
-  },
-});
-
-const es = StyleSheet.create({
-  wrap: { flex: 1, padding: Spacing.lg },
-  empty: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    gap: Spacing.md,
-    paddingVertical: 60,
-  },
-  emptyTitle: {
-    fontSize: 17,
-    fontWeight: "700",
-    color: Colors.text,
-    textAlign: "center",
-  },
-  emptySub: {
-    fontSize: 13,
     color: Colors.muted,
     textAlign: "center",
-    lineHeight: 20,
-    maxWidth: 280,
+    lineHeight: 18,
   },
 });

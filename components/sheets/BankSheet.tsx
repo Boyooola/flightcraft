@@ -1,16 +1,12 @@
-/**
- * components/sheets/BankSheet.tsx
- *
- * Worldwide Rush-style bank sheet.
- *
- * Focus:
- *   - loans are expansion boosts
- *   - interest is shown as "daily drag"
- *   - borrow to buy planes/hubs and clear more demand
- *   - repay to remove drag from cash flow
- */
-
-import { Colors, MIN_TOUCH, Radius, Spacing } from "@/constants/theme";
+import {
+  Colors,
+  MIN_TOUCH,
+  Palette,
+  Radius,
+  Shadow,
+  Spacing,
+  Typography,
+} from "@/constants/theme";
 import { useHaptics } from "@/hooks/useHaptics";
 import { useTabBarHeight } from "@/hooks/useSheetLayout";
 import { useLoanActions } from "@/hooks/useSupabaseWrite";
@@ -130,12 +126,14 @@ function RepayPresets({
         return (
           <TouchableOpacity
             key={p.label}
+            accessibilityLabel={`Repay ${fmtCash(p.amount)}`}
+            accessibilityRole="button"
             style={[
               rp.btn,
               canAfford
                 ? {
-                    borderColor: Colors.green + "55",
-                    backgroundColor: Colors.green + "12",
+                    borderColor: Colors.green,
+                    backgroundColor: Palette.greenSoft,
                   }
                 : {
                     borderColor: Colors.border,
@@ -170,7 +168,7 @@ function LoanCard({
   effectiveRate,
   locked,
   lockReason,
-  canBorrowMore,
+  availableCredit,
   onTake,
   taking,
 }: {
@@ -178,12 +176,13 @@ function LoanCard({
   effectiveRate: number;
   locked: boolean;
   lockReason: string;
-  canBorrowMore: boolean;
+  availableCredit: number;
   onTake: (pkg: LoanPackage, rate: number) => void;
   taking: boolean;
 }) {
   const dailyDrag = dailyInterest(pkg.amount, effectiveRate);
-  const canTake = !locked && canBorrowMore;
+  const fitsCreditLimit = pkg.amount <= availableCredit;
+  const canTake = !locked && fitsCreditLimit;
 
   return (
     <View style={[lc.card, locked && lc.locked]}>
@@ -230,13 +229,19 @@ function LoanCard({
         </View>
       ) : (
         <TouchableOpacity
+          accessibilityLabel={
+            canTake
+              ? `Borrow ${fmtCash(pkg.amount)} at ${effectiveRate.toFixed(1)} percent interest`
+              : locked
+                ? lockReason
+                : "This loan exceeds your available credit"
+          }
+          accessibilityRole="button"
           style={[
             lc.btn,
             {
-              backgroundColor: canTake
-                ? Colors.sky + "20"
-                : "rgba(255,255,255,.04)",
-              borderColor: canTake ? Colors.sky + "55" : Colors.border,
+              backgroundColor: canTake ? Colors.sky : Colors.dim,
+              borderColor: canTake ? Colors.sky : Colors.border,
             },
             (!canTake || taking) && { opacity: 0.55 },
           ]}
@@ -245,23 +250,18 @@ function LoanCard({
           activeOpacity={0.85}
         >
           {taking ? (
-            <ActivityIndicator size="small" color={Colors.sky} />
+            <ActivityIndicator size="small" color={Colors.textOnColor} />
           ) : (
             <>
               <Ionicons
                 name="flash-outline"
                 size={15}
-                color={canTake ? Colors.sky : Colors.dim}
+                color={Colors.textOnColor}
               />
-              <Text
-                style={[
-                  lc.btnTxt,
-                  { color: canTake ? Colors.sky : Colors.dim },
-                ]}
-              >
+              <Text style={[lc.btnTxt, { color: Colors.textOnColor }]}>
                 {canTake
-                  ? `Take ${fmtCash(pkg.amount)} Boost`
-                  : "Loan limit reached"}
+                  ? `Borrow ${fmtCash(pkg.amount)}`
+                  : "Credit limit reached"}
               </Text>
             </>
           )}
@@ -294,7 +294,7 @@ export default function BankSheet() {
   const rateMulti = RATE_MULTIPLIER[difficulty] ?? 1;
   const currentRate = airline.loan_rate ?? 5;
   const dailyDrag = loan > 0 ? dailyInterest(loan, currentRate) : 0;
-  const canBorrowMore = loan < 50_000_000;
+  const availableCredit = Math.max(0, 50_000_000 - loan);
 
   const handleTake = async (pkg: LoanPackage, rate: number) => {
     haptics.confirm();
@@ -350,31 +350,34 @@ export default function BankSheet() {
       showsVerticalScrollIndicator={false}
     >
       <View style={s.header}>
-        <View style={s.hdrL}>
-          <Ionicons name="flash-outline" size={21} color={color} />
-          <View>
-            <Text style={s.title}>Bank Boosts</Text>
-            <Text style={s.subtitle}>Borrow to expand passenger flow</Text>
-          </View>
+        <View
+          style={[
+            s.headerMark,
+            { borderColor: color, backgroundColor: color + "14" },
+          ]}
+        >
+          <MaterialCommunityIcons name="bank-outline" size={20} color={color} />
+        </View>
+        <View style={s.headerCopy}>
+          <Text style={s.kicker}>FINANCIAL SERVICES</Text>
+          <Text style={s.title}>Airline Bank</Text>
+          <Text style={s.subtitle}>Loans, interest, and repayments</Text>
         </View>
 
         <TouchableOpacity
+          accessibilityLabel="Close airline bank"
+          accessibilityRole="button"
           onPress={closeSheet}
-          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          style={s.closeButton}
         >
-          <Ionicons name="close" size={22} color={Colors.dim} />
+          <Ionicons name="close" size={22} color={Colors.text} />
         </TouchableOpacity>
       </View>
 
-      <View
-        style={[
-          s.hero,
-          { borderColor: loan > 0 ? Colors.red + "33" : Colors.green + "33" },
-        ]}
-      >
+      <View style={[s.hero, loan > 0 ? s.heroDebt : s.heroClear]}>
         <View>
           <Text style={s.heroLabel}>
-            {loan > 0 ? "DAILY LOAN DRAG" : "BANK STATUS"}
+            {loan > 0 ? "DAILY INTEREST COST" : "DEBT STATUS"}
           </Text>
           <Text
             style={[
@@ -387,14 +390,14 @@ export default function BankSheet() {
           <Text style={s.heroSub}>
             {loan > 0
               ? `${fmtCash(loan)} loan · ${currentRate}% rate`
-              : "No debt slowing your cash flow"}
+              : "No active loans or interest charges"}
           </Text>
         </View>
 
         <MaterialCommunityIcons
           name={loan > 0 ? "bank-minus" : "bank-check"}
           size={38}
-          color={loan > 0 ? Colors.red + "66" : Colors.green + "66"}
+          color={loan > 0 ? Colors.red : Colors.green}
         />
       </View>
 
@@ -406,8 +409,10 @@ export default function BankSheet() {
           <Text style={s.statLbl}>CASH</Text>
         </View>
         <View style={s.stat}>
-          <Text style={[s.statVal, { color: color }]}>{routeCount}</Text>
-          <Text style={s.statLbl}>ROUTES</Text>
+          <Text style={[s.statVal, { color: Colors.skyDark }]}>
+            {fmtCash(availableCredit)}
+          </Text>
+          <Text style={s.statLbl}>AVAILABLE CREDIT</Text>
         </View>
         <View style={s.stat}>
           <Text
@@ -455,9 +460,10 @@ export default function BankSheet() {
 
       <View style={s.divider} />
 
-      <Text style={s.eyebrow}>EXPANSION BOOSTS</Text>
+      <Text style={s.eyebrow}>LOAN OPTIONS</Text>
       <Text style={s.diffNote}>
-        {difficulty.charAt(0).toUpperCase() + difficulty.slice(1)} mode ·{" "}
+        Day {day} · {routeCount} active route{routeCount === 1 ? "" : "s"} ·{" "}
+        {difficulty.charAt(0).toUpperCase() + difficulty.slice(1)} difficulty ·{" "}
         {Math.round((rateMulti - 1) * 100) >= 0 ? "+" : ""}
         {Math.round((rateMulti - 1) * 100)}% rate modifier
       </Text>
@@ -477,7 +483,7 @@ export default function BankSheet() {
             effectiveRate={effectiveRate}
             locked={locked}
             lockReason={lockReason}
-            canBorrowMore={canBorrowMore}
+            availableCredit={availableCredit}
             onTake={handleTake}
             taking={taking === pkg.id}
           />
@@ -510,12 +516,13 @@ const rp = StyleSheet.create({
     paddingVertical: Spacing.sm,
     borderRadius: Radius.md,
     borderWidth: 1,
-    minHeight: MIN_TOUCH * 0.8,
+    minHeight: MIN_TOUCH,
     justifyContent: "center",
   },
   lbl: {
-    fontSize: 13,
-    fontWeight: "900",
+    fontFamily: Typography.mono,
+    fontSize: 11,
+    fontWeight: "700",
   },
 });
 
@@ -524,14 +531,17 @@ const lc = StyleSheet.create({
     borderRadius: Radius.xl,
     borderWidth: 1,
     borderColor: Colors.border,
-    backgroundColor: "rgba(255,255,255,.03)",
+    backgroundColor: Colors.panel,
     padding: Spacing.md,
     marginHorizontal: Spacing.lg,
     marginBottom: Spacing.md,
     gap: Spacing.sm,
+    ...Shadow.card,
   },
   locked: {
-    opacity: 0.55,
+    backgroundColor: Colors.bg,
+    shadowOpacity: 0,
+    elevation: 0,
   },
   top: {
     flexDirection: "row",
@@ -542,25 +552,26 @@ const lc = StyleSheet.create({
   tag: {
     alignSelf: "flex-start",
     borderRadius: Radius.full,
-    backgroundColor: Colors.sky + "14",
+    backgroundColor: Colors.skyDim,
     paddingHorizontal: 7,
     paddingVertical: 2,
     marginBottom: 5,
   },
   tagText: {
+    fontFamily: Typography.mono,
     fontSize: 8,
-    color: Colors.sky,
-    fontWeight: "900",
+    color: Colors.skyDark,
+    fontWeight: "700",
     letterSpacing: 1,
   },
   name: {
     fontSize: 15,
     color: Colors.text,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   desc: {
     fontSize: 11,
-    color: Colors.dim,
+    color: Colors.muted,
     lineHeight: 16,
     marginTop: 2,
   },
@@ -568,12 +579,13 @@ const lc = StyleSheet.create({
     alignItems: "flex-end",
   },
   amount: {
-    fontSize: 18,
-    fontWeight: "900",
+    fontFamily: Typography.mono,
+    fontSize: 16,
+    fontWeight: "700",
   },
   amountSub: {
     fontSize: 8,
-    color: Colors.dim,
+    color: Colors.muted,
   },
   stats: {
     flexDirection: "row",
@@ -581,22 +593,23 @@ const lc = StyleSheet.create({
   },
   stat: {
     flex: 1,
-    backgroundColor: "rgba(255,255,255,.04)",
+    backgroundColor: Colors.bg,
     borderRadius: Radius.md,
     padding: Spacing.sm,
     alignItems: "center",
     gap: 2,
   },
   statVal: {
+    fontFamily: Typography.mono,
     fontSize: 12,
     color: Colors.text,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   statLbl: {
+    fontFamily: Typography.mono,
     fontSize: 7,
-    color: Colors.dim,
+    color: Colors.muted,
     letterSpacing: 1.4,
-    fontWeight: "800",
   },
   lockRow: {
     flexDirection: "row",
@@ -605,7 +618,7 @@ const lc = StyleSheet.create({
   },
   lockText: {
     fontSize: 10,
-    color: Colors.dim,
+    color: Colors.muted,
   },
   btn: {
     flexDirection: "row",
@@ -617,64 +630,88 @@ const lc = StyleSheet.create({
     borderWidth: 1,
   },
   btnTxt: {
-    fontSize: 13,
-    fontWeight: "900",
+    fontSize: 12,
+    fontWeight: "700",
+    color: Colors.textOnColor,
   },
 });
 
 const s = StyleSheet.create({
-  root: { flex: 1 },
+  root: { flex: 1, backgroundColor: Colors.surface },
   content: {
     paddingBottom: Spacing.xxl,
   },
   header: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
     paddingHorizontal: Spacing.lg,
     paddingTop: Spacing.sm,
     paddingBottom: Spacing.md,
+    gap: Spacing.md,
   },
-  hdrL: {
-    flexDirection: "row",
+  headerMark: {
+    width: MIN_TOUCH,
+    height: MIN_TOUCH,
     alignItems: "center",
-    gap: Spacing.sm,
+    justifyContent: "center",
+    borderWidth: 1,
+    borderRadius: Radius.md,
+  },
+  headerCopy: { flex: 1 },
+  kicker: {
+    color: Colors.skyDark,
+    fontFamily: Typography.mono,
+    fontSize: 8,
+    letterSpacing: 1.3,
   },
   title: {
-    fontSize: 20,
+    fontFamily: Typography.display,
+    fontSize: 28,
+    lineHeight: 31,
+    letterSpacing: 0.4,
     color: Colors.text,
-    fontWeight: "900",
   },
   subtitle: {
     fontSize: 10,
-    color: Colors.dim,
+    color: Colors.muted,
     marginTop: 1,
+  },
+  closeButton: {
+    width: MIN_TOUCH,
+    height: MIN_TOUCH,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: Radius.full,
+    backgroundColor: Colors.inset,
   },
   hero: {
     marginHorizontal: Spacing.lg,
     marginBottom: Spacing.md,
     borderRadius: Radius.xl,
     borderWidth: 1,
-    backgroundColor: "rgba(255,255,255,.035)",
     padding: Spacing.md,
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+    ...Shadow.card,
   },
+  heroDebt: { borderColor: Colors.red, backgroundColor: Palette.redSoft },
+  heroClear: { borderColor: Colors.green, backgroundColor: Palette.greenSoft },
   heroLabel: {
+    fontFamily: Typography.mono,
     fontSize: 8,
-    color: Colors.dim,
+    color: Colors.muted,
     letterSpacing: 1.8,
-    fontWeight: "900",
   },
   heroValue: {
-    fontSize: 30,
-    fontWeight: "900",
+    fontFamily: Typography.mono,
+    fontSize: 28,
+    fontWeight: "700",
     marginTop: 4,
   },
   heroSub: {
     fontSize: 10,
-    color: Colors.dim,
+    color: Colors.muted,
     marginTop: 2,
   },
   statsRow: {
@@ -685,46 +722,49 @@ const s = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.border,
     overflow: "hidden",
+    backgroundColor: Colors.panel,
+    ...Shadow.card,
   },
   stat: {
     flex: 1,
     alignItems: "center",
     paddingVertical: Spacing.sm,
-    backgroundColor: "rgba(255,255,255,.025)",
   },
   statVal: {
-    fontSize: 15,
-    fontWeight: "900",
+    fontFamily: Typography.mono,
+    fontSize: 13,
+    fontWeight: "700",
   },
   statLbl: {
+    fontFamily: Typography.mono,
     fontSize: 8,
-    color: Colors.dim,
+    color: Colors.muted,
     marginTop: 2,
-    fontWeight: "800",
   },
   repayCard: {
     marginHorizontal: Spacing.lg,
     marginBottom: Spacing.md,
     borderRadius: Radius.xl,
     borderWidth: 1,
-    borderColor: Colors.green + "33",
-    backgroundColor: Colors.green + "08",
+    borderColor: Colors.green,
+    backgroundColor: Palette.greenSoft,
     padding: Spacing.md,
     gap: Spacing.sm,
+    ...Shadow.card,
   },
   repayHint: {
     fontSize: 11,
-    color: Colors.dim,
+    color: Colors.muted,
     lineHeight: 16,
   },
   errBox: {
     flexDirection: "row",
     alignItems: "flex-start",
     gap: 6,
-    backgroundColor: "rgba(248,113,113,.08)",
+    backgroundColor: Palette.redSoft,
     borderRadius: Radius.md,
     borderWidth: 1,
-    borderColor: "rgba(248,113,113,.25)",
+    borderColor: Colors.red,
     marginHorizontal: Spacing.lg,
     marginBottom: Spacing.sm,
     padding: Spacing.sm,
@@ -739,10 +779,10 @@ const s = StyleSheet.create({
     flexDirection: "row",
     alignItems: "flex-start",
     gap: 6,
-    backgroundColor: "rgba(74,222,128,.08)",
+    backgroundColor: Palette.greenSoft,
     borderRadius: Radius.md,
     borderWidth: 1,
-    borderColor: "rgba(74,222,128,.25)",
+    borderColor: Colors.green,
     marginHorizontal: Spacing.lg,
     marginBottom: Spacing.sm,
     padding: Spacing.sm,
@@ -759,16 +799,17 @@ const s = StyleSheet.create({
     marginVertical: Spacing.md,
   },
   eyebrow: {
+    fontFamily: Typography.mono,
     fontSize: 9,
-    color: Colors.dim,
+    color: Colors.skyDark,
     letterSpacing: 2.5,
     paddingHorizontal: Spacing.lg,
     marginBottom: 4,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   diffNote: {
     fontSize: 10,
-    color: Colors.dim,
+    color: Colors.muted,
     paddingHorizontal: Spacing.lg,
     marginBottom: Spacing.md,
   },
@@ -776,17 +817,18 @@ const s = StyleSheet.create({
     flexDirection: "row",
     alignItems: "flex-start",
     gap: 8,
-    backgroundColor: "rgba(255,255,255,.03)",
+    backgroundColor: Colors.panel,
     borderRadius: Radius.md,
     borderWidth: 1,
     borderColor: Colors.border,
     marginHorizontal: Spacing.lg,
     marginTop: Spacing.sm,
     padding: Spacing.sm,
+    ...Shadow.card,
   },
   infoTxt: {
     fontSize: 11,
-    color: Colors.dim,
+    color: Colors.muted,
     flex: 1,
     lineHeight: 16,
   },

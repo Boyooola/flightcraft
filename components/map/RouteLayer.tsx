@@ -10,6 +10,7 @@
  * - Revenue popup is display-only (gross estimate). Actual cash credited by useRevenueTick at end of day.
  */
 
+import { Colors, Palette } from "@/constants/theme";
 import { computePlayerMarketShare } from "@/lib/AIAirline";
 import { hubCrowdingLevel } from "@/lib/demands";
 import { boardPassengers } from "@/lib/passengerFlow";
@@ -126,8 +127,6 @@ export default function RouteLayer({
   const day = useDay();
   const airports = useGameStore((s) => s.airports);
   const dayProgress = useDayProgress();
-  const earnCash = useGameStore((s) => s.earnCash);
-  const updateDemand = useGameStore((s) => s.updateDemand);
 
   const [planes, setPlanes] = useState<PlaneState[]>([]);
   const [revPops, setRevPops] = useState<RevenuePop[]>([]);
@@ -166,18 +165,24 @@ export default function RouteLayer({
       // called inside setInterval callbacks, only at component render time.
       const {
         dailyEvent,
-        activeDemandWave,
+        activeChoiceConsequence,
         demands,
         hubs,
         addPaxDelivered,
-        setRouteEarnings,
-        routeEarnings,
+        addRouteEarning,
       } = useGameStore.getState();
 
-      // Combined revenue multiplier from daily event + active demand wave + hub crowding
+      const choiceMultiplier =
+        activeChoiceConsequence?.revenueMultiplier != null &&
+        activeChoiceConsequence.revenueMultiplierEndsDay != null &&
+        day < activeChoiceConsequence.revenueMultiplierEndsDay
+          ? activeChoiceConsequence.revenueMultiplier
+          : 1;
+
+      // A demand wave is represented by dailyEvent, so applying both
+      // dailyEvent and activeDemandWave here would count it twice.
       const globalRevMul =
-        (dailyEvent?.revenueMultiplier ?? 1.0) *
-        (activeDemandWave?.wave.revenueMultiplier ?? 1.0);
+        (dailyEvent?.revenueMultiplier ?? 1.0) * choiceMultiplier;
 
       // Per-hub crowding multiplier — computed once per tick, applied per route
       const hubCrowdMul = new Map<string, number>();
@@ -241,25 +246,15 @@ export default function RouteLayer({
                 .getState()
                 .demands.find((d) => d.id === route.demand.id) ?? route.demand;
 
-            // Consider the route cleared when delivered pax has reached
-            // as many as this plane can physically move — not base_pax_day-2.
-            // Using base_pax_day-2 caused capacity-constrained routes
-            // (plane seats < demand) to mark themselves done after one trip.
-            // e.g. CRJ200(50 seats) on 52-pax demand: 50 >= 52-2 → true → stops.
-            //
-            // Now: cleared = delivered >= min(base_pax_day, planeCapacity)
-            // A 50-seat plane on 52-pax demand clears correctly at 50.
-            // A 70-seat plane on 52-pax demand still clears at 52 (full demand).
-            const planeCapacity = route.plane.plane_model.pax_capacity ?? 70;
-            const effectiveCap = Math.min(
-              liveDemand.base_pax_day ?? 1,
-              planeCapacity,
-            );
+            // Demand is shared by every plane assigned to this corridor.
+            // Stop only after the shared demand is actually clear; using one
+            // plane's capacity here prevented additional planes from boarding.
             const alreadyCleared =
-              (liveDemand.delivered_pax_today ?? 0) >= effectiveCap;
+              (liveDemand.delivered_pax_today ?? 0) >=
+              (liveDemand.base_pax_day ?? 0);
 
             if (!alreadyCleared) {
-              const delieveredPax = boardPassengers({
+              const deliveredPax = boardPassengers({
                 demand: liveDemand,
                 planeCapacity: route.plane.plane_model.pax_capacity,
                 dayProgress,
@@ -269,7 +264,7 @@ export default function RouteLayer({
 
               const aiAirlines = useGameStore.getState().aiAirlines;
 
-              if (delieveredPax > 0) {
+              if (deliveredPax > 0) {
                 const hub = hubs.find((h) => h.airport.iata === route.hub_iata);
 
                 const share = computePlayerMarketShare(
@@ -286,17 +281,11 @@ export default function RouteLayer({
                 // a plane that boarded passengers always delivers at least 1.
                 const effective = Math.max(
                   1,
-                  Math.round(delieveredPax * share),
+                  Math.round(deliveredPax * share),
                 );
-                const lost = Math.max(0, delieveredPax - effective);
+                const lost = Math.max(0, deliveredPax - effective);
                 if (effective > 0) {
                   addPaxDelivered(liveDemand.id, effective, lost);
-                }
-
-                if (lost > 0) {
-                  updateDemand(liveDemand.id, {
-                    ai_stolen_pax: (liveDemand.ai_stolen_pax ?? 0) + 0,
-                  });
                 }
 
                 // Seasonal multiplier — continent-first, country override
@@ -327,7 +316,7 @@ export default function RouteLayer({
                   distNm,
                   speedKts: route.plane.plane_model.speed_kts,
                   trustPct: hub?.trust ?? 0,
-                  boardedPax: delieveredPax,
+                  boardedPax: effective,
                   seatCapacity: route.plane.plane_model.pax_capacity,
                   costPerSector: route.plane.plane_model.cost_per_sector ?? 500,
                   fuelPerNm: route.plane.plane_model.fuel_per_nm ?? 2.0,
@@ -340,17 +329,10 @@ export default function RouteLayer({
                 });
 
                 // Accumulate net earnings per route — realtime, read by RoutesSheet/AirportSheet
-                const prevEarning = routeEarnings[route.id] ?? 0;
-                console.log("prevEar", prevEarning);
-                setRouteEarnings({
-                  ...routeEarnings,
-                  [route.id]: prevEarning + res.net,
-                });
+                addRouteEarning(route.id, res.net);
 
                 // Display-only popup — shows gross earned this rotation
                 const popupAmount = res.net;
-
-                console.log("pop", popupAmount);
 
                 const popId = `pop-${route.id}-${Date.now()}`;
 
@@ -413,7 +395,7 @@ export default function RouteLayer({
 
     const id = setInterval(tick, ANIM_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [active, airports, dayProgress, speed, paused]);
+  }, [active, airports, day, dayProgress, speed, paused]);
 
   if (active.length === 0) return null;
 
@@ -516,12 +498,21 @@ export default function RouteLayer({
     <>
       <MapboxGL.ShapeSource id="routes-source" shape={lineGeoJSON}>
         <MapboxGL.LineLayer
-          id="route-glow"
+          id="route-casing"
           style={{
-            lineColor: airlineColor,
-            lineWidth: ["interpolate", ["linear"], ["zoom"], 1, 3, 6, 7],
-            lineOpacity: 0.12,
-            lineBlur: 4,
+            lineColor: Colors.surface,
+            lineWidth: [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              1,
+              4,
+              6,
+              6,
+              10,
+              8,
+            ],
+            lineOpacity: paused ? 0.65 : 0.92,
             lineCap: "round",
             lineJoin: "round",
           }}
@@ -531,9 +522,19 @@ export default function RouteLayer({
           id="route-line"
           style={{
             lineColor: airlineColor,
-            lineWidth: ["interpolate", ["linear"], ["zoom"], 1, 1, 6, 2.5],
-            lineOpacity: 0.8,
-            lineDasharray: [2, 3],
+            lineWidth: [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              1,
+              1.4,
+              6,
+              2.4,
+              10,
+              3.2,
+            ],
+            lineOpacity: paused ? 0.45 : 0.9,
+            lineDasharray: paused ? [1, 1.6] : [3, 1.5],
             lineCap: "round",
             lineJoin: "round",
           }}
@@ -552,13 +553,16 @@ export default function RouteLayer({
                 ["linear"],
                 ["zoom"],
                 1,
-                1.2,
+                1.1,
                 5,
-                1.8,
+                1.65,
                 10,
-                2.5,
+                2.2,
               ],
-              iconColor: "#ffffff",
+              iconColor: Colors.text,
+              iconHaloColor: Colors.surface,
+              iconHaloWidth: 1.5,
+              iconOpacity: paused ? 0.62 : 1,
               iconRotate: ["get", "rotation"],
               iconRotationAlignment: "map",
               iconAllowOverlap: true,
@@ -595,7 +599,7 @@ export default function RouteLayer({
                       }`,
                 opacity: pop.opacity,
                 offsetY: -pop.offsetY,
-                color: pop.amount >= 0 ? "#22c55e" : "#ef4444",
+                color: pop.amount >= 0 ? Colors.green : Colors.red,
               },
             })),
           };
@@ -609,8 +613,9 @@ export default function RouteLayer({
                   textField: ["get", "label"],
                   textSize: 13,
                   textColor: ["get", "color"],
-                  textHaloColor: "rgba(0,0,0,0.7)",
-                  textHaloWidth: 1.5,
+                  textHaloColor: Colors.surface,
+                  textHaloWidth: 2.5,
+                  textHaloBlur: 0.5,
                   textOpacity: ["get", "opacity"],
                   textOffset: [0, 1.2],
                   textAnchor: "bottom",
@@ -641,10 +646,11 @@ export default function RouteLayer({
                 10,
                 14,
               ],
-              circleColor: "transparent",
-              circleStrokeColor: airlineColor,
-              circleStrokeWidth: 1.5,
-              circleStrokeOpacity: 0.7,
+              circleColor: Palette.violetSoft,
+              circleOpacity: 0.9,
+              circleStrokeColor: Colors.purple,
+              circleStrokeWidth: 2,
+              circleStrokeOpacity: 0.9,
               circlePitchAlignment: "map",
             }}
           />
@@ -664,8 +670,8 @@ export default function RouteLayer({
                 10,
                 7,
               ],
-              circleColor: airlineColor,
-              circleOpacity: 0.9,
+              circleColor: Colors.purple,
+              circleOpacity: 1,
               circlePitchAlignment: "map",
             }}
           />
@@ -679,10 +685,11 @@ export default function RouteLayer({
               textSize: 10,
               textOffset: [0, 1.4],
               textAnchor: "top",
-              textColor: airlineColor,
-              textOpacity: 0.8,
-              textHaloColor: "rgba(4,9,15,0.9)",
-              textHaloWidth: 1.5,
+              textColor: Colors.purple,
+              textOpacity: 0.95,
+              textHaloColor: Colors.surface,
+              textHaloWidth: 2,
+              textHaloBlur: 0.5,
               textAllowOverlap: false,
             }}
           />

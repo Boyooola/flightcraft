@@ -12,6 +12,7 @@
  *                      when 2+ waypoints, open CreateRouteSheet
  */
 
+import { Colors, MAP_STYLE_URL } from "@/constants/theme";
 import type { Airport } from "@/store";
 import { useAirline, useGameStore, useHubs } from "@/store";
 import MapboxGL from "@rnmapbox/maps";
@@ -35,25 +36,14 @@ MapboxGL.setAccessToken(MAPBOX_TOKEN);
 const DEFAULT_CAMERA = {
   centerCoordinate: [20.0, 20.0],
   zoomLevel: 2.5,
+  padding: {
+    paddingTop: 160,
+    paddingRight: 16,
+    paddingBottom: 96,
+    paddingLeft: 16,
+  },
   animationDuration: 0,
 };
-
-// Labels to hide from Mapbox Dark style — keeps map clean
-const HIDDEN_LABELS = [
-  "settlement-label",
-  "settlement-subdivision-label",
-  "place-label",
-  "place-city-label",
-  "place-town-label",
-  "place-village-label",
-  "poi-label",
-  "transit-label",
-  "airport-label",
-  "water-point-label",
-  "natural-point-label",
-  "settlement-minor-label",
-  "settlement-major-label",
-];
 
 interface GameMapProps {
   airlineColor: string;
@@ -67,7 +57,7 @@ export default function GameMap({ airlineColor, onMapReady }: GameMapProps) {
   const routeCreationMode = useGameStore((s) => s.routeCreationMode);
   const creationWaypoints = useGameStore((s) => s.creationWaypoints);
 
-  const color = airline?.color ?? "#38BDF8";
+  const color = airline?.color ?? airlineColor ?? Colors.sky;
   const speed = airline?.speed ?? 1;
 
   // ── Fly to first hub when it's purchased ────────────────────────
@@ -75,11 +65,16 @@ export default function GameMap({ airlineColor, onMapReady }: GameMapProps) {
   useEffect(() => {
     if (hubs.length === 1 && prevHubCount.current === 0) {
       const hub = hubs[0].airport;
-      cameraRef.current?.flyTo([hub.lng, hub.lat], 800);
-      cameraRef.current?.zoomTo(4.5, 800);
+      cameraRef.current?.setCamera({
+        centerCoordinate: [hub.lng, hub.lat],
+        zoomLevel: 4.5,
+        padding: DEFAULT_CAMERA.padding,
+        animationDuration: 800,
+        animationMode: "flyTo",
+      });
     }
     prevHubCount.current = hubs.length;
-  }, [hubs.length]);
+  }, [hubs]);
 
   // ── Airport tap handler ──────────────────────────────────────────
   const handleAirportPress = useCallback((airport: Airport) => {
@@ -118,10 +113,13 @@ export default function GameMap({ airlineColor, onMapReady }: GameMapProps) {
     <View style={s.root}>
       <MapboxGL.MapView
         style={s.map}
-        styleURL={MapboxGL.StyleURL.Dark}
+        styleURL={MAP_STYLE_URL}
+        projection="mercator"
+        tintColor={Colors.sky}
         logoEnabled={false}
         attributionEnabled={false}
         compassEnabled={false}
+        scaleBarEnabled={false}
         onDidFinishLoadingMap={onMapReady}
         rotateEnabled={false}
         pitchEnabled={false}
@@ -140,18 +138,6 @@ export default function GameMap({ airlineColor, onMapReady }: GameMapProps) {
           waypointIatas={waypointIatas}
         />
 
-        {/* Hide Mapbox default labels — keeps map clean */}
-        {HIDDEN_LABELS.map((id) => (
-          <MapboxGL.SymbolLayer
-            key={id}
-            id={`hide-${id}`}
-            sourceID="composite"
-            sourceLayerID={id}
-            existing
-            style={{ visibility: "none" }}
-          />
-        ))}
-
         {/* AI routes — rendered behind player routes */}
         <AIRouteLayer paused={speed === 0} speed={speed} />
 
@@ -165,6 +151,12 @@ export default function GameMap({ airlineColor, onMapReady }: GameMapProps) {
 }
 
 const s = StyleSheet.create({
-  root: { flex: 1 },
-  map: { flex: 1 },
+  root: {
+    flex: 1,
+    backgroundColor: Colors.bg,
+  },
+  map: {
+    flex: 1,
+    backgroundColor: Colors.bg,
+  },
 });

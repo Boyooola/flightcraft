@@ -1,23 +1,18 @@
-/**
- * components/sheets/CreateRouteSheet.tsx
- *
- * WorldWide Rush-style route creation sheet.
- *
- * Focus:
- *   - clear live traveler queues
- *   - show waiting pax first
- *   - select the best idle plane for flow
- *   - keep economics secondary
- */
-
-import { Colors, MIN_TOUCH, Radius, Spacing } from "@/constants/theme";
+import {
+  Colors,
+  MIN_TOUCH,
+  Palette,
+  Radius,
+  Shadow,
+  Spacing,
+  Typography,
+} from "@/constants/theme";
 import { gameSounds } from "@/hooks/useGameSounds";
 import { useHaptics } from "@/hooks/useHaptics";
 import { useTabBarHeight } from "@/hooks/useSheetLayout";
 import { useCreateCustomRoute } from "@/hooks/useSupabaseWrite";
 import { haulClass, simulatePaxDay } from "@/lib/demands";
 import {
-  spawnedPaxForDay,
   waitingPaxForDemand,
   type PassengerFlowDemand,
 } from "@/lib/passengerFlow";
@@ -54,10 +49,10 @@ const CREATION_FEE: Record<string, number> = {
 };
 
 const FAMILY_COLOR: Record<string, string> = {
-  embraer: Colors.green,
-  bombardier: Colors.sky,
-  boeing: Colors.amber,
-  airbus: Colors.orange,
+  embraer: Colors.embraer,
+  bombardier: Colors.bombardier,
+  boeing: Colors.boeing,
+  airbus: Colors.airbus,
 };
 
 function RouteChain({
@@ -109,6 +104,8 @@ function RouteChain({
               </View>
 
               <TouchableOpacity
+                accessibilityLabel={`Remove ${airport.iata} from route`}
+                accessibilityRole="button"
                 onPress={() => onRemove(airport.iata)}
                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
               >
@@ -155,15 +152,8 @@ function DemandRushCard({
   canAfford: boolean;
 }) {
   const demand = existingDemand ?? previewDemand;
-  const spawned = spawnedPaxForDay(demand, dayProgress);
   const waiting = waitingPaxForDemand(demand, dayProgress);
-  const moved = demand.delivered_pax_today ?? 0;
-  const progress = Math.min(
-    100,
-    Math.round((moved / Math.max(1, demand.base_pax_day)) * 100),
-  );
   const source = existingDemand ? "LIVE DEMAND" : "NEW MARKET";
-  const waitingColor = waiting > 0 ? Colors.amber : Colors.dim;
 
   return (
     <View
@@ -277,19 +267,12 @@ const PlaneRow = React.memo(function PlaneRow({
       }).net
     : 0;
 
-  const capacityPct = Math.min(
-    100,
-    Math.round((model.pax_capacity / Math.max(1, paxDay)) * 100),
-  );
-  const capColor =
-    capacityPct >= 80
-      ? Colors.green
-      : capacityPct >= 40
-        ? Colors.amber
-        : Colors.red;
-
   return (
     <TouchableOpacity
+      accessibilityHint={canServe ? "Select or deselect this aircraft" : reason}
+      accessibilityLabel={`${model.nickname}, ${model.pax_capacity} seats${selected ? ", selected" : ""}`}
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked: selected, disabled: !canServe }}
       style={[
         planeStyles.row,
         selected && {
@@ -666,7 +649,11 @@ export default function CreateRouteSheet() {
         )}
 
         {hasOrigin && (
-          <TouchableOpacity style={s.cancelPrompt} onPress={clearCreation}>
+          <TouchableOpacity
+            accessibilityRole="button"
+            style={s.cancelPrompt}
+            onPress={clearCreation}
+          >
             <Text style={s.cancelPromptText}>Cancel route</Text>
           </TouchableOpacity>
         )}
@@ -677,11 +664,11 @@ export default function CreateRouteSheet() {
   if (done) {
     return (
       <View style={s.success}>
-        <View style={[s.successIcon, { backgroundColor: color + "18" }]}>
-          <Ionicons name="flash-outline" size={38} color={color} />
+        <View style={s.successIcon}>
+          <Ionicons name="checkmark" size={38} color={Colors.textOnColor} />
         </View>
-        <Text style={s.successTitle}>✈ Route Open!</Text>
-        <Text style={[s.successRoute, { color }]}>
+        <Text style={s.successTitle}>Route Open</Text>
+        <Text style={s.successRoute}>
           {origin?.iata}
           {via ? ` → ${via.iata}` : ""} → {dest?.iata}
         </Text>
@@ -703,19 +690,27 @@ export default function CreateRouteSheet() {
       showsVerticalScrollIndicator={false}
     >
       <View style={s.header}>
-        <View style={s.headerLeft}>
-          <Ionicons name="flash-outline" size={21} color={color} />
-          <View>
-            <Text style={s.title}>Build Route</Text>
-            <Text style={s.subtitle}>Move waiting travelers</Text>
-          </View>
+        <View
+          style={[
+            s.headerMark,
+            { borderColor: color, backgroundColor: color + "14" },
+          ]}
+        >
+          <Ionicons name="git-branch-outline" size={20} color={color} />
+        </View>
+        <View style={s.headerCopy}>
+          <Text style={s.headerKicker}>NETWORK PLANNING</Text>
+          <Text style={s.title}>Create Route</Text>
+          <Text style={s.subtitle}>Choose airports and assign aircraft</Text>
         </View>
 
         <TouchableOpacity
+          accessibilityLabel="Cancel route creation"
+          accessibilityRole="button"
           onPress={clearCreation}
-          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          style={s.closeButton}
         >
-          <Ionicons name="close" size={22} color={Colors.dim} />
+          <Ionicons name="close" size={22} color={Colors.text} />
         </TouchableOpacity>
       </View>
 
@@ -731,6 +726,8 @@ export default function CreateRouteSheet() {
 
         {waypoints.length === 3 && (
           <TouchableOpacity
+            accessibilityLabel="Swap stop and destination"
+            accessibilityRole="button"
             style={s.swapBtn}
             onPress={handleSwapStopDestination}
             activeOpacity={0.84}
@@ -923,6 +920,7 @@ export default function CreateRouteSheet() {
                 {/* Show/hide incompatible planes */}
                 {incompatibleCount > 0 && (
                   <TouchableOpacity
+                    accessibilityRole="button"
                     style={s.incompatibleToggle}
                     onPress={() => setShowIncompatible((v) => !v)}
                     activeOpacity={0.7}
@@ -974,13 +972,21 @@ export default function CreateRouteSheet() {
 
           <View style={s.section}>
             <TouchableOpacity
+              accessibilityLabel={
+                selectedCount === 0
+                  ? "Select one or more idle aircraft"
+                  : !canAffordSelected
+                    ? `Need ${fmtCash(totalFee - cash)} more to create route`
+                    : `Create route with ${selectedCount} aircraft for ${fmtCash(totalFee)}`
+              }
+              accessibilityRole="button"
               style={[
                 s.confirm,
                 {
                   backgroundColor:
                     selectedCount > 0 && canAffordSelected
-                      ? color
-                      : "rgba(255,255,255,.055)",
+                      ? Colors.sky
+                      : Colors.dim,
                 },
                 (selectedCount === 0 || !canAffordSelected || creating) && {
                   opacity: 0.5,
@@ -991,29 +997,15 @@ export default function CreateRouteSheet() {
               activeOpacity={0.86}
             >
               {creating ? (
-                <ActivityIndicator color={Colors.bg} size="small" />
+                <ActivityIndicator color={Colors.textOnColor} size="small" />
               ) : (
                 <>
                   <Ionicons
                     name="flash-outline"
                     size={17}
-                    color={
-                      selectedCount > 0 && canAffordSelected
-                        ? Colors.bg
-                        : Colors.dim
-                    }
+                    color={Colors.textOnColor}
                   />
-                  <Text
-                    style={[
-                      s.confirmText,
-                      {
-                        color:
-                          selectedCount > 0 && canAffordSelected
-                            ? Colors.bg
-                            : Colors.dim,
-                      },
-                    ]}
-                  >
+                  <Text style={s.confirmText}>
                     {selectedCount === 0
                       ? "Select one or more idle planes"
                       : !canAffordSelected
@@ -1057,8 +1049,9 @@ const chain = StyleSheet.create({
     gap: Spacing.sm,
     borderRadius: Radius.lg,
     borderWidth: 1,
-    backgroundColor: "rgba(255,255,255,.025)",
+    backgroundColor: Colors.panel,
     padding: Spacing.sm,
+    ...Shadow.card,
   },
   dot: {
     width: 11,
@@ -1075,8 +1068,9 @@ const chain = StyleSheet.create({
     gap: 6,
   },
   iata: {
-    fontSize: 17,
-    fontWeight: "900",
+    fontFamily: Typography.mono,
+    fontSize: 16,
+    fontWeight: "700",
   },
   badge: {
     borderRadius: Radius.full,
@@ -1084,13 +1078,14 @@ const chain = StyleSheet.create({
     paddingVertical: 2,
   },
   badgeText: {
+    fontFamily: Typography.mono,
     fontSize: 7,
-    fontWeight: "900",
+    fontWeight: "700",
     letterSpacing: 1,
   },
   city: {
     fontSize: 10,
-    color: Colors.dim,
+    color: Colors.muted,
     marginTop: 1,
   },
   hint: {
@@ -1101,7 +1096,7 @@ const chain = StyleSheet.create({
   },
   hintText: {
     fontSize: 10,
-    color: Colors.dim,
+    color: Colors.muted,
   },
 });
 
@@ -1109,9 +1104,10 @@ const rush = StyleSheet.create({
   card: {
     borderRadius: Radius.xl,
     borderWidth: 1,
-    backgroundColor: "rgba(255,255,255,.03)",
+    backgroundColor: Colors.panel,
     padding: Spacing.md,
     gap: Spacing.md,
+    ...Shadow.card,
   },
   header: {
     flexDirection: "row",
@@ -1126,40 +1122,34 @@ const rush = StyleSheet.create({
     justifyContent: "center",
   },
   label: {
+    fontFamily: Typography.mono,
     fontSize: 8,
     letterSpacing: 2,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   route: {
-    fontSize: 15,
+    fontFamily: Typography.mono,
+    fontSize: 14,
     color: Colors.text,
-    fontWeight: "900",
+    fontWeight: "700",
     marginTop: 1,
   },
   fee: {
     alignItems: "flex-end",
     borderRadius: Radius.md,
     borderWidth: 1,
+    backgroundColor: Colors.bg,
     paddingHorizontal: 8,
     paddingVertical: 5,
   },
   feeValue: {
+    fontFamily: Typography.mono,
     fontSize: 12,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   feeLabel: {
     fontSize: 8,
-    color: Colors.dim,
-  },
-  stats: {
-    flexDirection: "row",
-    gap: Spacing.sm,
-  },
-  progressText: {
-    fontSize: 10,
-    fontWeight: "900",
-    minWidth: 34,
-    textAlign: "right",
+    color: Colors.muted,
   },
   summaryRow: {
     flexDirection: "row",
@@ -1172,20 +1162,8 @@ const rush = StyleSheet.create({
   },
   summaryTxt: {
     fontSize: 11,
-    color: Colors.dim,
+    color: Colors.muted,
     flex: 1,
-    lineHeight: 15,
-  },
-  noteRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: 6,
-  },
-  mixTxt: { fontSize: 10, fontWeight: "700" },
-  note: {
-    flex: 1,
-    fontSize: 10,
-    color: Colors.dim,
     lineHeight: 15,
   },
 });
@@ -1197,8 +1175,9 @@ const planeStyles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.border,
     overflow: "hidden",
-    backgroundColor: "rgba(255,255,255,.025)",
+    backgroundColor: Colors.panel,
     marginBottom: Spacing.sm,
+    ...Shadow.card,
   },
   stripe: {
     width: 4,
@@ -1217,7 +1196,7 @@ const planeStyles = StyleSheet.create({
     flex: 1,
     fontSize: 14,
     color: Colors.text,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   rewardLine: {
     fontSize: 11,
@@ -1226,39 +1205,26 @@ const planeStyles = StyleSheet.create({
   },
   lockPill: {
     borderRadius: Radius.full,
-    backgroundColor: "rgba(255,255,255,.06)",
+    backgroundColor: Colors.inset,
     paddingHorizontal: 7,
     paddingVertical: 2,
   },
   lockText: {
     fontSize: 8,
-    color: Colors.dim,
-    fontWeight: "800",
+    color: Colors.muted,
+    fontFamily: Typography.mono,
+    fontWeight: "700",
   },
   specs: {
     fontSize: 10,
-    color: Colors.dim,
-  },
-  flowBox: {
-    flex: 1,
-    alignItems: "center",
-    borderRadius: Radius.md,
-    backgroundColor: "rgba(255,255,255,.035)",
-    paddingVertical: Spacing.sm,
-  },
-  flowValue: {
-    fontSize: 13,
-    fontWeight: "900",
-  },
-  flowLabel: {
-    fontSize: 8,
-    color: Colors.dim,
+    color: Colors.muted,
   },
 });
 
 const s = StyleSheet.create({
   root: {
     flex: 1,
+    backgroundColor: Colors.surface,
   },
   content: {
     paddingBottom: Spacing.xxl,
@@ -1269,6 +1235,7 @@ const s = StyleSheet.create({
     justifyContent: "center",
     padding: Spacing.xl,
     gap: Spacing.lg,
+    backgroundColor: Colors.surface,
   },
   promptIcon: {
     width: 70,
@@ -1278,14 +1245,14 @@ const s = StyleSheet.create({
     justifyContent: "center",
   },
   promptTitle: {
-    fontSize: 21,
+    fontFamily: Typography.display,
+    fontSize: 28,
     color: Colors.text,
-    fontWeight: "900",
     textAlign: "center",
   },
   promptSub: {
     fontSize: 13,
-    color: Colors.dim,
+    color: Colors.muted,
     textAlign: "center",
     lineHeight: 20,
   },
@@ -1293,6 +1260,12 @@ const s = StyleSheet.create({
     alignSelf: "stretch",
     gap: 9,
     marginTop: Spacing.sm,
+    padding: Spacing.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.panel,
+    ...Shadow.card,
   },
   tipRow: {
     flexDirection: "row",
@@ -1316,7 +1289,7 @@ const s = StyleSheet.create({
     borderRadius: Radius.full,
     borderWidth: 1,
     borderColor: Colors.border,
-    backgroundColor: "rgba(255,255,255,.06)",
+    backgroundColor: Colors.panel,
     paddingHorizontal: Spacing.md,
     paddingVertical: 8,
   },
@@ -1325,8 +1298,9 @@ const s = StyleSheet.create({
     backgroundColor: "transparent",
   },
   buildingIata: {
+    fontFamily: Typography.mono,
     fontSize: 16,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   buildingCity: {
     fontSize: 11,
@@ -1334,8 +1308,8 @@ const s = StyleSheet.create({
   },
   buildingEmptyText: {
     fontSize: 12,
-    color: Colors.dim,
-    fontWeight: "800",
+    color: Colors.muted,
+    fontWeight: "700",
   },
   buildingArrow: {
     flexDirection: "row",
@@ -1349,11 +1323,16 @@ const s = StyleSheet.create({
   },
   cancelPrompt: {
     marginTop: Spacing.sm,
+    minHeight: MIN_TOUCH,
+    justifyContent: "center",
+    paddingHorizontal: Spacing.lg,
+    borderRadius: Radius.md,
+    backgroundColor: Palette.redSoft,
   },
   cancelPromptText: {
     fontSize: 12,
     color: Colors.red,
-    fontWeight: "800",
+    fontWeight: "700",
   },
   success: {
     flex: 1,
@@ -1361,6 +1340,7 @@ const s = StyleSheet.create({
     justifyContent: "center",
     padding: Spacing.xl,
     gap: Spacing.md,
+    backgroundColor: Colors.surface,
   },
   successIcon: {
     width: 76,
@@ -1368,16 +1348,19 @@ const s = StyleSheet.create({
     borderRadius: 24,
     alignItems: "center",
     justifyContent: "center",
+    backgroundColor: Colors.green,
   },
   successTitle: {
-    fontSize: 23,
+    fontFamily: Typography.display,
+    fontSize: 30,
     color: Colors.text,
-    fontWeight: "900",
   },
   successRoute: {
+    fontFamily: Typography.mono,
     fontSize: 18,
-    fontWeight: "900",
+    fontWeight: "700",
     letterSpacing: 1,
+    color: Colors.skyDark,
   },
   successSub: {
     fontSize: 13,
@@ -1388,25 +1371,44 @@ const s = StyleSheet.create({
   header: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
     paddingHorizontal: Spacing.lg,
     paddingTop: Spacing.sm,
     paddingBottom: Spacing.md,
+    gap: Spacing.md,
   },
-  headerLeft: {
-    flexDirection: "row",
+  headerMark: {
+    width: MIN_TOUCH,
+    height: MIN_TOUCH,
     alignItems: "center",
-    gap: Spacing.sm,
+    justifyContent: "center",
+    borderWidth: 1,
+    borderRadius: Radius.md,
+  },
+  headerCopy: { flex: 1 },
+  headerKicker: {
+    color: Colors.skyDark,
+    fontFamily: Typography.mono,
+    fontSize: 8,
+    letterSpacing: 1.3,
   },
   title: {
-    fontSize: 20,
+    fontFamily: Typography.display,
+    fontSize: 28,
+    lineHeight: 31,
+    letterSpacing: 0.4,
     color: Colors.text,
-    fontWeight: "900",
   },
   subtitle: {
     fontSize: 10,
-    color: Colors.dim,
-    marginTop: 1,
+    color: Colors.muted,
+  },
+  closeButton: {
+    width: MIN_TOUCH,
+    height: MIN_TOUCH,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: Radius.full,
+    backgroundColor: Colors.inset,
   },
   section: {
     paddingHorizontal: Spacing.lg,
@@ -1419,14 +1421,16 @@ const s = StyleSheet.create({
     justifyContent: "space-between",
   },
   eyebrow: {
+    fontFamily: Typography.mono,
     fontSize: 9,
-    color: Colors.dim,
+    color: Colors.skyDark,
     letterSpacing: 2.5,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   eligible: {
+    fontFamily: Typography.mono,
     fontSize: 10,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   divider: {
     height: StyleSheet.hairlineWidth,
@@ -1440,8 +1444,9 @@ const s = StyleSheet.create({
     borderRadius: Radius.lg,
     borderWidth: 1,
     borderColor: Colors.border,
-    backgroundColor: "rgba(255,255,255,.035)",
+    backgroundColor: Colors.panel,
     overflow: "hidden",
+    ...Shadow.card,
   },
   summaryItem: {
     flex: 1,
@@ -1454,15 +1459,16 @@ const s = StyleSheet.create({
     backgroundColor: Colors.border,
   },
   summaryLabel: {
+    fontFamily: Typography.mono,
     fontSize: 7,
-    color: Colors.dim,
+    color: Colors.muted,
     letterSpacing: 1.3,
-    fontWeight: "900",
   },
   summaryValue: {
+    fontFamily: Typography.mono,
     fontSize: 11,
     color: Colors.text,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   warningBox: {
     flexDirection: "row",
@@ -1470,15 +1476,15 @@ const s = StyleSheet.create({
     gap: Spacing.sm,
     borderRadius: Radius.lg,
     borderWidth: 1,
-    borderColor: Colors.amber + "44",
-    backgroundColor: Colors.amber + "08",
+    borderColor: Colors.amber,
+    backgroundColor: Palette.orangeSoft,
     marginHorizontal: Spacing.lg,
     padding: Spacing.md,
   },
   warningTitle: {
     fontSize: 12,
     color: Colors.amber,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   warningText: {
     fontSize: 11,
@@ -1495,17 +1501,19 @@ const s = StyleSheet.create({
   },
   incompatibleToggleTxt: {
     fontSize: 11,
-    color: Colors.dim,
+    color: Colors.muted,
     fontWeight: "500",
   },
   odBox: {
-    backgroundColor: "rgba(56,189,248,0.06)",
+    backgroundColor: Colors.panel,
     borderRadius: Radius.lg,
     borderWidth: 1,
-    borderColor: "rgba(56,189,248,0.2)",
+    borderColor: Colors.borderHi,
     padding: Spacing.md,
     gap: Spacing.sm,
     marginBottom: Spacing.sm,
+    marginHorizontal: Spacing.lg,
+    ...Shadow.card,
   },
   odHeader: {
     flexDirection: "row",
@@ -1529,6 +1537,7 @@ const s = StyleSheet.create({
     gap: 2,
   },
   odLegIata: {
+    fontFamily: Typography.mono,
     fontSize: 11,
     fontWeight: "700",
     color: Colors.text,
@@ -1540,13 +1549,12 @@ const s = StyleSheet.create({
   odHint: {
     fontSize: 10,
     color: Colors.sky,
-    opacity: 0.8,
   },
   odWarn: {
     flexDirection: "row",
     alignItems: "center",
     gap: 5,
-    backgroundColor: "rgba(245,158,11,0.08)",
+    backgroundColor: Palette.orangeSoft,
     borderRadius: 6,
     padding: 6,
   },
@@ -1564,11 +1572,11 @@ const s = StyleSheet.create({
   emptyTitle: {
     fontSize: 15,
     color: Colors.text,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   emptySub: {
     fontSize: 12,
-    color: Colors.dim,
+    color: Colors.muted,
   },
   errorBox: {
     flexDirection: "row",
@@ -1576,8 +1584,8 @@ const s = StyleSheet.create({
     gap: 6,
     borderRadius: Radius.md,
     borderWidth: 1,
-    borderColor: Colors.red + "33",
-    backgroundColor: Colors.red + "08",
+    borderColor: Colors.red,
+    backgroundColor: Palette.redSoft,
     marginHorizontal: Spacing.lg,
     marginBottom: Spacing.sm,
     padding: Spacing.sm,
@@ -1595,10 +1603,13 @@ const s = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: Spacing.sm,
+    paddingHorizontal: Spacing.md,
   },
   confirmText: {
-    fontSize: 14,
-    fontWeight: "900",
+    fontSize: 12,
+    fontWeight: "700",
+    textAlign: "center",
+    color: Colors.textOnColor,
   },
   shortfall: {
     fontSize: 10,
@@ -1617,25 +1628,25 @@ const s = StyleSheet.create({
 
     borderRadius: Radius.md,
     borderWidth: 1,
-    borderColor: Colors.purple + "33",
-
-    backgroundColor: Colors.purple + "10",
+    borderColor: Colors.purple,
+    backgroundColor: Palette.violetSoft,
 
     marginTop: Spacing.xs,
   },
 
   swapText: {
     fontSize: 12,
-    fontWeight: "800",
+    fontWeight: "700",
     color: Colors.purple,
   },
 
   selectedSummary: {
     borderRadius: Radius.lg,
     borderWidth: 1,
-    backgroundColor: "rgba(255,255,255,.025)",
+    backgroundColor: Colors.panel,
     padding: Spacing.sm,
     marginBottom: Spacing.sm,
+    ...Shadow.card,
   },
   selectedSummaryTop: {
     flexDirection: "row",
@@ -1646,29 +1657,17 @@ const s = StyleSheet.create({
   selectedSummaryTitle: {
     fontSize: 12,
     color: Colors.text,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   selectedSummaryValue: {
+    fontFamily: Typography.mono,
     fontSize: 11,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   selectedSummarySub: {
     fontSize: 10,
-    color: Colors.dim,
+    color: Colors.muted,
     marginTop: 3,
-    fontWeight: "700",
-  },
-
-  recommendedTitle: {
-    fontSize: 12,
-    color: Colors.text,
-    fontWeight: "900",
-  },
-
-  recommendedSub: {
-    fontSize: 10,
-    color: Colors.dim,
-    marginTop: 2,
     fontWeight: "700",
   },
 });

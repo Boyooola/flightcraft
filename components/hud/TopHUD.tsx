@@ -1,12 +1,16 @@
 /**
- * components/hud/TopHUD.tsx
- *
- * One-row readable HUD.
- * Keeps only the most important info:
- * Airline/Cash · Today's Income · Day · Speed
+ * Bright, compact operations header shown above the game map.
  */
 
-import { Colors, Radius, Spacing } from "@/constants/theme";
+import {
+  Colors,
+  MIN_TOUCH,
+  Palette,
+  Radius,
+  Shadow,
+  Spacing,
+  Typography,
+} from "@/constants/theme";
 import { fmtCash } from "@/lib/revenue";
 import {
   useAirline,
@@ -47,94 +51,78 @@ export default function TopHUD() {
   const airline = useAirline();
   const cash = useCash();
   const day = useDay();
-  const updateAirline = useGameStore((s) => s.updateAirline);
-  const todayCash = useTodayCash();
+  const todayReward = useTodayCash();
   const dayProgress = useDayProgress();
+  const updateAirline = useGameStore((state) => state.updateAirline);
 
-  const color = airline?.color ?? Colors.sky;
+  const airlineColor = airline?.color ?? Colors.sky;
   const speed = airline?.speed ?? 1;
   const lowCash = cash < 200_000;
-
   const topInset =
     Platform.OS === "android"
       ? (StatusBar.currentHeight ?? insets.top ?? 24)
       : insets.top;
 
-  const todayReward = todayCash;
-
   const timeTicker = useRef(new Animated.Value(0)).current;
+  const previousMinutes = useRef(0);
   const [displayedMinutes, setDisplayedMinutes] = useState(0);
+
   const rewardTicker = useRef(new Animated.Value(0)).current;
+  const previousReward = useRef(0);
   const [displayedReward, setDisplayedReward] = useState(0);
   const rewardFlash = useRef(new Animated.Value(0)).current;
-  const prevReward = useRef(0);
 
-  // Time ticker — listens to animated value and updates displayed minutes
   useEffect(() => {
-    const id = timeTicker.addListener(({ value }) => {
+    const listener = timeTicker.addListener(({ value }) => {
       setDisplayedMinutes(Math.floor(value));
     });
-    return () => timeTicker.removeListener(id);
+
+    return () => timeTicker.removeListener(listener);
   }, [timeTicker]);
 
-  // Animate time forward when dayProgress changes
   const targetMinutes = Math.floor(dayProgress * 24 * 60);
-  const prevMinutes = useRef(0);
 
   useEffect(() => {
     if (targetMinutes === 0) {
-      // Day reset — snap back to midnight
-      prevMinutes.current = 0;
+      previousMinutes.current = 0;
       timeTicker.setValue(0);
       setDisplayedMinutes(0);
       return;
     }
-    if (targetMinutes !== prevMinutes.current) {
-      timeTicker.setValue(prevMinutes.current);
+
+    if (targetMinutes !== previousMinutes.current) {
+      timeTicker.setValue(previousMinutes.current);
       Animated.timing(timeTicker, {
         toValue: targetMinutes,
         duration: 800,
         useNativeDriver: false,
       }).start();
-      prevMinutes.current = targetMinutes;
+      previousMinutes.current = targetMinutes;
     }
   }, [targetMinutes, timeTicker]);
 
-  // Format displayed minutes → HH:MM
-  const gameTime = (() => {
-    const h = Math.floor(displayedMinutes / 60) % 24;
-    const m = displayedMinutes % 60;
-    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-  })();
-
   useEffect(() => {
-    const id = rewardTicker.addListener(({ value }) => {
+    const listener = rewardTicker.addListener(({ value }) => {
       setDisplayedReward(Math.round(value));
     });
 
-    return () => rewardTicker.removeListener(id);
+    return () => rewardTicker.removeListener(listener);
   }, [rewardTicker]);
 
   useEffect(() => {
     if (todayReward === 0) {
-      // Day reset — snap back to zero immediately, no animation
-      prevReward.current = 0;
+      previousReward.current = 0;
       rewardTicker.setValue(0);
       setDisplayedReward(0);
       return;
     }
 
-    if (todayReward !== prevReward.current) {
-      const from = prevReward.current;
-      const to = todayReward;
-      prevReward.current = to;
-
-      // Start ticker from current displayed value → new value
-      // so it increments by the delta, not from 0
+    if (todayReward !== previousReward.current) {
+      const from = previousReward.current;
+      previousReward.current = todayReward;
       rewardTicker.setValue(from);
 
       Animated.parallel([
-        // Flash
         Animated.sequence([
           Animated.timing(rewardFlash, {
             toValue: 1,
@@ -147,144 +135,145 @@ export default function TopHUD() {
             useNativeDriver: true,
           }),
         ]),
-        // Count up from previous → new
         Animated.timing(rewardTicker, {
-          toValue: to,
+          toValue: todayReward,
           duration: 400,
           useNativeDriver: false,
         }),
       ]).start();
     }
-  }, [todayReward, rewardFlash, rewardTicker]);
+  }, [rewardFlash, rewardTicker, todayReward]);
+
+  const hour = Math.floor(displayedMinutes / 60) % 24;
+  const minute = displayedMinutes % 60;
+  const gameTime = `${String(hour).padStart(2, "0")}:${String(minute).padStart(
+    2,
+    "0",
+  )}`;
 
   const rewardScale = rewardFlash.interpolate({
     inputRange: [0, 0.5, 1],
     outputRange: [1, 1.08, 1],
   });
 
-  const setSpeed = (value: GameSpeed) => {
-    updateAirline({ speed: value });
-  };
+  const rewardColor =
+    todayReward > 0
+      ? Colors.green
+      : todayReward < 0
+        ? Colors.red
+        : Colors.muted;
+
+  const rewardText =
+    todayReward > 0
+      ? `+${fmtCash(displayedReward || todayReward)}`
+      : todayReward < 0
+        ? fmtCash(displayedReward || todayReward)
+        : "$0";
 
   return (
-    <View style={[s.container, { paddingTop: topInset + 4 }]}>
-      {/* ── Row 1: Airline · Cash · Speed ── */}
-      <View style={s.row}>
-        <View style={s.identity}>
-          <Text style={[s.airline, { color }]} numberOfLines={1}>
+    <View style={[styles.container, { paddingTop: topInset + Spacing.xs }]}>
+      <View style={styles.commandRow}>
+        <View
+          accessibilityElementsHidden
+          style={[
+            styles.airlineMarker,
+            { backgroundColor: airlineColor },
+          ]}
+        />
+
+        <View style={styles.identity}>
+          <Text style={styles.eyebrow}>AIRLINE OPERATIONS</Text>
+          <Text style={styles.airline} numberOfLines={1}>
             {airline?.name ?? "FlightCraft"}
           </Text>
           <Text
-            style={[s.cash, { color: lowCash ? Colors.red : Colors.text }]}
+            style={[styles.cash, lowCash && styles.cashWarning]}
             numberOfLines={1}
           >
             {fmtCash(cash)}
           </Text>
         </View>
 
-        <View style={s.speedGroup}>
-          {SPEEDS.map(({ value, label, icon }) => {
-            const active = speed === value;
-            return (
-              <TouchableOpacity
-                key={value}
-                style={[
-                  s.speedBtn,
-                  active && { backgroundColor: color, borderColor: color },
-                ]}
-                onPress={() => setSpeed(value)}
-                activeOpacity={0.82}
-              >
-                <Ionicons
-                  name={icon}
-                  size={13}
-                  color={active ? Colors.bg : Colors.dim}
-                />
-                {label ? (
-                  <Text
-                    style={[
-                      s.speedLabel,
-                      { color: active ? Colors.bg : Colors.dim },
-                    ]}
-                  >
-                    {label}
-                  </Text>
-                ) : null}
-              </TouchableOpacity>
-            );
-          })}
+        <View style={styles.simulationPanel}>
+          <Text style={styles.simulationLabel}>SIM SPEED</Text>
+          <View style={styles.speedGroup}>
+            {SPEEDS.map(({ value, label, icon }) => {
+              const active = speed === value;
+              const accessibilityLabel =
+                value === 0 ? "Pause simulation" : `Set speed to ${label}`;
+
+              return (
+                <TouchableOpacity
+                  key={value}
+                  accessibilityLabel={accessibilityLabel}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                  style={[styles.speedButton, active && styles.speedButtonActive]}
+                  onPress={() => updateAirline({ speed: value })}
+                  activeOpacity={0.72}
+                >
+                  <Ionicons
+                    name={icon}
+                    size={14}
+                    color={active ? Colors.textOnColor : Colors.muted}
+                  />
+                  {label ? (
+                    <Text
+                      style={[
+                        styles.speedLabel,
+                        active && styles.speedLabelActive,
+                      ]}
+                    >
+                      {label}
+                    </Text>
+                  ) : null}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
         </View>
       </View>
 
-      {/* ── Row 2: TODAY · DAY · TIME ── */}
-      <View style={s.statsRow}>
-        {/* Today income */}
+      <View style={styles.operationsStrip}>
         <View
           style={[
-            s.statBox,
-            {
-              borderColor:
-                todayReward > 0
-                  ? Colors.green + "40"
-                  : todayReward < 0
-                    ? Colors.red + "40"
-                    : Colors.border,
-              backgroundColor:
-                todayReward > 0
-                  ? Colors.green + "0c"
-                  : todayReward < 0
-                    ? Colors.red + "08"
-                    : "transparent",
-            },
+            styles.resultMetric,
+            todayReward > 0 && styles.resultPositive,
+            todayReward < 0 && styles.resultNegative,
           ]}
         >
-          <Text style={s.statLabel}>TODAY</Text>
+          <Text style={styles.metricLabel}>TODAY&apos;S RESULT</Text>
           <Animated.Text
-            style={[
-              s.statValue,
-              {
-                color:
-                  todayReward > 0
-                    ? Colors.green
-                    : todayReward < 0
-                      ? Colors.red
-                      : Colors.dim,
-                transform: [{ scale: rewardScale }],
-              },
-            ]}
             numberOfLines={1}
+            style={[
+              styles.metricValue,
+              { color: rewardColor, transform: [{ scale: rewardScale }] },
+            ]}
           >
-            {todayReward > 0
-              ? `+${fmtCash(displayedReward || todayReward)}`
-              : todayReward < 0
-                ? `${fmtCash(displayedReward || todayReward)}`
-                : "$0"}
+            {rewardText}
           </Animated.Text>
         </View>
 
-        <View style={s.statDivider} />
+        <View style={styles.metricDivider} />
 
-        {/* Day */}
-        <View style={s.statBox}>
-          <Text style={s.statLabel}>DAY</Text>
-          <Text style={[s.statValue, { color }]}>{day}</Text>
+        <View style={styles.dayMetric}>
+          <Text style={styles.metricLabel}>DAY</Text>
+          <Text style={styles.metricValue}>{day}</Text>
         </View>
 
-        <View style={s.statDivider} />
+        <View style={styles.metricDivider} />
 
-        {/* Clock */}
-        <View style={[s.statBox, { flex: 1.4 }]}>
-          <Text style={s.statLabel}>TIME</Text>
-          <Text style={[s.statValue, { fontVariant: ["tabular-nums"] }]}>
-            {gameTime}
-          </Text>
-          <View style={s.clockTrack}>
+        <View style={styles.clockMetric}>
+          <View style={styles.clockCopy}>
+            <Text style={styles.metricLabel}>GAME TIME</Text>
+            <Text style={styles.clockValue}>{gameTime}</Text>
+          </View>
+          <View style={styles.clockTrack}>
             <View
               style={[
-                s.clockFill,
+                styles.clockFill,
                 {
                   width: `${Math.round(dayProgress * 100)}%` as `${number}%`,
-                  backgroundColor: color,
                 },
               ]}
             />
@@ -295,110 +284,180 @@ export default function TopHUD() {
   );
 }
 
-const s = StyleSheet.create({
+const styles = StyleSheet.create({
   container: {
     position: "absolute",
     top: 0,
     left: 0,
     right: 0,
     zIndex: 20,
-    backgroundColor: "rgba(8,15,30,0.98)",
+    paddingHorizontal: Spacing.lg,
+    paddingBottom: Spacing.md,
+    backgroundColor: Colors.surface,
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
-    paddingHorizontal: Spacing.md,
-    paddingBottom: Spacing.sm,
+    ...Shadow.card,
   },
-  row: {
+  commandRow: {
+    minHeight: 56,
     flexDirection: "row",
     alignItems: "center",
-    gap: Spacing.sm,
+    gap: Spacing.md,
   },
-
+  airlineMarker: {
+    width: 4,
+    height: 40,
+    borderRadius: Radius.full,
+  },
   identity: {
     flex: 1,
     minWidth: 0,
   },
+  eyebrow: {
+    color: Colors.muted,
+    fontFamily: Typography.mono,
+    fontSize: 8,
+    fontWeight: "700",
+    letterSpacing: 1.25,
+    lineHeight: 11,
+  },
   airline: {
-    fontSize: 11,
-    fontWeight: "900",
-    letterSpacing: 0.4,
+    color: Colors.text,
+    fontFamily: Typography.display,
+    fontSize: 20,
+    letterSpacing: 0.5,
+    lineHeight: 22,
+    textTransform: "uppercase",
   },
   cash: {
-    fontSize: 17,
-    fontWeight: "900",
-    marginTop: 1,
+    color: Colors.green,
+    fontFamily: Typography.mono,
+    fontSize: 12,
+    fontWeight: "700",
+    lineHeight: 16,
   },
-
-  // ── Row 2 stat bar ──────────────────────────────────────────────
-  statsRow: {
+  cashWarning: {
+    color: Colors.red,
+  },
+  simulationPanel: {
+    alignItems: "flex-end",
+    gap: 3,
+  },
+  simulationLabel: {
+    color: Colors.dim,
+    fontFamily: Typography.mono,
+    fontSize: 7,
+    fontWeight: "700",
+    letterSpacing: 1.1,
+  },
+  speedGroup: {
     flexDirection: "row",
-    alignItems: "stretch",
-    marginTop: Spacing.sm,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    overflow: "hidden",
+    gap: 4,
   },
-  statBox: {
-    flex: 1,
+  speedButton: {
+    width: MIN_TOUCH,
+    height: MIN_TOUCH,
     alignItems: "center",
     justifyContent: "center",
-    paddingVertical: 6,
-    borderWidth: 1,
-    borderColor: "transparent",
-    borderRadius: Radius.lg,
     gap: 1,
+    backgroundColor: Colors.panel,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.md,
   },
-  statLabel: {
+  speedButtonActive: {
+    backgroundColor: Colors.sky,
+    borderColor: Colors.sky,
+  },
+  speedLabel: {
+    color: Colors.muted,
+    fontFamily: Typography.mono,
     fontSize: 7,
-    color: Colors.dim,
-    letterSpacing: 1.4,
-    fontWeight: "900",
+    fontWeight: "700",
+    lineHeight: 8,
   },
-  statValue: {
-    fontSize: 15,
-    fontWeight: "900",
+  speedLabelActive: {
+    color: Colors.textOnColor,
+  },
+  operationsStrip: {
+    minHeight: 48,
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: Spacing.sm,
+    overflow: "hidden",
+    backgroundColor: Colors.panel,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.md,
+  },
+  resultMetric: {
+    flex: 1.35,
+    alignSelf: "stretch",
+    justifyContent: "center",
+    paddingHorizontal: Spacing.md,
+  },
+  resultPositive: {
+    backgroundColor: Palette.greenSoft,
+  },
+  resultNegative: {
+    backgroundColor: Palette.redSoft,
+  },
+  dayMetric: {
+    width: 56,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  metricLabel: {
+    color: Colors.muted,
+    fontFamily: Typography.mono,
+    fontSize: 7,
+    fontWeight: "700",
+    letterSpacing: 0.9,
+    lineHeight: 10,
+  },
+  metricValue: {
     color: Colors.text,
+    fontFamily: Typography.mono,
+    fontSize: 13,
+    fontWeight: "700",
     lineHeight: 18,
+    fontVariant: ["tabular-nums"],
   },
-  statDivider: {
+  metricDivider: {
     width: 1,
+    height: 28,
     backgroundColor: Colors.border,
-    marginVertical: 6,
+  },
+  clockMetric: {
+    flex: 1.05,
+    alignSelf: "stretch",
+    justifyContent: "center",
+    paddingHorizontal: Spacing.md,
+    gap: 4,
+  },
+  clockCopy: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: Spacing.sm,
+  },
+  clockValue: {
+    color: Colors.text,
+    fontFamily: Typography.mono,
+    fontSize: 12,
+    fontWeight: "700",
+    fontVariant: ["tabular-nums"],
   },
   clockTrack: {
-    width: "80%",
-    height: 2,
-    backgroundColor: "rgba(255,255,255,0.08)",
-    borderRadius: 1,
+    width: "100%",
+    height: 3,
     overflow: "hidden",
-    marginTop: 2,
+    backgroundColor: Colors.skyDim,
+    borderRadius: Radius.full,
   },
   clockFill: {
     height: "100%",
-    borderRadius: 1,
-  },
-
-  // ── Speed controls ───────────────────────────────────────────────
-  speedGroup: {
-    flexDirection: "row",
-    gap: 3,
-  },
-  speedBtn: {
-    minWidth: 36,
-    minHeight: 36,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: "rgba(255,255,255,.035)",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 1,
-    paddingHorizontal: 4,
-  },
-  speedLabel: {
-    fontSize: 7,
-    fontWeight: "900",
-    lineHeight: 8,
+    backgroundColor: Colors.sky,
+    borderRadius: Radius.full,
   },
 });

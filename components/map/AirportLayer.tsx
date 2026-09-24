@@ -1,68 +1,53 @@
 /**
- * components/map/AirportLayer.tsx
+ * Airport markers for the daylight operations map.
  *
- * Rebuilt with the following fixes:
- *   1. Pulse animation actually drives a CircleLayer (owned-pulse-ring)
- *   2. AI hub layer is rendered (was computed but never displayed)
- *   3. Waypoint highlighting — selected waypoints glow amber, others dim in creation mode
- *   4. Route creation mode dims non-selected base dots to guide selection
- *   5. Removed dead circleStrokeWidth:10 + circleStrokeOpacity:0 hack on airport-dot
- *   6. Fixed trust ring — activeRoutes removed (never set), stroke width now tier-based
- *   7. Via airport purple highlight layer added (was in header comment, missing from JSX)
- *   8. selectedGeoJSON memoized — no longer rebuilds every render
- *   9. aiHubGeoJSON rendered in a proper ShapeSource
+ * Visual priority:
+ * base airport < rival hub < owned hub < waypoint < selected airport.
  */
 
-import { Colors } from "@/constants/theme";
+import { Colors, Palette } from "@/constants/theme";
 import { hubCrowdingLevel } from "@/lib/demands";
-import {
-  FlowDemand,
-  hubOutboundDeliveredPax,
-  hubOutboundWaitingPax,
-} from "@/lib/passengerFlow";
-import type { Airport, OwnedHub } from "@/store";
+import { FlowDemand, hubOutboundWaitingPax } from "@/lib/passengerFlow";
+import type { Airport, AirportTier, OwnedHub } from "@/store";
 import {
   useAIAirlines,
   useAirports,
   useDayProgress,
   useDemands,
   useHubs,
-  useRoutes,
   useSelectedAirport,
 } from "@/store";
 import MapboxGL from "@rnmapbox/maps";
-import { useEffect, useMemo, useRef } from "react";
-import { Animated } from "react-native";
+import { useMemo } from "react";
 
-// ─────────────────────────────────────────────────────────────────
-// CONSTANTS
-// ─────────────────────────────────────────────────────────────────
+const AI_HUB_COLOR = Colors.purple;
+const VIA_COLOR = Colors.purple;
 
-// Pulse timing — 2.4s in, 2.4s out
-const PULSE_DURATION = 2400;
-
-// AI hub dot color — distinct from player and from unowned airports
-const AI_HUB_COLOR = Colors.purple ?? "#a855f7";
-
-// Via waypoint color during connecting route selection
-const VIA_COLOR = Colors.purple ?? "#a855f7";
-
-// ─────────────────────────────────────────────────────────────────
-// GEOJSON HELPERS
-// ─────────────────────────────────────────────────────────────────
+const TIER_IMPORTANCE: Record<AirportTier, number> = {
+  mega: 6,
+  large: 5,
+  major: 4,
+  regional: 3,
+  minor: 2,
+  local: 1,
+};
 
 function toGeoJSON(airports: Airport[]): GeoJSON.FeatureCollection {
   return {
     type: "FeatureCollection",
-    features: airports.map((a) => ({
+    features: airports.map((airport) => ({
       type: "Feature",
-      id: a.iata,
-      geometry: { type: "Point", coordinates: [a.lng, a.lat] },
+      id: airport.iata,
+      geometry: {
+        type: "Point",
+        coordinates: [airport.lng, airport.lat],
+      },
       properties: {
-        iata: a.iata,
-        name: a.name,
-        city: a.city,
-        tier: a.tier,
+        iata: airport.iata,
+        name: airport.name,
+        city: airport.city,
+        tier: airport.tier,
+        importance: TIER_IMPORTANCE[airport.tier],
       },
     })),
   };
@@ -75,47 +60,85 @@ function hubsToGeoJSON(
 ): GeoJSON.FeatureCollection {
   return {
     type: "FeatureCollection",
-    features: hubs.map((h) => {
-      const crowding = hubCrowdingLevel(h.airport.iata, demands, h.airport);
-      const waitingPax = hubOutboundWaitingPax(
-        h.airport.iata,
+    features: hubs.map((hub) => {
+      const crowding = hubCrowdingLevel(
+        hub.airport.iata,
         demands,
-        dayProgress,
+        hub.airport,
       );
-      const movedPax = hubOutboundDeliveredPax(h.airport.iata, demands);
+
       return {
         type: "Feature",
-        id: h.airport.iata,
+        id: hub.airport.iata,
         geometry: {
           type: "Point",
-          coordinates: [h.airport.lng, h.airport.lat],
+          coordinates: [hub.airport.lng, hub.airport.lat],
         },
         properties: {
-          iata: h.airport.iata,
-          trust: h.trust,
-          tier: h.tier, // 1-6 numeric tier
-          crowding: crowding.level, // "normal"|"busy"|"overcrowded"|"crisis"
-          capPct: crowding.capacityPct,
-          waitingPax,
-          movedPax,
+          iata: hub.airport.iata,
+          trust: hub.trust,
+          hubTier: hub.tier,
+          importance: TIER_IMPORTANCE[hub.airport.tier],
+          crowding: crowding.level,
+          capacityPercent: crowding.capacityPct,
+          waitingPax: hubOutboundWaitingPax(
+            hub.airport.iata,
+            demands,
+            dayProgress,
+          ),
         },
       };
     }),
   };
 }
 
-// ─────────────────────────────────────────────────────────────────
-// ZOOM-INTERPOLATED RADIUS HELPER
-// Returns a Mapbox expression that scales radius at zoom 1 / 5 / 10
-// ─────────────────────────────────────────────────────────────────
-
-function zoomRadius(z1: number, z5: number, z10: number): any {
-  return ["interpolate", ["linear"], ["zoom"], 1, z1, 5, z5, 10, z10];
+function zoomRadius(
+  lowZoom: number | unknown[],
+  midZoom: number | unknown[],
+  highZoom: number | unknown[],
+): any {
+  return [
+    "interpolate",
+    ["linear"],
+    ["zoom"],
+    1,
+    lowZoom,
+    5,
+    midZoom,
+    10,
+    highZoom,
+  ];
 }
 
-// ─────────────────────────────────────────────────────────────────
-// PROPS
-// ─────────────────────────────────────────────────────────────────
+const BASE_RADIUS_LOW = [
+  "interpolate",
+  ["linear"],
+  ["get", "importance"],
+  1,
+  0.8,
+  6,
+  2.8,
+];
+
+const BASE_RADIUS_MID = [
+  "interpolate",
+  ["linear"],
+  ["get", "importance"],
+  1,
+  1.8,
+  6,
+  5.5,
+];
+
+const BASE_RADIUS_HIGH = [
+  "interpolate",
+  ["linear"],
+  ["get", "importance"],
+  1,
+  3.2,
+  6,
+  8.5,
+];
 
 interface AirportLayerProps {
   routeCreationMode: boolean;
@@ -123,10 +146,6 @@ interface AirportLayerProps {
   airlineColor: string;
   onAirportPress: (airport: Airport) => void;
 }
-
-// ─────────────────────────────────────────────────────────────────
-// COMPONENT
-// ─────────────────────────────────────────────────────────────────
 
 export default function AirportLayer({
   airlineColor,
@@ -138,81 +157,41 @@ export default function AirportLayer({
   const hubs = useHubs();
   const demands = useDemands();
   const dayProgress = useDayProgress();
-  const routes = useRoutes();
   const selectedAirport = useSelectedAirport();
   const aiAirlines = useAIAirlines();
-
-  // ── Pulse animation ─────────────────────────────────────────────
-  // Drives owned-pulse-ring circleRadius and circleStrokeOpacity
-  const pulse = useRef(new Animated.Value(0)).current;
-
-  // JS-side refs that Mapbox layer styles read on each frame
-  const pulseRadius = useRef(0);
-  const pulseOpacity = useRef(0.6);
-
-  useEffect(() => {
-    const anim = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, {
-          toValue: 1,
-          duration: PULSE_DURATION,
-          useNativeDriver: false,
-        }),
-        Animated.timing(pulse, {
-          toValue: 0,
-          duration: PULSE_DURATION,
-          useNativeDriver: false,
-        }),
-      ]),
-    );
-    anim.start();
-    return () => anim.stop();
-  }, []);
-
-  useEffect(() => {
-    const id = pulse.addListener(({ value }) => {
-      // pulse 0→1: ring expands outward and fades
-      pulseRadius.current = value; // 0..1 normalized — scaled per zoom in the layer
-      pulseOpacity.current = 0.65 * (1 - value); // starts visible, fades as it expands
-    });
-    return () => pulse.removeListener(id);
-  }, [pulse]);
-
-  // ── Derived GeoJSON ─────────────────────────────────────────────
 
   const allGeoJSON = useMemo(() => toGeoJSON(airports), [airports]);
   const ownedGeoJSON = useMemo(
     () => hubsToGeoJSON(hubs, demands, dayProgress),
-    [hubs, demands, dayProgress],
+    [dayProgress, demands, hubs],
   );
-
-  // Memoized — was rebuilding every render even when selectedAirport unchanged
   const selectedGeoJSON = useMemo(
     () => toGeoJSON(selectedAirport ? [selectedAirport] : []),
     [selectedAirport],
   );
 
-  // AI hubs — airports where any rival airline has a hub, excluding player hubs
+  const ownedHubIatas = useMemo(
+    () => new Set(hubs.map((hub) => hub.airport.iata)),
+    [hubs],
+  );
   const aiHubIatas = useMemo(
-    () => new Set(aiAirlines.flatMap((ai) => ai.hubIatas)),
+    () => new Set(aiAirlines.flatMap((airline) => airline.hubIatas)),
     [aiAirlines],
   );
   const aiHubGeoJSON = useMemo(
     () =>
       toGeoJSON(
         airports.filter(
-          (a) =>
-            aiHubIatas.has(a.iata) &&
-            !hubs.some((h) => h.airport.iata === a.iata),
+          (airport) =>
+            aiHubIatas.has(airport.iata) &&
+            !ownedHubIatas.has(airport.iata),
         ),
       ),
-    [airports, aiHubIatas, hubs],
+    [aiHubIatas, airports, ownedHubIatas],
   );
 
-  // Waypoint GeoJSON — airports selected during route creation
-  // First waypoint = origin (airline color), second = via candidate (purple)
   const waypointAirports = useMemo(
-    () => airports.filter((a) => waypointIatas.includes(a.iata)),
+    () => airports.filter((airport) => waypointIatas.includes(airport.iata)),
     [airports, waypointIatas],
   );
   const waypointGeoJSON = useMemo(
@@ -220,304 +199,200 @@ export default function AirportLayer({
     [waypointAirports],
   );
 
-  // ── Press handler ───────────────────────────────────────────────
+  const handlePress = (event: { features?: GeoJSON.Feature[] }) => {
+    const iata = event.features?.[0]?.properties?.iata;
+    if (!iata) return;
 
-  const handlePress = (e: { features?: GeoJSON.Feature[] }) => {
-    const feature = e.features?.[0];
-    if (!feature?.properties?.iata) return;
-    const ap = airports.find((a) => a.iata === feature.properties!.iata);
-    if (ap) onAirportPress(ap);
+    const airport = airports.find((candidate) => candidate.iata === iata);
+    if (airport) onAirportPress(airport);
   };
 
   if (airports.length === 0) return null;
 
-  // In route creation mode, non-waypoint airports dim to guide selection
-  const baseDotOpacity: any = routeCreationMode
+  const baseOpacity: any = routeCreationMode
     ? [
         "interpolate",
         ["linear"],
         ["zoom"],
         1,
-        ["case", ["==", ["get", "tier"], "major"], 0.45, 0.15],
-        4,
-        ["case", ["==", ["get", "tier"], "major"], 0.55, 0.25],
-        8,
-        0.45,
+        ["interpolate", ["linear"], ["get", "importance"], 1, 0.08, 6, 0.3],
+        6,
+        ["interpolate", ["linear"], ["get", "importance"], 1, 0.2, 6, 0.45],
+        10,
+        0.5,
       ]
     : [
         "interpolate",
         ["linear"],
         ["zoom"],
         1,
-        ["case", ["==", ["get", "tier"], "major"], 0.9, 0.35],
-        4,
-        ["case", ["==", ["get", "tier"], "major"], 1.0, 0.6],
-        8,
-        1.0,
+        ["interpolate", ["linear"], ["get", "importance"], 1, 0.16, 6, 0.8],
+        6,
+        ["interpolate", ["linear"], ["get", "importance"], 1, 0.52, 6, 1],
+        10,
+        1,
       ];
 
   return (
     <>
-      {/* ══════════════════════════════════════════════════════════
-          BASE AIRPORT LAYER — all airports
-          ══════════════════════════════════════════════════════════ */}
       <MapboxGL.ShapeSource
         id="airports-source"
         shape={allGeoJSON}
         onPress={handlePress}
-        hitbox={{ width: 20, height: 20 }}
+        hitbox={{ width: 30, height: 30 }}
       >
-        {/* Soft glow behind dot */}
         <MapboxGL.CircleLayer
-          id="airport-glow"
+          id="airport-priority-ring"
           existing={false}
+          filter={[">=", ["get", "importance"], 4]}
           style={{
-            circleRadius: zoomRadius(
-              // major: 6/14/22  minor: 3/7/12
-              ["case", ["==", ["get", "tier"], "major"], 6, 3] as any,
-              ["case", ["==", ["get", "tier"], "major"], 14, 7] as any,
-              ["case", ["==", ["get", "tier"], "major"], 22, 12] as any,
-            ),
-            circleColor: Colors.sky,
-            circleOpacity: [
-              "interpolate",
-              ["linear"],
-              ["zoom"],
-              1,
-              routeCreationMode ? 0.03 : 0.06,
-              5,
-              routeCreationMode ? 0.07 : 0.14,
-              10,
-              routeCreationMode ? 0.12 : 0.22,
-            ],
-            circleBlur: 1.2,
+            circleRadius: zoomRadius(4.5, 8, 13),
+            circleColor: "transparent",
+            circleOpacity: 0,
+            circleStrokeColor: Colors.sky,
+            circleStrokeWidth: 1,
+            circleStrokeOpacity: routeCreationMode ? 0.12 : 0.28,
             circlePitchAlignment: "map",
           }}
         />
 
-        {/* Airport dot — dims in route creation mode */}
         <MapboxGL.CircleLayer
           id="airport-dot"
           existing={false}
           style={{
             circleRadius: zoomRadius(
-              ["case", ["==", ["get", "tier"], "major"], 2.5, 1.2] as any,
-              ["case", ["==", ["get", "tier"], "major"], 5, 2.5] as any,
-              ["case", ["==", ["get", "tier"], "major"], 9, 5] as any,
+              BASE_RADIUS_LOW,
+              BASE_RADIUS_MID,
+              BASE_RADIUS_HIGH,
             ),
             circleColor: [
               "case",
-              ["==", ["get", "tier"], "major"],
-              Colors.sky,
-              "#2a7fa8",
+              [">=", ["get", "importance"], 4],
+              Colors.skyDark,
+              Colors.muted,
             ],
-            circleOpacity: baseDotOpacity,
-            // Removed: circleStrokeWidth:10 + circleStrokeOpacity:0 hack
-            // Hit area is handled by ShapeSource hitbox={{width:20,height:20}}
+            circleOpacity: baseOpacity,
+            circleStrokeColor: Colors.surface,
+            circleStrokeWidth: [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              1,
+              0.5,
+              6,
+              1.25,
+              10,
+              2,
+            ],
+            circleStrokeOpacity: baseOpacity,
             circlePitchAlignment: "map",
           }}
         />
 
-        {/* IATA label — major airports at zoom 4+, all at zoom 6+ */}
         <MapboxGL.SymbolLayer
-          id="airport-label"
+          id="airport-iata-label"
           existing={false}
-          minZoomLevel={4}
+          minZoomLevel={3}
           style={{
             textField: ["get", "iata"],
             textSize: [
               "interpolate",
               ["linear"],
               ["zoom"],
-              4,
-              ["case", ["==", ["get", "tier"], "major"], 9, 0] as any,
+              3,
+              ["interpolate", ["linear"], ["get", "importance"], 1, 0, 6, 10],
               6,
-              ["case", ["==", ["get", "tier"], "major"], 12, 9] as any,
+              ["interpolate", ["linear"], ["get", "importance"], 1, 8, 6, 11],
               10,
-              13,
-            ],
-            textOffset: [0, 1.4],
+              12,
+            ] as any,
+            textOffset: [0, 1.25],
             textAnchor: "top",
-            textColor: routeCreationMode ? Colors.dim : Colors.sky,
+            textColor: routeCreationMode ? Colors.dim : Colors.text,
             textOpacity: [
               "interpolate",
               ["linear"],
               ["zoom"],
-              4,
-              ["case", ["==", ["get", "tier"], "major"], 0.7, 0] as any,
+              3,
+              ["interpolate", ["linear"], ["get", "importance"], 1, 0, 6, 0.75],
               6,
-              routeCreationMode ? 0.35 : 0.85,
-              8,
-              routeCreationMode ? 0.45 : 1.0,
-            ],
-            textHaloColor: "rgba(4,9,15,0.9)",
-            textHaloWidth: 1.5,
+              ["interpolate", ["linear"], ["get", "importance"], 1, 0.35, 6, 0.9],
+              9,
+              routeCreationMode ? 0.45 : 0.9,
+            ] as any,
+            textHaloColor: Colors.surface,
+            textHaloWidth: 2,
+            textHaloBlur: 0.5,
             textAllowOverlap: false,
             textIgnorePlacement: false,
-            symbolSortKey: [
-              "case",
-              ["==", ["get", "tier"], "major"],
-              1,
-              0,
-            ] as any,
+            symbolSortKey: ["get", "importance"],
           }}
         />
       </MapboxGL.ShapeSource>
 
-      {/* ══════════════════════════════════════════════════════════
-          AI HUB LAYER — rival airline hubs
-          (was computed but never rendered — now shown)
-          ══════════════════════════════════════════════════════════ */}
-      {aiAirlines.length > 0 && aiHubGeoJSON.features.length > 0 && (
-        <MapboxGL.ShapeSource
-          id="ai-hubs-source"
-          shape={aiHubGeoJSON}
-          onPress={handlePress}
-          hitbox={{ width: 20, height: 20 }}
-        >
-          {/* Subtle glow — distinguishable from player hubs */}
+      {aiHubGeoJSON.features.length > 0 ? (
+        <MapboxGL.ShapeSource id="ai-hubs-source" shape={aiHubGeoJSON}>
           <MapboxGL.CircleLayer
-            id="ai-hub-glow"
+            id="ai-hub-ring"
             existing={false}
             style={{
-              circleRadius: zoomRadius(8, 16, 26),
-              circleColor: AI_HUB_COLOR,
-              circleOpacity: 0.1,
-              circleBlur: 1.4,
+              circleRadius: zoomRadius(5.5, 9, 14),
+              circleColor: Palette.violetSoft,
+              circleOpacity: routeCreationMode ? 0.35 : 0.9,
+              circleStrokeColor: AI_HUB_COLOR,
+              circleStrokeWidth: 2,
+              circleStrokeOpacity: routeCreationMode ? 0.35 : 0.85,
               circlePitchAlignment: "map",
             }}
           />
-          {/* AI hub dot */}
           <MapboxGL.CircleLayer
-            id="ai-hub-dot"
+            id="ai-hub-core"
             existing={false}
             style={{
-              circleRadius: zoomRadius(3, 6, 10),
+              circleRadius: zoomRadius(1.5, 2.5, 4),
               circleColor: AI_HUB_COLOR,
-              circleOpacity: routeCreationMode ? 0.3 : 0.75,
-              circleStrokeWidth: 1.5,
-              circleStrokeColor: "rgba(255,255,255,0.2)",
+              circleOpacity: routeCreationMode ? 0.4 : 1,
               circlePitchAlignment: "map",
             }}
           />
-          {/* AI hub IATA label */}
           <MapboxGL.SymbolLayer
             id="ai-hub-label"
             existing={false}
-            minZoomLevel={4}
+            minZoomLevel={3}
             style={{
               textField: ["get", "iata"],
-              textSize: ["interpolate", ["linear"], ["zoom"], 4, 9, 8, 12],
-              textOffset: [0, 1.5],
+              textSize: ["interpolate", ["linear"], ["zoom"], 3, 9, 8, 12],
+              textOffset: [0, 1.45],
               textAnchor: "top",
               textColor: AI_HUB_COLOR,
-              textOpacity: [
-                "interpolate",
-                ["linear"],
-                ["zoom"],
-                4,
-                0.6,
-                6,
-                routeCreationMode ? 0.3 : 0.85,
-              ],
-              textHaloColor: "rgba(4,9,15,0.95)",
+              textOpacity: routeCreationMode ? 0.4 : 0.95,
+              textHaloColor: Colors.surface,
               textHaloWidth: 2,
+              textHaloBlur: 0.5,
               textAllowOverlap: true,
               textIgnorePlacement: true,
             }}
           />
         </MapboxGL.ShapeSource>
-      )}
+      ) : null}
 
-      {/* ══════════════════════════════════════════════════════════
-          OWNED HUB LAYER — player's hubs
-          ══════════════════════════════════════════════════════════ */}
-      {hubs.length > 0 && (
+      {hubs.length > 0 ? (
         <MapboxGL.ShapeSource id="owned-source" shape={ownedGeoJSON}>
-          {/* Trust ring — opacity scales with trust, width with tier
-              Fixed: was using ["get","activeRoutes"] which was never set.
-              Now uses tier (1-6) for stroke width. */}
-          <MapboxGL.CircleLayer
-            id="owned-trust-ring"
-            existing={false}
-            style={{
-              circleRadius: zoomRadius(10, 18, 28),
-              circleColor: "transparent",
-              circleStrokeColor: airlineColor,
-              circleStrokeWidth: [
-                "interpolate",
-                ["linear"],
-                ["get", "tier"],
-                1,
-                1,
-                3,
-                2,
-                6,
-                3,
-              ],
-              circleStrokeOpacity: [
-                "interpolate",
-                ["linear"],
-                ["get", "trust"],
-                0,
-                0.1,
-                40,
-                0.3,
-                70,
-                0.6,
-                100,
-                0.85,
-              ],
-              circleOpacity: 0,
-              circlePitchAlignment: "map",
-            }}
-          />
-
-          {/* Pulse ring — actually driven by the pulse animation now.
-              Uses pulseRadius.current and pulseOpacity.current refs.
-              We pass them as static values on each Mapbox render cycle —
-              Mapbox re-evaluates the style object when the source updates,
-              so this works for a slow pulse without needing a ticker. */}
-          <MapboxGL.CircleLayer
-            id="owned-pulse-ring"
-            existing={false}
-            style={{
-              circleRadius: [
-                "interpolate",
-                ["linear"],
-                ["zoom"],
-                1,
-                12 + pulseRadius.current * 8,
-                5,
-                22 + pulseRadius.current * 14,
-                10,
-                34 + pulseRadius.current * 20,
-              ],
-              circleColor: "transparent",
-              circleStrokeColor: airlineColor,
-              circleStrokeWidth: 1.5,
-              circleStrokeOpacity: pulseOpacity.current,
-              circleOpacity: 0,
-              circlePitchAlignment: "map",
-            }}
-          />
-
-          {/* Overcrowding ring — amber/orange/red driven by crowding level */}
           <MapboxGL.CircleLayer
             id="owned-crowding-ring"
             existing={false}
+            filter={["!=", ["get", "crowding"], "normal"]}
             style={{
-              circleRadius: zoomRadius(20, 34, 52),
+              circleRadius: zoomRadius(13, 22, 34),
               circleColor: "transparent",
+              circleOpacity: 0,
               circleStrokeColor: [
                 "case",
                 ["==", ["get", "crowding"], "crisis"],
-                "#ef4444",
+                Colors.red,
                 ["==", ["get", "crowding"], "overcrowded"],
-                "#f97316",
-                ["==", ["get", "crowding"], "busy"],
-                "#f59e0b",
-                "transparent",
+                Colors.orange,
+                Colors.amber,
               ],
               circleStrokeWidth: [
                 "case",
@@ -525,32 +400,21 @@ export default function AirportLayer({
                 3,
                 ["==", ["get", "crowding"], "overcrowded"],
                 2.5,
-                ["==", ["get", "crowding"], "busy"],
                 1.5,
-                0,
               ],
-              circleStrokeOpacity: [
-                "case",
-                ["==", ["get", "crowding"], "normal"],
-                0,
-                0.75,
-              ],
-              circleOpacity: 0,
+              circleStrokeOpacity: 0.85,
               circlePitchAlignment: "map",
             }}
           />
 
-          {/* Waiting travelers ring — grows with queue depth */}
           <MapboxGL.CircleLayer
             id="owned-waiting-ring"
             existing={false}
+            filter={[">", ["get", "waitingPax"], 0]}
             style={{
-              circleRadius: zoomRadius(
-                ["case", [">", ["get", "waitingPax"], 0], 15, 0] as any,
-                ["case", [">", ["get", "waitingPax"], 0], 28, 0] as any,
-                ["case", [">", ["get", "waitingPax"], 0], 44, 0] as any,
-              ),
+              circleRadius: zoomRadius(10.5, 17, 26),
               circleColor: "transparent",
+              circleOpacity: 0,
               circleStrokeColor: Colors.amber,
               circleStrokeWidth: [
                 "interpolate",
@@ -559,7 +423,7 @@ export default function AirportLayer({
                 0,
                 0,
                 50,
-                1.5,
+                1,
                 250,
                 3,
               ],
@@ -570,43 +434,73 @@ export default function AirportLayer({
                 0,
                 0,
                 50,
-                0.35,
+                0.4,
                 250,
-                0.85,
+                0.9,
               ],
+              circlePitchAlignment: "map",
+            }}
+          />
+
+          <MapboxGL.CircleLayer
+            id="owned-trust-ring"
+            existing={false}
+            style={{
+              circleRadius: zoomRadius(8.5, 14, 21),
+              circleColor: "transparent",
               circleOpacity: 0,
+              circleStrokeColor: airlineColor,
+              circleStrokeWidth: [
+                "interpolate",
+                ["linear"],
+                ["get", "hubTier"],
+                1,
+                1,
+                3,
+                1.75,
+                6,
+                2.5,
+              ],
+              circleStrokeOpacity: [
+                "interpolate",
+                ["linear"],
+                ["get", "trust"],
+                0,
+                0.15,
+                50,
+                0.45,
+                100,
+                0.8,
+              ],
               circlePitchAlignment: "map",
             }}
           />
 
-          {/* Hub glow */}
           <MapboxGL.CircleLayer
-            id="owned-activity-glow"
+            id="owned-hub-disc"
             existing={false}
             style={{
-              circleRadius: zoomRadius(10, 20, 32),
-              circleColor: airlineColor,
-              circleOpacity: 0.15,
-              circleBlur: 1.5,
+              circleRadius: zoomRadius(5, 8, 12),
+              circleColor: Colors.surface,
+              circleOpacity: 1,
+              circleStrokeColor: airlineColor,
+              circleStrokeWidth: zoomRadius(2, 2.5, 3.5),
+              circleStrokeOpacity: 1,
               circlePitchAlignment: "map",
             }}
           />
 
-          {/* Hub dot — solid, airline color */}
           <MapboxGL.CircleLayer
-            id="owned-dot"
+            id="owned-hub-core"
             existing={false}
             style={{
-              circleRadius: zoomRadius(4, 7, 12),
+              circleRadius: zoomRadius(1.8, 3, 4.5),
               circleColor: airlineColor,
               circleOpacity: 1,
-              circleStrokeWidth: 2,
-              circleStrokeColor: "rgba(255,255,255,0.4)",
               circlePitchAlignment: "map",
             }}
           />
 
-          {/* Waiting pax label — amber, above the dot */}
           <MapboxGL.SymbolLayer
             id="owned-waiting-label"
             existing={false}
@@ -618,113 +512,65 @@ export default function AirportLayer({
                 ["concat", ["to-string", ["get", "waitingPax"]], " waiting"],
                 "",
               ],
-              textSize: ["interpolate", ["linear"], ["zoom"], 5, 9, 10, 12],
-              textOffset: [0, -1.7],
+              textSize: ["interpolate", ["linear"], ["zoom"], 5, 9, 10, 11],
+              textOffset: [0, -1.65],
               textAnchor: "bottom",
-              textColor: Colors.amber,
-              textOpacity: ["case", [">", ["get", "waitingPax"], 0], 0.95, 0],
-              textHaloColor: "rgba(4,9,15,0.95)",
-              textHaloWidth: 2,
+              textColor: Colors.orange,
+              textOpacity: ["case", [">", ["get", "waitingPax"], 0], 1, 0],
+              textHaloColor: Colors.surface,
+              textHaloWidth: 2.5,
+              textHaloBlur: 0.5,
               textAllowOverlap: true,
               textIgnorePlacement: true,
             }}
           />
 
-          {/* Hub IATA label — airline color, below the dot, visible from zoom 3 */}
           <MapboxGL.SymbolLayer
-            id="owned-label"
+            id="owned-hub-label"
             existing={false}
-            minZoomLevel={3}
+            minZoomLevel={2.5}
             style={{
               textField: ["get", "iata"],
-              textSize: [
-                "interpolate",
-                ["linear"],
-                ["zoom"],
-                3,
-                9,
-                6,
-                13,
-                10,
-                15,
-              ],
-              textOffset: [0, 1.6],
+              textSize: ["interpolate", ["linear"], ["zoom"], 2.5, 10, 6, 13, 10, 15],
+              textOffset: [0, 1.45],
               textAnchor: "top",
-              textColor: airlineColor,
-              textOpacity: [
-                "interpolate",
-                ["linear"],
-                ["zoom"],
-                3,
-                0.8,
-                5,
-                1.0,
-              ],
-              textHaloColor: "rgba(4,9,15,0.95)",
-              textHaloWidth: 2,
+              textColor: Colors.text,
+              textOpacity: 1,
+              textHaloColor: Colors.surface,
+              textHaloWidth: 3,
+              textHaloBlur: 0.5,
               textAllowOverlap: true,
               textIgnorePlacement: true,
             }}
           />
         </MapboxGL.ShapeSource>
-      )}
+      ) : null}
 
-      {/* ══════════════════════════════════════════════════════════
-          WAYPOINT LAYER — airports selected during route creation
-          First waypoint = origin (airline color)
-          Second waypoint = via candidate (purple)
-          ══════════════════════════════════════════════════════════ */}
-      {routeCreationMode && waypointAirports.length > 0 && (
-        <MapboxGL.ShapeSource
-          id="waypoint-source"
-          shape={waypointGeoJSON}
-          hitbox={{ width: 20, height: 20 }}
-        >
-          {/* Outer ring — pulses attention onto selected waypoint */}
+      {routeCreationMode && waypointAirports.length > 0 ? (
+        <MapboxGL.ShapeSource id="waypoint-source" shape={waypointGeoJSON}>
           <MapboxGL.CircleLayer
-            id="waypoint-ring-outer"
+            id="waypoint-outer-ring"
             existing={false}
             style={{
-              circleRadius: zoomRadius(16, 26, 40),
+              circleRadius: zoomRadius(12, 20, 30),
               circleColor: "transparent",
+              circleOpacity: 0,
               circleStrokeColor: [
                 "case",
-                // Second waypoint (index 1) = via = purple
                 ["==", ["get", "iata"], waypointIatas[1] ?? ""],
                 VIA_COLOR,
                 airlineColor,
               ],
-              circleStrokeWidth: 1,
+              circleStrokeWidth: 2,
               circleStrokeOpacity: 0.4,
-              circleOpacity: 0,
               circlePitchAlignment: "map",
             }}
           />
-          {/* Inner ring */}
           <MapboxGL.CircleLayer
-            id="waypoint-ring-inner"
+            id="waypoint-disc"
             existing={false}
             style={{
-              circleRadius: zoomRadius(8, 14, 20),
-              circleColor: "transparent",
-              circleStrokeColor: [
-                "case",
-                ["==", ["get", "iata"], waypointIatas[1] ?? ""],
-                VIA_COLOR,
-                airlineColor,
-              ],
-              circleStrokeWidth: 1.5,
-              circleStrokeOpacity: 0.9,
-              circleOpacity: 0,
-              circlePitchAlignment: "map",
-            }}
-          />
-          {/* Filled dot — brighter than unselected */}
-          <MapboxGL.CircleLayer
-            id="waypoint-dot"
-            existing={false}
-            style={{
-              circleRadius: zoomRadius(4, 7, 11),
+              circleRadius: zoomRadius(5, 8, 12),
               circleColor: [
                 "case",
                 ["==", ["get", "iata"], waypointIatas[1] ?? ""],
@@ -732,78 +578,67 @@ export default function AirportLayer({
                 airlineColor,
               ],
               circleOpacity: 1,
+              circleStrokeColor: Colors.surface,
+              circleStrokeWidth: 3,
+              circleStrokeOpacity: 1,
               circlePitchAlignment: "map",
             }}
           />
-          {/* Waypoint IATA label */}
           <MapboxGL.SymbolLayer
             id="waypoint-label"
             existing={false}
             style={{
               textField: ["get", "iata"],
               textSize: 12,
-              textOffset: [0, 1.6],
+              textOffset: [0, 1.5],
               textAnchor: "top",
               textColor: [
                 "case",
                 ["==", ["get", "iata"], waypointIatas[1] ?? ""],
                 VIA_COLOR,
-                airlineColor,
+                Colors.text,
               ],
               textOpacity: 1,
-              textHaloColor: "rgba(4,9,15,0.95)",
-              textHaloWidth: 2,
+              textHaloColor: Colors.surface,
+              textHaloWidth: 3,
+              textHaloBlur: 0.5,
               textAllowOverlap: true,
               textIgnorePlacement: true,
             }}
           />
         </MapboxGL.ShapeSource>
-      )}
+      ) : null}
 
-      {/* ══════════════════════════════════════════════════════════
-          SELECTED AIRPORT — amber rings when sheet is open
-          (memoized — no longer rebuilds every render)
-          ══════════════════════════════════════════════════════════ */}
-      {selectedAirport && (
+      {selectedAirport ? (
         <MapboxGL.ShapeSource id="selected-source" shape={selectedGeoJSON}>
           <MapboxGL.CircleLayer
-            id="selected-ring-outer"
+            id="selected-airport-outer"
             existing={false}
             style={{
-              circleRadius: zoomRadius(12, 22, 34),
+              circleRadius: zoomRadius(13, 22, 34),
               circleColor: "transparent",
-              circleStrokeColor: Colors.amber,
-              circleStrokeWidth: 1,
               circleOpacity: 0,
-              circleStrokeOpacity: 0.4,
+              circleStrokeColor: Colors.orange,
+              circleStrokeWidth: 2,
+              circleStrokeOpacity: 0.45,
               circlePitchAlignment: "map",
             }}
           />
           <MapboxGL.CircleLayer
-            id="selected-ring-inner"
+            id="selected-airport-inner"
             existing={false}
             style={{
-              circleRadius: zoomRadius(6, 10, 16),
+              circleRadius: zoomRadius(8, 13, 20),
               circleColor: "transparent",
-              circleStrokeColor: Colors.amber,
-              circleStrokeWidth: 1.5,
               circleOpacity: 0,
-              circleStrokeOpacity: 0.9,
-              circlePitchAlignment: "map",
-            }}
-          />
-          <MapboxGL.CircleLayer
-            id="selected-dot"
-            existing={false}
-            style={{
-              circleRadius: zoomRadius(3, 6, 10),
-              circleColor: Colors.amber,
-              circleOpacity: 1,
+              circleStrokeColor: Colors.orange,
+              circleStrokeWidth: 3,
+              circleStrokeOpacity: 1,
               circlePitchAlignment: "map",
             }}
           />
         </MapboxGL.ShapeSource>
-      )}
+      ) : null}
     </>
   );
 }

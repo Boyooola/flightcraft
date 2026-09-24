@@ -1,10 +1,16 @@
 /**
- * components/ui/GameAlert.tsx
- *
- * WorldWide Rush-style in-game alert.
+ * Shared animated decision dialog for notices, confirmations, and warnings.
  */
 
-import { Colors, Radius, Spacing } from "@/constants/theme";
+import {
+  Colors,
+  MIN_TOUCH,
+  Palette,
+  Radius,
+  Shadow,
+  Spacing,
+  Typography,
+} from "@/constants/theme";
 import { Ionicons } from "@expo/vector-icons";
 import {
   forwardRef,
@@ -41,26 +47,42 @@ export interface GameAlertHandle {
   hide: () => void;
 }
 
-const SLIDE_MS = 220;
+const ANIMATION_MS = 220;
+
+function getAlertTone(primary?: GameAlertButton) {
+  const destructive = primary?.style === "destructive";
+
+  return {
+    destructive,
+    accent: destructive ? Colors.red : Colors.sky,
+    surface: destructive ? Palette.redSoft : Palette.blueSoft,
+    eyebrow: destructive ? "PERMANENT ACTION" : "FLIGHTCRAFT NOTICE",
+  };
+}
 
 export const GameAlert = forwardRef<GameAlertHandle>((_, ref) => {
   const [visible, setVisible] = useState(false);
   const [config, setConfig] = useState<GameAlertConfig | null>(null);
-  const slideY = useRef(new Animated.Value(90)).current;
+  const translateY = useRef(new Animated.Value(80)).current;
   const opacity = useRef(new Animated.Value(0)).current;
-  const scale = useRef(new Animated.Value(0.96)).current;
+  const scale = useRef(new Animated.Value(0.97)).current;
+  const closingRef = useRef(false);
 
   const show = useCallback(
-    (cfg: GameAlertConfig) => {
-      setConfig(cfg);
-      setVisible(true);
+    (nextConfig: GameAlertConfig) => {
+      closingRef.current = false;
+      translateY.stopAnimation();
+      opacity.stopAnimation();
+      scale.stopAnimation();
 
-      slideY.setValue(90);
+      setConfig(nextConfig);
+      setVisible(true);
+      translateY.setValue(80);
       opacity.setValue(0);
-      scale.setValue(0.96);
+      scale.setValue(0.97);
 
       Animated.parallel([
-        Animated.spring(slideY, {
+        Animated.spring(translateY, {
           toValue: 0,
           friction: 8,
           tension: 85,
@@ -74,59 +96,65 @@ export const GameAlert = forwardRef<GameAlertHandle>((_, ref) => {
         }),
         Animated.timing(opacity, {
           toValue: 1,
-          duration: SLIDE_MS,
+          duration: ANIMATION_MS,
           useNativeDriver: true,
         }),
       ]).start();
     },
-    [opacity, scale, slideY],
+    [opacity, scale, translateY],
   );
 
   const hide = useCallback(
     (onDone?: () => void) => {
+      if (closingRef.current) return;
+      closingRef.current = true;
+
       Animated.parallel([
-        Animated.timing(slideY, {
-          toValue: 90,
-          duration: SLIDE_MS,
+        Animated.timing(translateY, {
+          toValue: 60,
+          duration: ANIMATION_MS,
           useNativeDriver: true,
         }),
         Animated.timing(scale, {
-          toValue: 0.96,
-          duration: SLIDE_MS,
+          toValue: 0.97,
+          duration: ANIMATION_MS,
           useNativeDriver: true,
         }),
         Animated.timing(opacity, {
           toValue: 0,
-          duration: SLIDE_MS,
+          duration: ANIMATION_MS,
           useNativeDriver: true,
         }),
-      ]).start(() => {
+      ]).start(({ finished }) => {
+        if (!finished) return;
         setVisible(false);
         setConfig(null);
+        closingRef.current = false;
         onDone?.();
       });
     },
-    [opacity, scale, slideY],
+    [opacity, scale, translateY],
   );
 
-  useImperativeHandle(ref, () => ({ show, hide }), [show, hide]);
+  useImperativeHandle(ref, () => ({ show, hide }), [hide, show]);
 
   if (!visible || !config) return null;
 
   const primary =
-    config.buttons.find((b) => b.style === "destructive") ??
-    config.buttons.find((b) => b.style === "default");
-
-  const cancel = config.buttons.find((b) => b.style === "cancel");
-
-  const extraButtons = config.buttons.filter(
+    config.buttons.find((button) => button.style === "destructive") ??
+    config.buttons.find((button) => button.style === "default");
+  const cancel = config.buttons.find((button) => button.style === "cancel");
+  const secondaryButtons = config.buttons.filter(
     (button) => button !== primary && button !== cancel,
   );
+  const tone = getAlertTone(primary);
 
-  const iconColor = primary?.style === "destructive" ? Colors.red : Colors.sky;
+  const handleButton = (button: GameAlertButton) => {
+    hide(() => button.onPress?.());
+  };
 
-  const handleButton = (btn: GameAlertButton) => {
-    hide(() => btn.onPress?.());
+  const handleDismiss = () => {
+    if (cancel) handleButton(cancel);
   };
 
   return (
@@ -135,83 +163,103 @@ export const GameAlert = forwardRef<GameAlertHandle>((_, ref) => {
       visible={visible}
       animationType="none"
       statusBarTranslucent
-      onRequestClose={() => hide()}
+      onRequestClose={handleDismiss}
     >
-      <TouchableWithoutFeedback
-        onPress={() => {
-          if (cancel) hide(() => cancel.onPress?.());
-        }}
-      >
-        <Animated.View style={[s.backdrop, { opacity }]} />
+      <TouchableWithoutFeedback onPress={handleDismiss}>
+        <Animated.View style={[styles.backdrop, { opacity }]} />
       </TouchableWithoutFeedback>
 
       <Animated.View
+        pointerEvents="box-none"
         style={[
-          s.wrap,
+          styles.positioner,
           {
             opacity,
-            transform: [{ translateY: slideY }, { scale }],
+            transform: [{ translateY }, { scale }],
           },
         ]}
       >
-        <View style={s.card}>
-          <View style={s.handle} />
-
-          {config.icon && (
-            <View
-              style={[
-                s.iconWrap,
-                {
-                  backgroundColor: iconColor + "18",
-                  borderColor: iconColor + "44",
-                },
-              ]}
-            >
-              <Ionicons name={config.icon as any} size={28} color={iconColor} />
+        <View
+          accessibilityViewIsModal
+          style={[styles.card, { borderTopColor: tone.accent }]}
+        >
+          <View style={styles.heading}>
+            <View style={[styles.icon, { backgroundColor: tone.surface }]}>
+              <Ionicons
+                name={(config.icon ?? "information-circle-outline") as any}
+                size={24}
+                color={tone.accent}
+              />
             </View>
-          )}
 
-          <Text style={s.title}>{config.title}</Text>
-          <Text style={s.message}>{config.message}</Text>
+            <View style={styles.headingCopy}>
+              <Text style={[styles.eyebrow, { color: tone.accent }]}>
+                {tone.eyebrow}
+              </Text>
+              <Text style={styles.title}>{config.title}</Text>
+            </View>
+          </View>
 
-          <View style={s.actions}>
+          <Text style={styles.message}>{config.message}</Text>
+
+          <View style={styles.actions}>
             {primary && (
               <TouchableOpacity
-                style={[
-                  s.primaryBtn,
-                  {
-                    backgroundColor:
-                      primary.style === "destructive" ? Colors.red : Colors.sky,
-                  },
-                ]}
+                accessibilityLabel={primary.label}
+                accessibilityRole="button"
+                style={[styles.primaryButton, { backgroundColor: tone.accent }]}
                 onPress={() => handleButton(primary)}
                 activeOpacity={0.86}
               >
-                <Text style={s.primaryText}>{primary.label}</Text>
+                <Ionicons
+                  name={
+                    tone.destructive
+                      ? "warning-outline"
+                      : "checkmark-circle-outline"
+                  }
+                  size={17}
+                  color={Colors.textOnColor}
+                />
+                <Text style={styles.primaryText}>{primary.label}</Text>
               </TouchableOpacity>
             )}
 
-            {extraButtons.map((btn, index) => (
+            {secondaryButtons.map((button, index) => (
               <TouchableOpacity
-                key={`${btn.label}-${index}`}
-                style={s.secondaryBtn}
-                onPress={() => handleButton(btn)}
-                activeOpacity={0.78}
+                key={`${button.label}-${index}`}
+                accessibilityLabel={button.label}
+                accessibilityRole="button"
+                style={styles.secondaryButton}
+                onPress={() => handleButton(button)}
+                activeOpacity={0.82}
               >
-                <Text style={s.secondaryText}>{btn.label}</Text>
+                <Text style={styles.secondaryText}>{button.label}</Text>
               </TouchableOpacity>
             ))}
 
             {cancel && (
               <TouchableOpacity
-                style={s.cancelBtn}
+                accessibilityLabel={cancel.label}
+                accessibilityRole="button"
+                style={[
+                  styles.cancelButton,
+                  !primary && styles.cancelButtonOnly,
+                ]}
                 onPress={() => handleButton(cancel)}
-                activeOpacity={0.75}
+                activeOpacity={0.78}
               >
-                <Text style={s.cancelText}>{cancel.label}</Text>
+                <Text
+                  style={[styles.cancelText, !primary && styles.cancelTextOnly]}
+                >
+                  {cancel.label}
+                </Text>
               </TouchableOpacity>
             )}
           </View>
+
+          {cancel && (
+            <Text style={styles.dismissHint}>Tap outside to dismiss</Text>
+          )}
         </View>
       </Animated.View>
     </Modal>
@@ -234,99 +282,120 @@ export function useGameAlert() {
   return { ref, show, hide };
 }
 
-const s = StyleSheet.create({
+const styles = StyleSheet.create({
   backdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0,0,0,0.68)",
+    backgroundColor: Colors.overlay,
   },
-  wrap: {
+  positioner: {
     position: "absolute",
     left: 0,
     right: 0,
-    bottom: 18,
+    bottom: 0,
+    alignItems: "center",
     paddingHorizontal: Spacing.lg,
     paddingBottom: Spacing.xl,
   },
   card: {
+    width: "100%",
+    maxWidth: 520,
+    backgroundColor: Colors.panel,
     borderRadius: Radius.xl,
     borderWidth: 1,
     borderColor: Colors.border,
-    backgroundColor: "rgba(8,15,30,0.98)",
+    borderTopWidth: 5,
     padding: Spacing.lg,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.42,
-    shadowRadius: 20,
-    elevation: 20,
+    ...Shadow.floating,
   },
-  handle: {
-    alignSelf: "center",
-    width: 44,
-    height: 4,
-    borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.14)",
-    marginBottom: Spacing.lg,
-  },
-  iconWrap: {
-    alignSelf: "center",
-    width: 58,
-    height: 58,
-    borderRadius: 18,
-    borderWidth: 1,
+  heading: {
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
+    gap: Spacing.md,
     marginBottom: Spacing.md,
   },
+  icon: {
+    width: 48,
+    height: 48,
+    borderRadius: Radius.md,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  headingCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  eyebrow: {
+    fontSize: 8,
+    fontWeight: Typography.weight.bold,
+    letterSpacing: 1.2,
+  },
   title: {
-    fontSize: 19,
     color: Colors.text,
-    fontWeight: "900",
-    textAlign: "center",
-    marginBottom: Spacing.sm,
+    fontSize: 19,
+    lineHeight: 24,
+    fontWeight: Typography.weight.bold,
+    marginTop: Spacing.xxs,
   },
   message: {
-    fontSize: 13,
     color: Colors.muted,
-    textAlign: "center",
+    fontSize: 13,
     lineHeight: 20,
     marginBottom: Spacing.lg,
   },
   actions: {
     gap: Spacing.sm,
   },
-  primaryBtn: {
-    minHeight: 46,
-    borderRadius: Radius.lg,
+  primaryButton: {
+    minHeight: MIN_TOUCH + 4,
+    flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
+    gap: Spacing.sm,
+    borderRadius: Radius.md,
+    paddingHorizontal: Spacing.md,
   },
   primaryText: {
+    color: Colors.textOnColor,
     fontSize: 14,
-    color: Colors.bg,
-    fontWeight: "900",
+    fontWeight: Typography.weight.bold,
   },
-  secondaryBtn: {
-    minHeight: 44,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
+  secondaryButton: {
+    minHeight: MIN_TOUCH,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(255,255,255,0.035)",
+    backgroundColor: Palette.blueSoft,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: "rgba(23,105,170,0.20)",
+    paddingHorizontal: Spacing.md,
   },
   secondaryText: {
+    color: Colors.skyDark,
     fontSize: 13,
-    color: Colors.text,
-    fontWeight: "800",
+    fontWeight: Typography.weight.bold,
   },
-  cancelBtn: {
-    minHeight: 42,
+  cancelButton: {
+    minHeight: MIN_TOUCH,
     alignItems: "center",
     justifyContent: "center",
+    borderRadius: Radius.md,
+    paddingHorizontal: Spacing.md,
+  },
+  cancelButtonOnly: {
+    backgroundColor: Colors.sky,
   },
   cancelText: {
+    color: Colors.muted,
     fontSize: 13,
+    fontWeight: Typography.weight.bold,
+  },
+  cancelTextOnly: {
+    color: Colors.textOnColor,
+  },
+  dismissHint: {
     color: Colors.dim,
-    fontWeight: "800",
+    fontSize: 9,
+    textAlign: "center",
+    marginTop: Spacing.sm,
   },
 });

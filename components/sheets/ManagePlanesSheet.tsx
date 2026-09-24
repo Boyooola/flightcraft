@@ -1,15 +1,12 @@
-/**
- * components/sheets/ManagePlanesSheet.tsx
- *
- * Per-plane management sheet opened from FleetSheet → My Planes tab.
- * Shows all planes in a model group individually.
- *
- * Flying plane  → Unassign (+ condition warning if worn)
- * Idle + worn   → Maintain · $XK  +  Sell · $XK
- * Idle + healthy → Assign  +  Sell · $XK
- */
-
-import { Colors, Radius, Spacing } from "@/constants/theme";
+import {
+  Colors,
+  MIN_TOUCH,
+  Palette,
+  Radius,
+  Shadow,
+  Spacing,
+  Typography,
+} from "@/constants/theme";
 import { useTabBarHeight } from "@/hooks/useSheetLayout";
 import {
   useDeactivateRoute,
@@ -18,18 +15,10 @@ import {
 } from "@/hooks/useSupabaseWrite";
 import { fmtCash } from "@/lib/revenue";
 import type { OwnedPlane, Route } from "@/store";
-import {
-  useGameStore,
-  useRoutes,
-  useSelectedPlaneGroup
-} from "@/store";
+import { useGameStore, useRoutes, useSelectedPlaneGroup } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
-import type { BottomSheetBackdropProps } from "@gorhom/bottom-sheet";
-import {
-  BottomSheetBackdrop,
-  BottomSheetScrollView,
-} from "@gorhom/bottom-sheet";
-import { useCallback, useState } from "react";
+import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
+import { useMemo, useState } from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
 export default function ManagePlanesSheet() {
@@ -45,40 +34,32 @@ export default function ManagePlanesSheet() {
   const airline = useGameStore((s) => s.airline);
   const routes = useRoutes();
   const group = useSelectedPlaneGroup();
-  const color = airline?.color ?? "#38bdf8";
+  const color = airline?.color ?? Colors.sky;
+
+  const planeRouteMap = useMemo(() => {
+    const map = new Map<string, string>();
+    routes
+      .filter((route) => route.active)
+      .forEach((route) => {
+        const via = route.via_iata ? ` → ${route.via_iata}` : "";
+        map.set(
+          route.plane.id,
+          `${route.demand.origin.iata}${via} → ${route.demand.dest.iata}`,
+        );
+      });
+    return map;
+  }, [routes]);
+
+  const planeRoutes = useMemo(() => {
+    const map = new Map<string, Route>();
+    routes
+      .filter((route) => route.active)
+      .forEach((route) => map.set(route.plane.id, route));
+    return map;
+  }, [routes]);
 
   if (!group) return null;
   const { model, planes } = group;
-
-  const planeRouteMap = new Map<string, string>();
-  routes
-    .filter((r) => r.active)
-    .forEach((r) => {
-      const via = r.via_iata ? ` → ${r.via_iata}` : "";
-      planeRouteMap.set(
-        r.plane.id,
-        `${r.demand.origin.iata}${via} → ${r.demand.dest.iata}`,
-      );
-    });
-
-  const planeRoutes = new Map<string, Route>();
-  routes.filter((r) => r.active).forEach((r) => planeRoutes.set(r.plane.id, r));
-
-  const onClose = closeSheet;
-
-  // eslint-disable-next-line react-hooks/rules-of-hooks
-  const renderBackdrop = useCallback(
-    (props: BottomSheetBackdropProps) => (
-      <BottomSheetBackdrop
-        {...props}
-        disappearsOnIndex={-1}
-        appearsOnIndex={0}
-        pressBehavior="close"
-        onPress={onClose}
-      />
-    ),
-    [closeSheet],
-  );
 
   const dismiss = () => {
     closeSheet();
@@ -105,7 +86,6 @@ export default function ManagePlanesSheet() {
     }
     setBusy(plane.id);
     setConfirmSell(null);
-    console.log("plane", plane);
     const { error } = await sellPlane(plane.id);
     setBusy(null);
     if (!error) {
@@ -125,20 +105,56 @@ export default function ManagePlanesSheet() {
     >
       {/* Header */}
       <View style={m.header}>
-        <View>
+        <View
+          style={[
+            m.headerMark,
+            { borderColor: color, backgroundColor: color + "14" },
+          ]}
+        >
+          <Ionicons name="airplane-outline" size={20} color={color} />
+        </View>
+        <View style={m.headerCopy}>
+          <Text style={m.kicker}>FLEET DETAIL</Text>
           <Text style={m.title}>{model.nickname}</Text>
           <Text style={m.sub}>
-            {model.pax_capacity} seats · {model.range_nm.toLocaleString()}nm
-            {" · "}
-            {fmtCash(model.price)} new
+            {planes.length} aircraft · {model.pax_capacity} seats ·{" "}
+            {model.range_nm.toLocaleString()} nm range
           </Text>
         </View>
-        <TouchableOpacity onPress={dismiss} hitSlop={12} activeOpacity={0.7}>
-          <Ionicons name="close" size={18} color={Colors.dim} />
+        <TouchableOpacity
+          accessibilityLabel="Close aircraft management"
+          accessibilityRole="button"
+          onPress={dismiss}
+          activeOpacity={0.7}
+          style={m.closeButton}
+        >
+          <Ionicons name="close" size={21} color={Colors.text} />
         </TouchableOpacity>
       </View>
 
-      {planes.map((plane) => {
+      <View style={m.contextCard}>
+        <View style={m.contextItem}>
+          <Text style={m.contextValue}>{model.pax_capacity}</Text>
+          <Text style={m.contextLabel}>SEATS</Text>
+        </View>
+        <View style={m.contextDivider} />
+        <View style={m.contextItem}>
+          <Text style={m.contextValue}>{model.range_nm.toLocaleString()}</Text>
+          <Text style={m.contextLabel}>NM RANGE</Text>
+        </View>
+        <View style={m.contextDivider} />
+        <View style={m.contextItem}>
+          <Text style={m.contextValue}>{fmtCash(model.price)}</Text>
+          <Text style={m.contextLabel}>NEW PRICE</Text>
+        </View>
+      </View>
+
+      <View style={m.sectionHeading}>
+        <Text style={m.sectionKicker}>INDIVIDUAL AIRCRAFT</Text>
+        <Text style={m.sectionHint}>Tap an action to update each plane</Text>
+      </View>
+
+      {planes.map((plane, index) => {
         const isFlying = planeRouteMap.has(plane.id);
         const routeLabel = planeRouteMap.get(plane.id) ?? null;
         const cond = plane.condition ?? 100;
@@ -171,14 +187,14 @@ export default function ManagePlanesSheet() {
             <View style={m.body}>
               {/* Top row: status + condition */}
               <View style={m.topRow}>
+                <Text style={m.planeLabel}>AIRCRAFT {index + 1}</Text>
                 <View
                   style={[
                     m.statusPill,
                     {
-                      backgroundColor:
-                        (isFlying ? Colors.green : Colors.amber) + "18",
-                      borderColor:
-                        (isFlying ? Colors.green : Colors.amber) + "44",
+                      backgroundColor: isFlying
+                        ? Palette.greenSoft
+                        : Palette.orangeSoft,
                     },
                   ]}
                 >
@@ -191,31 +207,6 @@ export default function ManagePlanesSheet() {
                     {isFlying ? "Flying" : "Idle"}
                   </Text>
                 </View>
-
-                {/* <View style={m.condRow}>
-                    <Ionicons
-                      name="construct-outline"
-                      size={9}
-                      color={condColor}
-                    />
-                    <View style={m.condTrack}>
-                      <View
-                        style={[
-                          m.condFill,
-                          {
-                            width: `${cond}%` as any,
-                            backgroundColor: condColor,
-                          },
-                        ]}
-                      />
-                    </View>
-                    <Text style={[m.condPct, { color: condColor }]}>
-                      {cond}%
-                    </Text>
-                    {daysActive > 0 && (
-                      <Text style={m.days}>· {daysActive}d</Text>
-                    )}
-                  </View> */}
               </View>
 
               {/* Route or idle label */}
@@ -255,6 +246,8 @@ export default function ManagePlanesSheet() {
               {isFlying ? (
                 /* Flying → Unassign only */
                 <TouchableOpacity
+                  accessibilityLabel={`Unassign aircraft ${index + 1} from ${routeLabel}`}
+                  accessibilityRole="button"
                   style={m.dangerBtn}
                   onPress={() => handleUnassign(plane)}
                   disabled={isBusy}
@@ -272,6 +265,8 @@ export default function ManagePlanesSheet() {
                 <>
                   {needsMaint ? (
                     <TouchableOpacity
+                      accessibilityLabel={`Service aircraft ${index + 1} for ${fmtCash(maintCost)}`}
+                      accessibilityRole="button"
                       style={m.maintBtn}
                       onPress={() => handleMaintain(plane)}
                       disabled={isBusy}
@@ -280,7 +275,7 @@ export default function ManagePlanesSheet() {
                       <Ionicons
                         name="construct-outline"
                         size={13}
-                        color={Colors.amber}
+                        color={Colors.textOnColor}
                       />
                       <Text style={m.maintTxt}>
                         {isBusy ? "..." : `Maintain · ${fmtCash(maintCost)}`}
@@ -288,7 +283,9 @@ export default function ManagePlanesSheet() {
                     </TouchableOpacity>
                   ) : (
                     <TouchableOpacity
-                      style={[m.assignBtn, { backgroundColor: color }]}
+                      accessibilityLabel={`Assign aircraft ${index + 1} to a route`}
+                      accessibilityRole="button"
+                      style={m.assignBtn}
                       onPress={() => {
                         openSheet(
                           "assign-route",
@@ -303,7 +300,7 @@ export default function ManagePlanesSheet() {
                       <Ionicons
                         name="flash-outline"
                         size={13}
-                        color={Colors.bg}
+                        color={Colors.textOnColor}
                       />
                       <Text style={m.assignTxt}>Assign</Text>
                     </TouchableOpacity>
@@ -311,6 +308,12 @@ export default function ManagePlanesSheet() {
 
                   {/* Sell — two-tap confirm */}
                   <TouchableOpacity
+                    accessibilityLabel={
+                      isSellConfirm
+                        ? `Confirm sale of aircraft ${index + 1}`
+                        : `Sell aircraft ${index + 1} for ${fmtCash(salePrice)}`
+                    }
+                    accessibilityRole="button"
                     style={[m.sellBtn, isSellConfirm && m.sellConfirm]}
                     onPress={() => handleSell(plane)}
                     disabled={isBusy}
@@ -345,20 +348,92 @@ export default function ManagePlanesSheet() {
 }
 
 const m = StyleSheet.create({
-  sheetBg: { backgroundColor: "#0d1526" },
-  handle: { backgroundColor: "rgba(255,255,255,0.35)", width: 40, height: 4 },
+  content: { paddingTop: Spacing.sm, backgroundColor: Colors.surface },
   header: {
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "center",
     paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.md,
-    borderBottomWidth: 0.5,
-    borderBottomColor: Colors.border,
+    paddingBottom: Spacing.md,
+    gap: Spacing.md,
   },
-  title: { fontSize: 16, fontWeight: "900", color: Colors.text },
-  sub: { fontSize: 11, color: Colors.dim, marginTop: 2 },
-  content: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.sm },
+  headerMark: {
+    width: MIN_TOUCH,
+    height: MIN_TOUCH,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderRadius: Radius.md,
+  },
+  headerCopy: { flex: 1 },
+  kicker: {
+    color: Colors.skyDark,
+    fontFamily: Typography.mono,
+    fontSize: 8,
+    letterSpacing: 1.3,
+  },
+  title: {
+    color: Colors.text,
+    fontFamily: Typography.display,
+    fontSize: 28,
+    lineHeight: 31,
+    letterSpacing: 0.4,
+  },
+  sub: { fontSize: 10, color: Colors.muted },
+  closeButton: {
+    width: MIN_TOUCH,
+    height: MIN_TOUCH,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: Radius.full,
+    backgroundColor: Colors.inset,
+  },
+  contextCard: {
+    flexDirection: "row",
+    marginHorizontal: Spacing.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.panel,
+    ...Shadow.card,
+  },
+  contextItem: {
+    flex: 1,
+    alignItems: "center",
+    paddingVertical: Spacing.md,
+    gap: 2,
+  },
+  contextValue: {
+    color: Colors.text,
+    fontFamily: Typography.mono,
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  contextLabel: {
+    color: Colors.muted,
+    fontFamily: Typography.mono,
+    fontSize: 7,
+    letterSpacing: 0.5,
+  },
+  contextDivider: {
+    width: StyleSheet.hairlineWidth,
+    marginVertical: Spacing.sm,
+    backgroundColor: Colors.border,
+  },
+  sectionHeading: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: Spacing.xl,
+    marginBottom: Spacing.sm,
+    paddingHorizontal: Spacing.lg,
+  },
+  sectionKicker: {
+    color: Colors.skyDark,
+    fontFamily: Typography.mono,
+    fontSize: 9,
+    letterSpacing: 1.2,
+  },
+  sectionHint: { color: Colors.muted, fontSize: 9 },
 
   row: {
     flexDirection: "row",
@@ -366,8 +441,10 @@ const m = StyleSheet.create({
     borderRadius: Radius.lg,
     borderWidth: 1,
     overflow: "hidden",
+    marginHorizontal: Spacing.lg,
     marginBottom: Spacing.sm,
-    backgroundColor: "rgba(255,255,255,.025)",
+    backgroundColor: Colors.panel,
+    ...Shadow.card,
   },
   stripe: { width: 4, alignSelf: "stretch" },
   body: { flex: 1, padding: Spacing.md, gap: 5 },
@@ -376,24 +453,34 @@ const m = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
+  planeLabel: {
+    color: Colors.skyDark,
+    fontFamily: Typography.mono,
+    fontSize: 8,
+    letterSpacing: 0.8,
+  },
   statusPill: {
     borderRadius: Radius.full,
-    borderWidth: 1,
     paddingHorizontal: 7,
-    paddingVertical: 2,
+    paddingVertical: 3,
   },
-  statusTxt: { fontSize: 9, fontWeight: "700" },
+  statusTxt: {
+    fontFamily: Typography.mono,
+    fontSize: 8,
+    fontWeight: "700",
+    textTransform: "uppercase",
+  },
   condRow: { flexDirection: "row", alignItems: "center", gap: 4 },
   condTrack: {
     width: 55,
     height: 3,
     borderRadius: 2,
-    backgroundColor: "rgba(255,255,255,.08)",
+    backgroundColor: Colors.inset,
     overflow: "hidden",
   },
   condFill: { height: "100%" as any, borderRadius: 2 },
-  condPct: { fontSize: 9, fontWeight: "700" },
-  days: { fontSize: 9, color: Colors.dim },
+  condPct: { fontFamily: Typography.mono, fontSize: 9, fontWeight: "700" },
+  days: { fontSize: 9, color: Colors.muted },
   routeLabel: { fontSize: 11, color: Colors.muted },
   warnTxt: { fontSize: 9, color: Colors.amber, fontWeight: "600" },
 
@@ -403,7 +490,7 @@ const m = StyleSheet.create({
     gap: 5,
     padding: Spacing.sm,
     flexShrink: 0,
-    minWidth: 110,
+    minWidth: 124,
   },
 
   // Unassign
@@ -411,12 +498,13 @@ const m = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
+    minHeight: 40,
     paddingHorizontal: Spacing.sm,
     paddingVertical: 7,
     borderRadius: Radius.md,
     borderWidth: 1,
-    borderColor: Colors.red + "33",
-    backgroundColor: Colors.red + "08",
+    borderColor: Colors.red,
+    backgroundColor: Palette.redSoft,
   },
   dangerTxt: { fontSize: 11, fontWeight: "700", color: Colors.red },
 
@@ -425,41 +513,45 @@ const m = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
+    minHeight: 40,
     paddingHorizontal: Spacing.sm,
     paddingVertical: 7,
     borderRadius: Radius.md,
     borderWidth: 1,
-    borderColor: Colors.amber + "44",
-    backgroundColor: Colors.amber + "10",
+    borderColor: Colors.amber,
+    backgroundColor: Colors.amber,
   },
-  maintTxt: { fontSize: 11, fontWeight: "700", color: Colors.amber },
+  maintTxt: { fontSize: 10, fontWeight: "700", color: Colors.textOnColor },
 
   // Assign
   assignBtn: {
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
+    minHeight: 40,
     paddingHorizontal: Spacing.sm,
     paddingVertical: 7,
     borderRadius: Radius.md,
+    backgroundColor: Colors.sky,
   },
-  assignTxt: { fontSize: 11, fontWeight: "700", color: Colors.bg },
+  assignTxt: { fontSize: 11, fontWeight: "700", color: Colors.textOnColor },
 
   // Sell
   sellBtn: {
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
+    minHeight: 40,
     paddingHorizontal: Spacing.sm,
     paddingVertical: 7,
     borderRadius: Radius.md,
     borderWidth: 1,
     borderColor: Colors.border,
-    backgroundColor: "rgba(255,255,255,.03)",
+    backgroundColor: Colors.bg,
   },
   sellConfirm: {
-    borderColor: Colors.red + "44",
-    backgroundColor: Colors.red + "08",
+    borderColor: Colors.red,
+    backgroundColor: Palette.redSoft,
   },
-  sellTxt: { fontSize: 11, fontWeight: "700", color: Colors.dim },
+  sellTxt: { fontSize: 10, fontWeight: "700", color: Colors.muted },
 });

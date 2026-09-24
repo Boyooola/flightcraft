@@ -1,19 +1,16 @@
 /**
- * components/sheets/LeaderboardSheet.tsx
- *
- * Rival board + Google Play Games integration.
- *
- * - Google Play Games handles:
- *   • Real player leaderboard
- *   • Achievements
- *
- * - This sheet handles:
- *   • AI rival rankings
- *   • Rival progression
- *   • In-world competition
+ * Local AI rival standings with a gateway to Google Play competition.
  */
 
-import { Colors, Radius, Spacing } from "@/constants/theme";
+import {
+  Colors,
+  MIN_TOUCH,
+  Palette,
+  Radius,
+  Shadow,
+  Spacing,
+  Typography,
+} from "@/constants/theme";
 import {
   showAchievements,
   showLeaderboard,
@@ -25,13 +22,18 @@ import { useAIAirlines, useAirline, useGameStore } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
 import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import { useMemo } from "react";
-import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import {
+  ActivityIndicator,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
 
 interface RivalRow {
   id: string;
   name: string;
   color: string;
-  cash: number;
   netWorth: number;
   reputation: number;
   demandScore: number;
@@ -39,100 +41,144 @@ interface RivalRow {
 }
 
 function shortScore(score: number) {
-  if (score >= 1_000_000) {
-    return `${(score / 1_000_000).toFixed(1)}M`;
-  }
-
-  if (score >= 1_000) {
-    return `${Math.round(score / 1_000)}K`;
-  }
-
+  if (score >= 1_000_000) return `${(score / 1_000_000).toFixed(1)}M`;
+  if (score >= 1_000) return `${Math.round(score / 1_000)}K`;
   return score.toLocaleString();
 }
 
-function rankColor(rank: number) {
-  if (rank === 1) return "#F59E0B";
-  if (rank === 2) return "#94A3B8";
-  if (rank === 3) return "#CD7C4A";
-  return Colors.dim;
+function rankTheme(rank: number) {
+  if (rank === 1) {
+    return { color: Colors.amber, surface: Palette.orangeSoft };
+  }
+
+  if (rank === 2) {
+    return { color: Colors.muted, surface: Colors.inset };
+  }
+
+  if (rank === 3) {
+    return { color: "#A65F32", surface: "#F3E3D7" };
+  }
+
+  return { color: Colors.muted, surface: Palette.cloud };
 }
 
 function RankBadge({ rank }: { rank: number }) {
-  const color = rankColor(rank);
+  const theme = rankTheme(rank);
 
   return (
-    <View
-      style={[
-        rankStyles.badge,
-        {
-          backgroundColor: color + "18",
-          borderColor: color + "44",
-        },
-      ]}
-    >
-      {rank <= 3 && <Ionicons name="trophy" size={9} color={color} />}
-
-      <Text style={[rankStyles.text, { color }]}>#{rank}</Text>
+    <View style={[rankStyles.badge, { backgroundColor: theme.surface }]}>
+      {rank <= 3 ? (
+        <Ionicons name="medal-outline" size={13} color={theme.color} />
+      ) : (
+        <Text style={rankStyles.hash}>#</Text>
+      )}
+      <Text style={[rankStyles.value, { color: theme.color }]}>{rank}</Text>
     </View>
   );
 }
 
 function PlayGamesCard() {
-  const { isSignedIn, signIn, player } = usePlayGames();
+  const { status, isSignedIn, signIn, player } = usePlayGames();
+  const isConnecting = status === "signing-in";
+  const failed = status === "failed";
 
   return (
-    <View style={pg.card}>
-      <View style={pg.header}>
-        <View style={pg.icon}>
-          <Ionicons name="game-controller" size={20} color={Colors.sky} />
+    <View style={playStyles.card}>
+      <View style={playStyles.header}>
+        <View style={playStyles.icon}>
+          <Ionicons
+            name="game-controller-outline"
+            size={22}
+            color={Colors.sky}
+          />
         </View>
 
-        <View style={{ flex: 1 }}>
-          <Text style={pg.title}>Google Play Games</Text>
-
-          <Text style={pg.subtitle}>
+        <View style={playStyles.headerCopy}>
+          <Text style={playStyles.eyebrow}>ONLINE COMPETITION</Text>
+          <Text style={playStyles.title}>Google Play Games</Text>
+          <Text style={[playStyles.subtitle, failed && { color: Colors.red }]}>
             {isSignedIn
-              ? `Signed in as ${player?.displayName ?? "Pilot"}`
-              : "Connect to compete globally"}
+              ? `Connected as ${player?.displayName ?? "Pilot"}`
+              : isConnecting
+                ? "Connecting your pilot profile…"
+                : failed
+                  ? "Could not connect. You can try again."
+                  : "Connect to compare net worth with real players."}
           </Text>
         </View>
+
+        <View
+          style={[
+            playStyles.connectionDot,
+            {
+              backgroundColor: isSignedIn
+                ? Colors.green
+                : failed
+                  ? Colors.red
+                  : Colors.dim,
+            },
+          ]}
+        />
       </View>
 
       {isSignedIn ? (
-        <View style={pg.actions}>
+        <View style={playStyles.actions}>
           <TouchableOpacity
-            style={pg.button}
-            activeOpacity={0.82}
+            accessibilityLabel="Open global airline rankings"
+            accessibilityRole="button"
+            style={playStyles.primaryButton}
+            activeOpacity={0.85}
             onPress={showLeaderboard}
           >
-            <Ionicons name="trophy-outline" size={16} color={Colors.text} />
-
-            <Text style={pg.buttonText}>Global Rankings</Text>
+            <Ionicons
+              name="earth-outline"
+              size={17}
+              color={Colors.textOnColor}
+            />
+            <Text style={playStyles.primaryButtonText}>Global rankings</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={pg.button}
-            activeOpacity={0.82}
+            accessibilityLabel="Open Google Play achievements"
+            accessibilityRole="button"
+            style={playStyles.secondaryButton}
+            activeOpacity={0.85}
             onPress={showAchievements}
           >
-            <Ionicons name="star-outline" size={16} color={Colors.text} />
-
-            <Text style={pg.buttonText}>Achievements</Text>
+            <Ionicons name="ribbon-outline" size={17} color={Colors.skyDark} />
+            <Text style={playStyles.secondaryButtonText}>Achievements</Text>
           </TouchableOpacity>
         </View>
       ) : (
         <TouchableOpacity
-          style={pg.signInBtn}
-          activeOpacity={0.82}
+          accessibilityLabel={
+            failed ? "Retry Play Games sign in" : "Sign in to Play Games"
+          }
+          accessibilityRole="button"
+          style={[
+            playStyles.signInButton,
+            isConnecting && playStyles.disabledButton,
+          ]}
+          activeOpacity={0.85}
           onPress={signIn}
+          disabled={isConnecting}
         >
-          <Ionicons
-            name="logo-google-playstore"
-            size={16}
-            color={Colors.text}
-          />
-
-          <Text style={pg.signInText}>Sign in with Play Games</Text>
+          {isConnecting ? (
+            <ActivityIndicator size="small" color={Colors.textOnColor} />
+          ) : (
+            <Ionicons
+              name="logo-google-playstore"
+              size={17}
+              color={Colors.textOnColor}
+            />
+          )}
+          <Text style={playStyles.signInText}>
+            {isConnecting
+              ? "Connecting…"
+              : failed
+                ? "Try again"
+                : "Connect Play Games"}
+          </Text>
         </TouchableOpacity>
       )}
     </View>
@@ -140,178 +186,180 @@ function PlayGamesCard() {
 }
 
 function RivalCard({ row, rank }: { row: RivalRow; rank: number }) {
+  const isPodium = rank <= 3;
+
   return (
-    <View style={r.card}>
+    <View style={[rivalStyles.card, isPodium && rivalStyles.podiumCard]}>
       <RankBadge rank={rank} />
 
-      <View style={[r.dot, { backgroundColor: row.color || Colors.sky }]} />
+      <View
+        style={[
+          rivalStyles.airlineMark,
+          { backgroundColor: row.color || Colors.sky },
+        ]}
+      >
+        <Ionicons name="airplane" size={14} color={Colors.textOnColor} />
+      </View>
 
-      <View style={r.body}>
-        <View style={r.nameRow}>
-          <Text numberOfLines={1} style={r.name}>
+      <View style={rivalStyles.body}>
+        <View style={rivalStyles.nameRow}>
+          <Text numberOfLines={1} style={rivalStyles.name}>
             {row.name}
           </Text>
-
-          <View style={r.aiBadge}>
-            <Text style={r.aiText}>AI</Text>
+          <View style={rivalStyles.aiBadge}>
+            <Text style={rivalStyles.aiText}>AI RIVAL</Text>
           </View>
         </View>
 
-        <Text numberOfLines={1} style={r.meta}>
+        <Text numberOfLines={1} style={rivalStyles.meta}>
           {fmtCash(row.netWorth)} net worth · {row.demandScore} demand ·{" "}
-          {row.reputation}% reputation
+          {row.reputation}% rep
         </Text>
       </View>
 
-      <View style={r.scoreBox}>
+      <View style={rivalStyles.scoreBox}>
         <Text
           style={[
-            r.score,
-            {
-              color: rank <= 3 ? rankColor(rank) : Colors.text,
-            },
+            rivalStyles.score,
+            { color: isPodium ? rankTheme(rank).color : Colors.text },
           ]}
         >
           {shortScore(row.score)}
         </Text>
-
-        <Text style={r.scoreLabel}>score</Text>
+        <Text style={rivalStyles.scoreLabel}>LEAGUE SCORE</Text>
       </View>
     </View>
   );
 }
 
 export default function LeaderboardSheet() {
-  const closeSheet = useGameStore((s) => s.closeSheet);
-  const tabBarH = useTabBarHeight();
-
+  const closeSheet = useGameStore((state) => state.closeSheet);
+  const tabBarHeight = useTabBarHeight();
   const airline = useAirline();
   const aiAirlines = useAIAirlines();
 
   const color = airline?.color ?? Colors.sky;
 
-  const rivals = useMemo(() => {
-    return [...aiAirlines]
-      .sort((a, b) => b.score - a.score)
-      .map((ai) => ({
-        id: ai.id,
-        name: ai.name,
-        color: ai.color,
-        cash: ai.cash,
-        netWorth: ai.netWorth,
-        reputation: ai.reputation,
-        demandScore: ai.demandScore,
-        score: ai.score,
-      }));
-  }, [aiAirlines]);
+  const rivals = useMemo<RivalRow[]>(
+    () =>
+      [...aiAirlines]
+        .sort((first, second) => second.score - first.score)
+        .map((rival) => ({
+          id: rival.id,
+          name: rival.name,
+          color: rival.color,
+          netWorth: rival.netWorth,
+          reputation: rival.reputation,
+          demandScore: rival.demandScore,
+          score: rival.score,
+        })),
+    [aiAirlines],
+  );
 
   const topRival = rivals[0];
 
   return (
     <BottomSheetScrollView
-      style={s.root}
+      style={styles.root}
       contentContainerStyle={[
-        s.content,
-        {
-          paddingBottom: tabBarH + Spacing.xxl,
-        },
+        styles.content,
+        { paddingBottom: tabBarHeight + Spacing.xxl },
       ]}
       showsVerticalScrollIndicator={false}
     >
-      <View style={s.header}>
-        <View style={s.headerLeft}>
-          <Ionicons name="speedometer-outline" size={22} color={color} />
+      <View style={styles.header}>
+        <View
+          style={[
+            styles.headerMark,
+            { borderColor: color, backgroundColor: color + "14" },
+          ]}
+        >
+          <Ionicons name="podium-outline" size={21} color={color} />
+        </View>
 
-          <View>
-            <Text style={s.title}>Rival Rankings</Text>
-
-            <Text style={s.subtitle}>Compete against simulated airlines</Text>
-          </View>
+        <View style={styles.headerCopy}>
+          <Text style={styles.kicker}>COMPETITION</Text>
+          <Text style={styles.screenTitle}>Rankings</Text>
+          <Text style={styles.subtitle}>Local rivals and global players</Text>
         </View>
 
         <TouchableOpacity
+          accessibilityLabel="Close rankings"
+          accessibilityRole="button"
           onPress={closeSheet}
-          hitSlop={{
-            top: 12,
-            bottom: 12,
-            left: 12,
-            right: 12,
-          }}
+          style={styles.closeButton}
         >
-          <Ionicons name="close" size={22} color={Colors.dim} />
+          <Ionicons name="close" size={22} color={Colors.text} />
         </TouchableOpacity>
       </View>
 
       <PlayGamesCard />
 
-      <View
-        style={[
-          s.hero,
-          {
-            borderColor: color + "44",
-          },
-        ]}
-      >
+      <View style={styles.sectionHeading}>
         <View>
-          <Text style={s.heroLabel}>TOP RIVAL</Text>
-
-          <Text
-            style={[
-              s.heroValue,
-              {
-                color: topRival?.color ?? Colors.sky,
-              },
-            ]}
-          >
-            #1
-          </Text>
-
-          <Text style={s.heroSub}>
-            {rivals.length} rival
-            {rivals.length !== 1 ? "s" : ""}
+          <Text style={styles.sectionLabel}>LOCAL AI LEAGUE</Text>
+          <Text style={styles.sectionHint}>
+            Rivals grow as your game advances
           </Text>
         </View>
-
-        {topRival && (
-          <View style={s.heroRight}>
-            <Text style={s.heroRightLabel}>DOMINATING AIRLINE</Text>
-
-            <Text style={s.heroRightName} numberOfLines={1}>
-              {topRival.name}
-            </Text>
-
-            <Text style={s.heroRightScore}>
-              {shortScore(topRival.score)} score
-            </Text>
-          </View>
-        )}
+        <View style={styles.rivalCount}>
+          <Text style={styles.rivalCountValue}>{rivals.length}</Text>
+          <Text style={styles.rivalCountLabel}>RIVALS</Text>
+        </View>
       </View>
 
-      <View style={s.section}>
+      {topRival && (
+        <View style={[styles.leaderCard, { borderLeftColor: topRival.color }]}>
+          <View style={styles.leaderCrown}>
+            <Ionicons name="trophy" size={21} color={Colors.amber} />
+          </View>
+
+          <View style={styles.leaderCopy}>
+            <Text style={styles.leaderLabel}>CURRENT LEAGUE LEADER</Text>
+            <Text style={styles.leaderName} numberOfLines={1}>
+              {topRival.name}
+            </Text>
+            <Text style={styles.leaderMeta}>
+              {fmtCash(topRival.netWorth)} net worth · {topRival.reputation}%
+              reputation
+            </Text>
+          </View>
+
+          <View style={styles.leaderScoreBox}>
+            <Text style={styles.leaderScore}>{shortScore(topRival.score)}</Text>
+            <Text style={styles.leaderScoreLabel}>SCORE</Text>
+          </View>
+        </View>
+      )}
+
+      <View style={styles.rankingsSection}>
         {rivals.length === 0 ? (
-          <View style={s.empty}>
-            <Ionicons name="trophy-outline" size={40} color={Colors.dim} />
-
-            <Text style={s.emptyTitle}>No rivals yet</Text>
-
-            <Text style={s.emptySub}>Add AI airlines during game setup.</Text>
+          <View style={styles.emptyState}>
+            <View style={styles.emptyIcon}>
+              <Ionicons name="people-outline" size={24} color={Colors.sky} />
+            </View>
+            <Text style={styles.emptyTitle}>No local rivals</Text>
+            <Text style={styles.emptyText}>
+              AI airlines can be added when creating a new game.
+            </Text>
           </View>
         ) : (
-          rivals.map((row, index) => (
-            <RivalCard key={row.id} row={row} rank={index + 1} />
-          ))
+          <View style={styles.rivalList}>
+            {rivals.map((rival, index) => (
+              <RivalCard key={rival.id} row={rival} rank={index + 1} />
+            ))}
+          </View>
         )}
 
-        <View style={s.note}>
+        <View style={styles.infoNote}>
           <Ionicons
             name="information-circle-outline"
-            size={13}
+            size={15}
             color={Colors.dim}
           />
-
-          <Text style={s.noteText}>
-            Global rankings and achievements are handled through Google Play
-            Games.
+          <Text style={styles.infoText}>
+            Local league scores track simulated rivals. Real-player rankings use
+            your submitted net worth in Google Play Games.
           </Text>
         </View>
       </View>
@@ -321,302 +369,407 @@ export default function LeaderboardSheet() {
 
 const rankStyles = StyleSheet.create({
   badge: {
+    width: 42,
+    height: 32,
     flexDirection: "row",
     alignItems: "center",
-    gap: 3,
+    justifyContent: "center",
+    gap: 2,
     borderRadius: Radius.full,
-    borderWidth: 1,
-    paddingHorizontal: 7,
-    paddingVertical: 3,
   },
-
-  text: {
+  hash: {
+    color: Colors.dim,
+    fontSize: 10,
+    fontWeight: Typography.weight.bold,
+  },
+  value: {
+    fontFamily: Typography.mono,
     fontSize: 11,
-    fontWeight: "900",
+    fontWeight: Typography.weight.bold,
   },
 });
 
-const pg = StyleSheet.create({
+const playStyles = StyleSheet.create({
   card: {
     marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.md,
-    borderRadius: Radius.xl,
+    marginBottom: Spacing.xl,
+    backgroundColor: Colors.panel,
+    borderRadius: Radius.lg,
     borderWidth: 1,
     borderColor: Colors.border,
-    backgroundColor: "rgba(255,255,255,.03)",
-    padding: Spacing.md,
+    padding: Spacing.lg,
+    ...Shadow.card,
   },
-
   header: {
     flexDirection: "row",
     alignItems: "center",
-    gap: Spacing.sm,
+    gap: Spacing.md,
   },
-
   icon: {
-    width: 42,
-    height: 42,
-    borderRadius: 999,
-    backgroundColor: Colors.sky + "18",
+    width: 44,
+    height: 44,
+    borderRadius: Radius.md,
+    backgroundColor: Palette.blueSoft,
     alignItems: "center",
     justifyContent: "center",
   },
-
+  headerCopy: {
+    flex: 1,
+  },
+  eyebrow: {
+    color: Colors.skyDark,
+    fontSize: 8,
+    fontWeight: Typography.weight.bold,
+    letterSpacing: 1.2,
+  },
   title: {
-    fontSize: 14,
-    fontWeight: "900",
     color: Colors.text,
+    fontSize: 16,
+    lineHeight: 20,
+    fontWeight: Typography.weight.bold,
   },
-
   subtitle: {
-    fontSize: 11,
-    color: Colors.dim,
-    marginTop: 2,
+    color: Colors.muted,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
+    marginTop: Spacing.xxs,
   },
-
+  connectionDot: {
+    width: 10,
+    height: 10,
+    borderRadius: Radius.full,
+  },
   actions: {
     flexDirection: "row",
     gap: Spacing.sm,
     marginTop: Spacing.md,
   },
-
-  button: {
+  primaryButton: {
+    minHeight: MIN_TOUCH,
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 6,
-    borderRadius: Radius.lg,
-    backgroundColor: "rgba(255,255,255,.05)",
-    borderWidth: 1,
-    borderColor: Colors.border,
-    paddingVertical: 12,
+    gap: Spacing.sm,
+    backgroundColor: Colors.sky,
+    borderRadius: Radius.md,
+    paddingHorizontal: Spacing.sm,
   },
-
-  buttonText: {
-    fontSize: 12,
-    fontWeight: "800",
-    color: Colors.text,
+  primaryButtonText: {
+    color: Colors.textOnColor,
+    fontSize: 11,
+    fontWeight: Typography.weight.bold,
   },
-
-  signInBtn: {
+  secondaryButton: {
+    minHeight: MIN_TOUCH,
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 8,
-    marginTop: Spacing.md,
-    borderRadius: Radius.lg,
-    backgroundColor: Colors.sky + "18",
+    gap: Spacing.sm,
+    backgroundColor: Palette.blueSoft,
+    borderRadius: Radius.md,
     borderWidth: 1,
-    borderColor: Colors.sky + "44",
-    paddingVertical: 12,
+    borderColor: "rgba(23,105,170,0.20)",
+    paddingHorizontal: Spacing.sm,
   },
-
+  secondaryButtonText: {
+    color: Colors.skyDark,
+    fontSize: 11,
+    fontWeight: Typography.weight.bold,
+  },
+  signInButton: {
+    minHeight: MIN_TOUCH,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: Spacing.sm,
+    marginTop: Spacing.md,
+    backgroundColor: Colors.sky,
+    borderRadius: Radius.md,
+    paddingHorizontal: Spacing.md,
+  },
+  disabledButton: {
+    opacity: 0.6,
+  },
   signInText: {
-    fontSize: 12,
-    fontWeight: "900",
-    color: Colors.text,
+    color: Colors.textOnColor,
+    fontSize: Typography.size.label,
+    fontWeight: Typography.weight.bold,
   },
 });
 
-const r = StyleSheet.create({
+const rivalStyles = StyleSheet.create({
   card: {
     flexDirection: "row",
     alignItems: "center",
     gap: Spacing.sm,
+    backgroundColor: Colors.panel,
     borderRadius: Radius.lg,
     borderWidth: 1,
     borderColor: Colors.border,
-    backgroundColor: "rgba(255,255,255,.025)",
     padding: Spacing.md,
-    marginBottom: Spacing.sm,
   },
-
-  dot: {
-    width: 9,
-    height: 9,
-    borderRadius: 999,
+  podiumCard: {
+    backgroundColor: Palette.paper,
+    borderColor: Colors.borderSection,
   },
-
+  airlineMark: {
+    width: 34,
+    height: 34,
+    borderRadius: Radius.md,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   body: {
     flex: 1,
     minWidth: 0,
   },
-
   nameRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
+    gap: Spacing.xs,
   },
-
   name: {
     flex: 1,
-    fontSize: 13,
-    fontWeight: "900",
     color: Colors.text,
+    fontSize: 13,
+    lineHeight: 17,
+    fontWeight: Typography.weight.bold,
   },
-
-  meta: {
-    fontSize: 9,
-    color: Colors.dim,
-    marginTop: 2,
-  },
-
   aiBadge: {
-    borderRadius: Radius.sm,
-    backgroundColor: "rgba(255,255,255,.08)",
-    paddingHorizontal: 5,
-    paddingVertical: 2,
+    backgroundColor: Colors.inset,
+    borderRadius: Radius.full,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
   },
-
   aiText: {
+    color: Colors.muted,
     fontSize: 7,
-    fontWeight: "900",
-    color: Colors.dim,
+    fontWeight: Typography.weight.bold,
     letterSpacing: 0.5,
   },
-
+  meta: {
+    color: Colors.muted,
+    fontSize: 9,
+    lineHeight: 13,
+    marginTop: Spacing.xxs,
+  },
   scoreBox: {
     alignItems: "flex-end",
   },
-
   score: {
-    fontSize: 15,
-    fontWeight: "900",
+    fontFamily: Typography.mono,
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: Typography.weight.bold,
   },
-
   scoreLabel: {
-    fontSize: 8,
     color: Colors.dim,
+    fontSize: 6,
+    fontWeight: Typography.weight.bold,
+    letterSpacing: 0.5,
   },
 });
 
-const s = StyleSheet.create({
+const styles = StyleSheet.create({
   root: {
     flex: 1,
   },
-
   content: {
     paddingBottom: Spacing.xxl,
   },
-
   header: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
+    gap: Spacing.md,
     paddingHorizontal: Spacing.lg,
     paddingTop: Spacing.sm,
-    paddingBottom: Spacing.md,
+    paddingBottom: Spacing.lg,
   },
-
-  headerLeft: {
-    flexDirection: "row",
+  headerMark: {
+    width: 44,
+    height: 44,
+    borderRadius: Radius.md,
+    borderWidth: 1,
     alignItems: "center",
-    gap: Spacing.sm,
+    justifyContent: "center",
   },
-
-  title: {
-    fontSize: 20,
-    fontWeight: "900",
+  headerCopy: {
+    flex: 1,
+  },
+  kicker: {
+    color: Colors.skyDark,
+    fontSize: 9,
+    fontWeight: Typography.weight.bold,
+    letterSpacing: 1.7,
+  },
+  screenTitle: {
     color: Colors.text,
+    fontFamily: Typography.display,
+    fontSize: 29,
+    lineHeight: 31,
+    letterSpacing: 0.5,
   },
-
   subtitle: {
-    fontSize: 10,
-    color: Colors.dim,
-    marginTop: 1,
+    color: Colors.muted,
+    fontSize: Typography.size.caption,
   },
-
-  hero: {
+  closeButton: {
+    width: MIN_TOUCH,
+    height: MIN_TOUCH,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.panel,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  sectionHeading: {
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.sm,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     gap: Spacing.md,
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.md,
-    borderRadius: Radius.xl,
-    borderWidth: 1,
-    backgroundColor: "rgba(255,255,255,.035)",
-    padding: Spacing.md,
   },
-
-  heroLabel: {
-    fontSize: 8,
+  sectionLabel: {
+    color: Colors.muted,
+    fontSize: 9,
+    fontWeight: Typography.weight.bold,
+    letterSpacing: 1.7,
+  },
+  sectionHint: {
     color: Colors.dim,
-    letterSpacing: 1.8,
-    fontWeight: "900",
-  },
-
-  heroValue: {
-    fontSize: 34,
-    fontWeight: "900",
-  },
-
-  heroSub: {
     fontSize: 10,
-    color: Colors.dim,
+    marginTop: Spacing.xs,
   },
-
-  heroRight: {
-    maxWidth: "55%",
+  rivalCount: {
     alignItems: "flex-end",
   },
-
-  heroRightLabel: {
-    fontSize: 8,
+  rivalCountValue: {
+    color: Colors.skyDark,
+    fontFamily: Typography.mono,
+    fontSize: 18,
+    lineHeight: 21,
+    fontWeight: Typography.weight.bold,
+  },
+  rivalCountLabel: {
     color: Colors.dim,
-    letterSpacing: 1.4,
-    fontWeight: "900",
+    fontSize: 7,
+    fontWeight: Typography.weight.bold,
+    letterSpacing: 0.7,
   },
-
-  heroRightName: {
-    fontSize: 13,
-    fontWeight: "900",
-    color: Colors.text,
-    marginTop: 2,
-  },
-
-  heroRightScore: {
-    fontSize: 10,
-    fontWeight: "800",
-    color: Colors.green,
-    marginTop: 1,
-  },
-
-  section: {
-    paddingHorizontal: Spacing.lg,
-  },
-
-  empty: {
-    alignItems: "center",
-    paddingVertical: Spacing.xxl * 2,
-    gap: Spacing.sm,
-  },
-
-  emptyTitle: {
-    fontSize: 15,
-    fontWeight: "900",
-    color: Colors.text,
-  },
-
-  emptySub: {
-    fontSize: 11,
-    color: Colors.dim,
-    textAlign: "center",
-  },
-
-  note: {
+  leaderCard: {
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.md,
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
-    marginTop: Spacing.md,
-    opacity: 0.75,
+    gap: Spacing.md,
+    backgroundColor: Colors.panel,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderLeftWidth: 5,
+    padding: Spacing.md,
+    ...Shadow.card,
   },
-
-  noteText: {
+  leaderCrown: {
+    width: 42,
+    height: 42,
+    borderRadius: Radius.md,
+    backgroundColor: Palette.orangeSoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  leaderCopy: {
     flex: 1,
+    minWidth: 0,
+  },
+  leaderLabel: {
+    color: Colors.amber,
+    fontSize: 8,
+    fontWeight: Typography.weight.bold,
+    letterSpacing: 1,
+  },
+  leaderName: {
+    color: Colors.text,
+    fontSize: 16,
+    lineHeight: 20,
+    fontWeight: Typography.weight.bold,
+  },
+  leaderMeta: {
+    color: Colors.muted,
+    fontSize: 9,
+    lineHeight: 13,
+    marginTop: Spacing.xxs,
+  },
+  leaderScoreBox: {
+    alignItems: "flex-end",
+  },
+  leaderScore: {
+    color: Colors.amber,
+    fontFamily: Typography.mono,
+    fontSize: 17,
+    fontWeight: Typography.weight.bold,
+  },
+  leaderScoreLabel: {
+    color: Colors.dim,
+    fontSize: 7,
+    fontWeight: Typography.weight.bold,
+    letterSpacing: 0.7,
+  },
+  rankingsSection: {
+    paddingHorizontal: Spacing.lg,
+  },
+  rivalList: {
+    gap: Spacing.sm,
+  },
+  emptyState: {
+    alignItems: "center",
+    backgroundColor: Colors.panel,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderStyle: "dashed",
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.xxl,
+  },
+  emptyIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: Radius.full,
+    backgroundColor: Palette.blueSoft,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: Spacing.sm,
+  },
+  emptyTitle: {
+    color: Colors.text,
+    fontSize: 16,
+    fontWeight: Typography.weight.bold,
+  },
+  emptyText: {
+    maxWidth: 280,
+    color: Colors.muted,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
+    textAlign: "center",
+    marginTop: Spacing.xs,
+  },
+  infoNote: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: Spacing.sm,
+    marginTop: Spacing.lg,
+    paddingTop: Spacing.md,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Colors.border,
+  },
+  infoText: {
+    flex: 1,
+    color: Colors.dim,
     fontSize: 10,
     lineHeight: 15,
-    color: Colors.dim,
   },
 });

@@ -11,7 +11,6 @@
 
 import { supabase } from "@/lib/supabase";
 import { useGameStore } from "@/store";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useCallback, useEffect, useRef } from "react";
 import { AppState, type AppStateStatus } from "react-native";
 
@@ -20,8 +19,6 @@ import { AppState, type AppStateStatus } from "react-native";
 // ─────────────────────────────────────────────────────────────────
 
 const BASE_DAY_MS = 180_000; // 3 real min = 1 game day at ×1
-const BG_TIMESTAMP_KEY = "@flightcraft:bg_timestamp";
-const BG_SPEED_KEY = "@flightcraft:bg_speed";
 
 // ─────────────────────────────────────────────────────────────────
 // HOOK
@@ -30,7 +27,6 @@ const BG_SPEED_KEY = "@flightcraft:bg_speed";
 export function useGameClock() {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const appState = useRef<AppStateStatus>(AppState.currentState);
-  const hasSetup = useRef(false);
 
   const airline = useGameStore((s) => s.airline);
   const phase = useGameStore((s) => s.phase);
@@ -90,10 +86,16 @@ export function useGameClock() {
 
           if (phase === "playing" && speed > 0) {
             try {
-              const { airline, hubs, earnedAchievements, missionsCompleted } =
-                useGameStore.getState();
+              const {
+                airline,
+                hubs,
+                demands,
+                ownedPlanes,
+                earnedAchievements,
+                missionsCompleted,
+              } = useGameStore.getState();
               if (airline) {
-                await supabase
+                const { error: airlineError } = await supabase
                   .from("airlines")
                   .update({
                     cash: airline.cash,
@@ -105,6 +107,7 @@ export function useGameClock() {
                     missions_completed: missionsCompleted,
                   })
                   .eq("id", airline.id);
+                if (airlineError) throw airlineError;
 
                 const hubUpdates = hubs
                   .filter((h) => !h.id.startsWith("temp-"))
@@ -114,14 +117,55 @@ export function useGameClock() {
                       .update({ trust: Math.round(h.trust * 10) / 10 })
                       .eq("id", h.id),
                   );
-                await Promise.all(hubUpdates);
+                const hubResults = await Promise.all(hubUpdates);
+                const hubError = hubResults.find((result) => result.error)?.error;
+                if (hubError) throw hubError;
+
+                const demandResults = await Promise.all(
+                  demands
+                    .filter((demand) => !demand.id.startsWith("temp-"))
+                    .map((demand) =>
+                      supabase
+                        .from("demands")
+                        .update({
+                          delivered_pax_today:
+                            demand.delivered_pax_today ?? 0,
+                          base_pax_day: demand.base_pax_day,
+                          popularity: demand.popularity,
+                          ai_stolen_pax: demand.ai_stolen_pax ?? 0,
+                        })
+                        .eq("id", demand.id),
+                    ),
+                );
+                const demandError = demandResults.find(
+                  (result) => result.error,
+                )?.error;
+                if (demandError) throw demandError;
+
+                const planeResults = await Promise.all(
+                  ownedPlanes
+                    .filter((plane) => !plane.id.startsWith("temp-"))
+                    .map((plane) =>
+                      supabase
+                        .from("owned_planes")
+                        .update({
+                          condition: plane.condition ?? 100,
+                          days_active: plane.days_active ?? 0,
+                          route_id: plane.route_id,
+                        })
+                        .eq("id", plane.id),
+                    ),
+                );
+                const planeError = planeResults.find(
+                  (result) => result.error,
+                )?.error;
+                if (planeError) throw planeError;
               }
             } catch {}
           }
         } else if (!wasActive && nowActive) {
-          // ── Returning to foreground — just resume ────────────────
-          await AsyncStorage.multiRemove([BG_TIMESTAMP_KEY, BG_SPEED_KEY]);
-          useGameStore.getState().resetDailyPax();
+          // Resume the same in-progress day. Daily state is reset only by the
+          // actual day-end settlement; foregrounding must never erase it.
           startClock();
         }
       },

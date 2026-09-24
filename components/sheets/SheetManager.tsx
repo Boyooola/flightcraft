@@ -5,8 +5,9 @@
  * Constrained between TopHUD (topInset) and TabBar (pixel snap points).
  */
 
-import { Colors } from "@/constants/theme";
+import { Colors, Radius, Shadow } from "@/constants/theme";
 import { useAvailableSheetHeight, useHudHeight } from "@/hooks/useSheetLayout";
+import type { ActiveSheet } from "@/store";
 import { useActiveSheet, useGameStore } from "@/store";
 import type { BottomSheetBackdropProps } from "@gorhom/bottom-sheet";
 import BottomSheet, { BottomSheetBackdrop } from "@gorhom/bottom-sheet";
@@ -26,7 +27,9 @@ import PrivacyPolicySheet from "./PrivacyPolicySheet";
 import RoutesSheet from "./RoutesSheet";
 import SettingsSheet from "./SettingsSheet";
 
-const SNAP_RATIOS: Record<string, number[]> = {
+type SheetId = Exclude<ActiveSheet, null>;
+
+const SNAP_RATIOS: Record<SheetId, number[]> = {
   airport: [0.55, 1.0],
   fleet: [1.0],
   "manage-planes": [1.0],
@@ -51,8 +54,9 @@ export default function SheetManager() {
   const hudH = useHudHeight();
 
   const snapPoints = useMemo(() => {
-    const ratios = SNAP_RATIOS[activeSheet ?? ""] ?? [0.65];
-    return ratios.map((r) => Math.round(availableH * r));
+    const ratios = activeSheet ? SNAP_RATIOS[activeSheet] : [0.65];
+    const usableHeight = Math.max(240, availableH);
+    return ratios.map((ratio) => Math.round(usableHeight * ratio));
   }, [activeSheet, availableH]);
 
   useEffect(() => {
@@ -75,9 +79,11 @@ export default function SheetManager() {
     (props: BottomSheetBackdropProps) => (
       <BottomSheetBackdrop
         {...props}
+        style={[props.style, s.backdrop]}
         disappearsOnIndex={-1}
         appearsOnIndex={0}
-        opacity={0.55}
+        opacity={0.32}
+        pressBehavior="close"
         onPress={closeSheet}
       />
     ),
@@ -92,14 +98,17 @@ export default function SheetManager() {
       onChange={handleChange}
       backdropComponent={renderBackdrop}
       enablePanDownToClose
+      enableDynamicSizing={false}
+      enableBlurKeyboardOnGesture
+      keyboardBlurBehavior="restore"
+      overDragResistanceFactor={4}
       topInset={hudH}
       backgroundStyle={s.bg}
       handleIndicatorStyle={s.handle}
       handleStyle={s.handleWrap}
       style={s.sheet}
-      containerStyle={{ zIndex: 200 }}
+      containerStyle={s.container}
     >
-      {/* Close button row — always visible at top of every sheet */}
       {activeSheet === "airport" && <AirportSheet />}
       {activeSheet === "routes" && <RoutesSheet />}
       {activeSheet === "fleet" && <FleetSheet />}
@@ -118,45 +127,38 @@ export default function SheetManager() {
 }
 
 const s = StyleSheet.create({
-  sheet: {
-    // gorhom/bottom-sheet uses its own Portal — zIndex here
-    // applies within the Portal layer, above all map/HUD elements
+  container: {
     zIndex: 200,
-    elevation: 200,
+  },
+  sheet: {
+    zIndex: 200,
+    elevation: 24,
   },
   bg: {
-    backgroundColor: "#0d1526",
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    backgroundColor: Colors.surface,
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
     borderTopWidth: 1,
     borderTopColor: Colors.border,
+    shadowColor: Shadow.floating.shadowColor,
+    shadowOffset: { width: 0, height: -6 },
+    shadowOpacity: Shadow.floating.shadowOpacity,
+    shadowRadius: Shadow.floating.shadowRadius,
   },
-  handleWrap: { paddingTop: 10, paddingBottom: 0 },
-  handle: { backgroundColor: "rgba(255,255,255,.45)", width: 40, height: 5 },
-  closeRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 20,
-    paddingTop: 4,
-    paddingBottom: 10,
-    borderBottomWidth: 0.5,
-    borderBottomColor: Colors.border,
+  handleWrap: {
+    paddingTop: 10,
+    paddingBottom: 8,
+    backgroundColor: Colors.surface,
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
   },
-  sheetTitle: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: Colors.muted,
-    letterSpacing: 0.3,
+  handle: {
+    width: 38,
+    height: 4,
+    backgroundColor: Colors.borderSection,
+    borderRadius: Radius.full,
   },
-  closeBtn: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: "rgba(255,255,255,0.06)",
-    borderWidth: 0.5,
-    borderColor: Colors.border,
-    alignItems: "center",
-    justifyContent: "center",
+  backdrop: {
+    backgroundColor: Colors.text,
   },
 });
