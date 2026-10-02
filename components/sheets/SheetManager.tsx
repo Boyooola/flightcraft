@@ -1,16 +1,20 @@
 /**
- * components/sheets/SheetManager.tsx
+ * Shared gameplay bottom sheet.
  *
- * Single BottomSheet instance that swaps content based on activeSheet.
- * Constrained between TopHUD (topInset) and TabBar (pixel snap points).
+ * Context sheets preserve the map behind them. Task-focused sheets use a
+ * light backdrop so the player can concentrate without losing orientation.
  */
 
-import { Colors, Radius, Shadow } from "@/constants/theme";
+import { Colors, Radius, Spacing } from "@/constants/theme";
 import { useAvailableSheetHeight, useHudHeight } from "@/hooks/useSheetLayout";
 import type { ActiveSheet } from "@/store";
 import { useActiveSheet, useGameStore } from "@/store";
 import type { BottomSheetBackdropProps } from "@gorhom/bottom-sheet";
-import BottomSheet, { BottomSheetBackdrop } from "@gorhom/bottom-sheet";
+import BottomSheet, {
+  BottomSheetBackdrop,
+  useBottomSheetTimingConfigs,
+} from "@gorhom/bottom-sheet";
+import type { ComponentType } from "react";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { StyleSheet } from "react-native";
 import AchievementsSheet from "./AchievementsSheet";
@@ -29,44 +33,83 @@ import SettingsSheet from "./SettingsSheet";
 
 type SheetId = Exclude<ActiveSheet, null>;
 
-const SNAP_RATIOS: Record<SheetId, number[]> = {
-  airport: [0.55, 1.0],
-  fleet: [1.0],
-  "manage-planes": [1.0],
-  "assign-route": [0.75, 1.0],
-  finance: [1.0],
-  routes: [0.55, 1.0],
-  settings: [0.55],
-  leaderboard: [1.0],
-  bank: [0.75, 1.0],
-  "create-route": [0.65, 1.0],
-  achievements: [1.0],
-  missions: [0.65, 1.0],
-  "privacy-policy": [0.85],
+const SHEET_COMPONENTS: Record<SheetId, ComponentType> = {
+  airport: AirportSheet,
+  routes: RoutesSheet,
+  fleet: FleetSheet,
+  finance: FinanceSheet,
+  settings: SettingsSheet,
+  leaderboard: LeaderboardSheet,
+  bank: BankSheet,
+  "create-route": CreateRouteSheet,
+  achievements: AchievementsSheet,
+  missions: MissionsSheet,
+  "privacy-policy": PrivacyPolicySheet,
+  "manage-planes": ManagePlanesSheet,
+  "assign-route": AssignRouteSheet,
 };
+
+/**
+ * Context sheets expose the map at their first stop. Full workspaces open at
+ * full height because a partial state would only reveal clipped information.
+ */
+const SNAP_RATIOS: Record<SheetId, readonly number[]> = {
+  airport: [0.34, 0.62, 1],
+  routes: [0.44, 1],
+  fleet: [1],
+  finance: [1],
+  settings: [0.52],
+  leaderboard: [1],
+  bank: [0.72, 1],
+  "create-route": [0.62, 1],
+  achievements: [1],
+  missions: [0.58, 1],
+  "privacy-policy": [0.88],
+  "manage-planes": [1],
+  "assign-route": [0.72, 1],
+};
+
+const FOCUSED_SHEETS = new Set<SheetId>([
+  "settings",
+  "leaderboard",
+  "bank",
+  "create-route",
+  "achievements",
+  "missions",
+  "privacy-policy",
+  "manage-planes",
+  "assign-route",
+]);
 
 export default function SheetManager() {
   const sheetRef = useRef<BottomSheet>(null);
   const activeSheet = useActiveSheet();
-  const closeSheet = useGameStore((s) => s.closeSheet);
+  const closeSheet = useGameStore((state) => state.closeSheet);
+  const availableHeight = useAvailableSheetHeight();
+  const hudHeight = useHudHeight();
+  const animationConfigs = useBottomSheetTimingConfigs({ duration: 190 });
 
-  const availableH = useAvailableSheetHeight();
-  const hudH = useHudHeight();
+  const ActiveSheetContent = activeSheet ? SHEET_COMPONENTS[activeSheet] : null;
+  const useBackdrop = activeSheet ? FOCUSED_SHEETS.has(activeSheet) : false;
 
   const snapPoints = useMemo(() => {
-    const ratios = activeSheet ? SNAP_RATIOS[activeSheet] : [0.65];
-    const usableHeight = Math.max(240, availableH);
+    const ratios = activeSheet ? SNAP_RATIOS[activeSheet] : [0.58];
+    const usableHeight = Math.max(240, availableHeight);
+
     return ratios.map((ratio) => Math.round(usableHeight * ratio));
-  }, [activeSheet, availableH]);
+  }, [activeSheet, availableHeight]);
 
   useEffect(() => {
-    if (activeSheet) {
-      const t = setTimeout(() => sheetRef.current?.snapToIndex(0), 30);
-      return () => clearTimeout(t);
-    } else {
-      sheetRef.current?.close();
-    }
-  }, [activeSheet]);
+    const frame = requestAnimationFrame(() => {
+      if (activeSheet) {
+        sheetRef.current?.snapToIndex(0, animationConfigs);
+      } else {
+        sheetRef.current?.close(animationConfigs);
+      }
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [activeSheet, animationConfigs]);
 
   const handleChange = useCallback(
     (index: number) => {
@@ -79,12 +122,12 @@ export default function SheetManager() {
     (props: BottomSheetBackdropProps) => (
       <BottomSheetBackdrop
         {...props}
-        style={[props.style, s.backdrop]}
         disappearsOnIndex={-1}
         appearsOnIndex={0}
-        opacity={0.32}
+        opacity={0.18}
         pressBehavior="close"
         onPress={closeSheet}
+        style={[props.style, styles.backdrop]}
       />
     ),
     [closeSheet],
@@ -95,68 +138,52 @@ export default function SheetManager() {
       ref={sheetRef}
       index={-1}
       snapPoints={snapPoints}
+      animationConfigs={animationConfigs}
       onChange={handleChange}
-      backdropComponent={renderBackdrop}
+      backdropComponent={useBackdrop ? renderBackdrop : undefined}
       enablePanDownToClose
+      enableOverDrag={false}
       enableDynamicSizing={false}
       enableBlurKeyboardOnGesture
       keyboardBlurBehavior="restore"
-      overDragResistanceFactor={4}
-      topInset={hudH}
-      backgroundStyle={s.bg}
-      handleIndicatorStyle={s.handle}
-      handleStyle={s.handleWrap}
-      style={s.sheet}
-      containerStyle={s.container}
+      topInset={hudHeight}
+      backgroundStyle={styles.background}
+      handleIndicatorStyle={styles.handle}
+      handleStyle={styles.handleArea}
+      style={styles.sheet}
+      containerStyle={styles.container}
     >
-      {activeSheet === "airport" && <AirportSheet />}
-      {activeSheet === "routes" && <RoutesSheet />}
-      {activeSheet === "fleet" && <FleetSheet />}
-      {activeSheet === "finance" && <FinanceSheet />}
-      {activeSheet === "settings" && <SettingsSheet />}
-      {activeSheet === "leaderboard" && <LeaderboardSheet />}
-      {activeSheet === "bank" && <BankSheet />}
-      {activeSheet === "create-route" && <CreateRouteSheet />}
-      {activeSheet === "achievements" && <AchievementsSheet />}
-      {activeSheet === "missions" && <MissionsSheet />}
-      {activeSheet === "privacy-policy" && <PrivacyPolicySheet />}
-      {activeSheet === "manage-planes" && <ManagePlanesSheet />}
-      {activeSheet === "assign-route" && <AssignRouteSheet />}
+      {ActiveSheetContent ? <ActiveSheetContent /> : null}
     </BottomSheet>
   );
 }
 
-const s = StyleSheet.create({
+const styles = StyleSheet.create({
   container: {
     zIndex: 200,
   },
   sheet: {
     zIndex: 200,
-    elevation: 24,
   },
-  bg: {
+  background: {
     backgroundColor: Colors.surface,
-    borderTopLeftRadius: Radius.xl,
-    borderTopRightRadius: Radius.xl,
+    borderTopLeftRadius: Radius.lg,
+    borderTopRightRadius: Radius.lg,
     borderTopWidth: 1,
-    borderTopColor: Colors.border,
-    shadowColor: Shadow.floating.shadowColor,
-    shadowOffset: { width: 0, height: -6 },
-    shadowOpacity: Shadow.floating.shadowOpacity,
-    shadowRadius: Shadow.floating.shadowRadius,
+    borderTopColor: Colors.borderSection,
   },
-  handleWrap: {
-    paddingTop: 10,
-    paddingBottom: 8,
+  handleArea: {
+    paddingTop: Spacing.sm,
+    paddingBottom: Spacing.xs,
     backgroundColor: Colors.surface,
-    borderTopLeftRadius: Radius.xl,
-    borderTopRightRadius: Radius.xl,
+    borderTopLeftRadius: Radius.lg,
+    borderTopRightRadius: Radius.lg,
   },
   handle: {
-    width: 38,
-    height: 4,
+    width: 32,
+    height: 3,
     backgroundColor: Colors.borderSection,
-    borderRadius: Radius.full,
+    borderRadius: Radius.sm,
   },
   backdrop: {
     backgroundColor: Colors.text,

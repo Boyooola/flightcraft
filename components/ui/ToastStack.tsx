@@ -1,13 +1,11 @@
 /**
- * Compact in-game notifications shown one at a time above the bottom bar.
+ * One restrained operational notice at a time above the bottom navigation.
  */
 
 import {
   Colors,
   MIN_TOUCH,
-  Palette,
   Radius,
-  Shadow,
   Spacing,
   Typography,
 } from "@/constants/theme";
@@ -35,13 +33,14 @@ import {
   View,
 } from "react-native";
 
-const HOLD_MS = 3400;
-const SLIDE_MS = 180;
+const HOLD_MS = 4_200;
+const FADE_MS = 120;
+
+type IconName = keyof typeof Ionicons.glyphMap;
 
 interface ToastPresentation {
   color: string;
-  surface: string;
-  icon: string;
+  icon: IconName;
   label: string;
   title: string;
   detail: string | null;
@@ -52,12 +51,11 @@ function presentation(toast: ToastData): ToastPresentation {
     case "achievement": {
       const achievement = toast as AchievementToastData;
       return {
-        color: Colors.purple,
-        surface: Palette.violetSoft,
-        icon: achievement.icon ?? "star-outline",
-        label: "ACHIEVEMENT UNLOCKED",
+        color: Colors.skyDark,
+        icon: (achievement.icon as IconName) ?? "star-outline",
+        label: "Achievement unlocked",
         title: achievement.title,
-        detail: `+${achievement.points} pts · ${achievement.flavor}`,
+        detail: `${achievement.points} points · ${achievement.flavor}`,
       };
     }
 
@@ -65,23 +63,21 @@ function presentation(toast: ToastData): ToastPresentation {
       const mission = toast as MissionToastData;
       return {
         color: Colors.green,
-        surface: Palette.greenSoft,
-        icon: mission.icon ?? "checkmark-circle-outline",
-        label: "MISSION CLEARED",
+        icon: (mission.icon as IconName) ?? "checkmark-circle-outline",
+        label: "Mission complete",
         title: mission.title,
-        detail: `+${fmtCash(mission.reward)} reward`,
+        detail: `${fmtCash(mission.reward)} reward paid`,
       };
     }
 
     case "unlock": {
       const unlock = toast as UnlockToastData;
       return {
-        color: Colors.amber,
-        surface: Palette.orangeSoft,
+        color: Colors.skyDark,
         icon: "airplane-outline",
-        label: "AIRCRAFT UNLOCKED",
+        label: "Aircraft available",
         title: unlock.nickname,
-        detail: `${unlock.family} · From ${fmtCash(unlock.price)}`,
+        detail: `${unlock.family} · Price from ${fmtCash(unlock.price)}`,
       };
     }
 
@@ -90,9 +86,8 @@ function presentation(toast: ToastData): ToastPresentation {
       const critical = warning.level === "critical";
       return {
         color: critical ? Colors.red : Colors.amber,
-        surface: critical ? Palette.redSoft : Palette.orangeSoft,
         icon: critical ? "warning" : "warning-outline",
-        label: critical ? "CRITICAL WARNING" : "OPERATIONS NOTICE",
+        label: critical ? "Critical warning" : "Operations notice",
         title: warning.message,
         detail: `Available cash: ${fmtCash(warning.cash)}`,
       };
@@ -104,22 +99,21 @@ function presentation(toast: ToastData): ToastPresentation {
       const details: string[] = [];
 
       if (summary.paxToday > 0) {
-        details.push(`${summary.paxToday.toLocaleString()} pax`);
+        details.push(`${summary.paxToday.toLocaleString()} passengers`);
       }
       if (summary.aiStolenPax) {
-        details.push(`${summary.aiStolenPax.toLocaleString()} lost to rivals`);
+        details.push(`${summary.aiStolenPax.toLocaleString()} chose rivals`);
       }
       if (summary.crisisHubs) {
         details.push(
-          `${summary.crisisHubs} crisis hub${summary.crisisHubs === 1 ? "" : "s"}`,
+          `${summary.crisisHubs} crisis ${summary.crisisHubs === 1 ? "hub" : "hubs"}`,
         );
       }
 
       return {
         color: positive ? Colors.green : Colors.red,
-        surface: positive ? Palette.greenSoft : Palette.redSoft,
         icon: positive ? "trending-up-outline" : "trending-down-outline",
-        label: `DAY ${summary.day} COMPLETE`,
+        label: `Day ${summary.day} complete`,
         title: `${positive ? "+" : ""}${fmtCash(summary.net)} net`,
         detail: details.join(" · ") || null,
       };
@@ -129,8 +123,8 @@ function presentation(toast: ToastData): ToastPresentation {
       const revenue = toast as RevenueToastData;
       const positive = revenue.net >= 0;
       const details = [
-        `${revenue.routes} route${revenue.routes === 1 ? "" : "s"}`,
-        `${revenue.paxToday.toLocaleString()} pax`,
+        `${revenue.routes} ${revenue.routes === 1 ? "route" : "routes"}`,
+        `${revenue.paxToday.toLocaleString()} passengers`,
       ];
 
       if (revenue.interest > 0) {
@@ -139,9 +133,8 @@ function presentation(toast: ToastData): ToastPresentation {
 
       return {
         color: positive ? Colors.green : Colors.red,
-        surface: positive ? Palette.greenSoft : Palette.redSoft,
         icon: positive ? "cash-outline" : "trending-down-outline",
-        label: `DAY ${revenue.day} REVENUE`,
+        label: `Day ${revenue.day} result`,
         title: `${positive ? "+" : ""}${fmtCash(revenue.net)} net`,
         detail: details.join(" · "),
       };
@@ -149,7 +142,7 @@ function presentation(toast: ToastData): ToastPresentation {
   }
 }
 
-function opensDetail(toast: ToastData) {
+function opensDetail(toast: ToastData): boolean {
   return toast.type === "achievement" || toast.type === "mission";
 }
 
@@ -161,12 +154,8 @@ interface ToastItemProps {
 }
 
 function ToastItem({ toast, queuedCount, onDismiss, onPress }: ToastItemProps) {
-  const translateY = useRef(new Animated.Value(42)).current;
   const opacity = useRef(new Animated.Value(0)).current;
-  const scale = useRef(new Animated.Value(0.98)).current;
-  const progress = useRef(new Animated.Value(1)).current;
-  const holdAnimation = useRef<Animated.CompositeAnimation | null>(null);
-  const enterAnimation = useRef<Animated.CompositeAnimation | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
   const dismissingRef = useRef(false);
 
@@ -176,160 +165,90 @@ function ToastItem({ toast, queuedCount, onDismiss, onPress }: ToastItemProps) {
   const dismiss = useCallback(() => {
     if (!mountedRef.current || dismissingRef.current) return;
     dismissingRef.current = true;
-    holdAnimation.current?.stop();
 
-    Animated.parallel([
-      Animated.timing(translateY, {
-        toValue: 36,
-        duration: SLIDE_MS,
-        useNativeDriver: true,
-      }),
-      Animated.timing(opacity, {
-        toValue: 0,
-        duration: SLIDE_MS,
-        useNativeDriver: true,
-      }),
-      Animated.timing(scale, {
-        toValue: 0.98,
-        duration: SLIDE_MS,
-        useNativeDriver: true,
-      }),
-    ]).start(({ finished }) => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+
+    Animated.timing(opacity, {
+      toValue: 0,
+      duration: FADE_MS,
+      useNativeDriver: true,
+    }).start(({ finished }) => {
       if (finished && mountedRef.current) onDismiss(toast.id);
     });
-  }, [onDismiss, opacity, scale, toast.id, translateY]);
+  }, [onDismiss, opacity, toast.id]);
 
   useEffect(() => {
+    mountedRef.current = true;
+
     if (toast.type === "achievement") gameSounds.play("achievement");
     if (toast.type === "mission") gameSounds.play("missionComplete");
 
-    enterAnimation.current = Animated.parallel([
-      Animated.spring(translateY, {
-        toValue: 0,
-        friction: 8,
-        tension: 90,
-        useNativeDriver: true,
-      }),
-      Animated.spring(scale, {
-        toValue: 1,
-        friction: 8,
-        tension: 100,
-        useNativeDriver: true,
-      }),
-      Animated.timing(opacity, {
-        toValue: 1,
-        duration: SLIDE_MS,
-        useNativeDriver: true,
-      }),
-    ]);
-    enterAnimation.current.start();
+    Animated.timing(opacity, {
+      toValue: 1,
+      duration: FADE_MS,
+      useNativeDriver: true,
+    }).start();
 
-    holdAnimation.current = Animated.timing(progress, {
-      toValue: 0,
-      duration: HOLD_MS,
-      useNativeDriver: false,
-    });
-    holdAnimation.current.start(({ finished }) => {
-      if (finished) dismiss();
-    });
+    timerRef.current = setTimeout(dismiss, HOLD_MS);
 
     return () => {
       mountedRef.current = false;
-      enterAnimation.current?.stop();
-      holdAnimation.current?.stop();
+      if (timerRef.current) clearTimeout(timerRef.current);
+      opacity.stopAnimation();
     };
-  }, [dismiss, opacity, progress, scale, toast.type, translateY]);
+  }, [dismiss, opacity, toast.type]);
 
   const handlePress = () => {
-    onPress(toast);
+    if (canOpen) onPress(toast);
     dismiss();
   };
 
+  const queueLabel =
+    queuedCount > 0
+      ? ` · ${queuedCount} more ${queuedCount === 1 ? "notice" : "notices"}`
+      : "";
+
   return (
-    <Animated.View
-      style={[
-        styles.toastContainer,
-        {
-          opacity,
-          transform: [{ translateY }, { scale }],
-        },
-      ]}
-    >
+    <Animated.View style={[styles.noticeContainer, { opacity }]}>
       <TouchableOpacity
-        accessibilityLabel={`${appearance.label}: ${appearance.title}`}
         accessibilityHint={
-          canOpen ? "Opens more details" : "Dismisses notification"
+          canOpen ? "Opens the related record" : "Dismisses this notice"
         }
+        accessibilityLabel={`${appearance.label}: ${appearance.title}${queueLabel}`}
         accessibilityRole="button"
-        style={[styles.card, { borderLeftColor: appearance.color }]}
+        activeOpacity={0.78}
         onPress={handlePress}
-        activeOpacity={0.88}
+        style={styles.notice}
       >
-        <View style={[styles.icon, { backgroundColor: appearance.surface }]}>
-          <Ionicons
-            name={appearance.icon as any}
-            size={19}
-            color={appearance.color}
-          />
+        <View style={styles.iconArea}>
+          <Ionicons name={appearance.icon} size={21} color={appearance.color} />
         </View>
 
         <View style={styles.body}>
-          <View style={styles.labelRow}>
-            <Text style={[styles.label, { color: appearance.color }]}>
-              {appearance.label}
-            </Text>
-            {queuedCount > 0 && (
-              <View style={styles.queueBadge}>
-                <Text style={styles.queueText}>+{queuedCount}</Text>
-              </View>
-            )}
-          </View>
-
-          <Text style={styles.title} numberOfLines={1}>
+          <Text style={[styles.label, { color: appearance.color }]}>
+            {appearance.label}
+            {queueLabel}
+          </Text>
+          <Text numberOfLines={1} style={styles.title}>
             {appearance.title}
           </Text>
-          {appearance.detail && (
-            <Text style={styles.detail} numberOfLines={1}>
+          {appearance.detail ? (
+            <Text numberOfLines={1} style={styles.detail}>
               {appearance.detail}
             </Text>
-          )}
+          ) : null}
         </View>
 
-        {canOpen ? (
-          <Ionicons name="chevron-forward" size={17} color={appearance.color} />
-        ) : (
-          <TouchableOpacity
-            accessibilityLabel="Dismiss notification"
-            accessibilityRole="button"
-            hitSlop={8}
-            style={styles.closeButton}
-            onPress={(event) => {
-              event.stopPropagation();
-              dismiss();
-            }}
-          >
-            <Ionicons name="close" size={16} color={Colors.muted} />
-          </TouchableOpacity>
-        )}
-
-        <Animated.View
-          style={[
-            styles.progressTrack,
-            {
-              width: progress.interpolate({
-                inputRange: [0, 1],
-                outputRange: ["0%", "100%"],
-              }),
-            },
-          ]}
-        >
-          <View
-            style={[
-              StyleSheet.absoluteFillObject,
-              { backgroundColor: appearance.color },
-            ]}
+        <View style={styles.trailingControl}>
+          <Ionicons
+            name={canOpen ? "chevron-forward" : "close"}
+            size={18}
+            color={Colors.muted}
           />
-        </Animated.View>
+        </View>
       </TouchableOpacity>
     </Animated.View>
   );
@@ -342,7 +261,7 @@ export default function ToastStack() {
   const { queue, dismiss } = useToastListener();
 
   const toast = queue[0];
-  const bottom = tabBarHeight + Spacing.xxxl * 2;
+  const bottom = tabBarHeight + Spacing.md;
 
   const handlePress = useCallback(
     (pressedToast: ToastData) => {
@@ -355,7 +274,7 @@ export default function ToastStack() {
   if (activeSheet || !toast) return null;
 
   return (
-    <View style={[styles.stack, { bottom }]} pointerEvents="box-none">
+    <View pointerEvents="box-none" style={[styles.stack, { bottom }]}>
       <ToastItem
         key={toast.id}
         toast={toast}
@@ -370,94 +289,63 @@ export default function ToastStack() {
 const styles = StyleSheet.create({
   stack: {
     position: "absolute",
-    left: 0,
     right: 0,
+    left: 0,
     zIndex: 60,
     alignItems: "center",
-    paddingHorizontal: Spacing.lg,
+    paddingHorizontal: Spacing.md,
   },
-  toastContainer: {
+  noticeContainer: {
     width: "100%",
     maxWidth: 520,
   },
-  card: {
+  notice: {
     minHeight: 76,
     flexDirection: "row",
     alignItems: "center",
     gap: Spacing.sm,
-    backgroundColor: Colors.panel,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderLeftWidth: 5,
     paddingLeft: Spacing.md,
-    paddingRight: Spacing.sm,
+    paddingRight: Spacing.xs,
     paddingVertical: Spacing.sm,
     overflow: "hidden",
-    ...Shadow.floating,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.borderSection,
+    borderRadius: Radius.sm,
   },
-  icon: {
-    width: 40,
-    height: 40,
-    borderRadius: Radius.md,
+  iconArea: {
+    width: 32,
+    minHeight: MIN_TOUCH,
+    flexShrink: 0,
     alignItems: "center",
     justifyContent: "center",
-    flexShrink: 0,
   },
   body: {
     flex: 1,
     minWidth: 0,
   },
-  labelRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.xs,
-  },
   label: {
-    flexShrink: 1,
-    fontSize: 8,
-    lineHeight: 11,
-    fontWeight: Typography.weight.bold,
-    letterSpacing: 0.9,
-  },
-  queueBadge: {
-    backgroundColor: Colors.inset,
-    borderRadius: Radius.full,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-  },
-  queueText: {
-    color: Colors.muted,
-    fontFamily: Typography.mono,
-    fontSize: 7,
-    fontWeight: Typography.weight.bold,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
+    fontWeight: Typography.weight.semibold,
   },
   title: {
-    color: Colors.text,
-    fontSize: 14,
-    lineHeight: 18,
-    fontWeight: Typography.weight.bold,
     marginTop: Spacing.xxs,
+    color: Colors.text,
+    fontSize: Typography.size.body,
+    lineHeight: Typography.lineHeight.body,
+    fontWeight: Typography.weight.bold,
   },
   detail: {
     color: Colors.muted,
-    fontSize: 10,
-    lineHeight: 14,
-    marginTop: Spacing.xxs,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
   },
-  closeButton: {
+  trailingControl: {
     width: MIN_TOUCH,
     height: MIN_TOUCH,
-    borderRadius: Radius.full,
+    flexShrink: 0,
     alignItems: "center",
     justifyContent: "center",
-    flexShrink: 0,
-  },
-  progressTrack: {
-    position: "absolute",
-    left: 0,
-    bottom: 0,
-    height: 3,
-    overflow: "hidden",
   },
 });

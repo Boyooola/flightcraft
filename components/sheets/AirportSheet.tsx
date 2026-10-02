@@ -1,8 +1,16 @@
+/**
+ * Airport and hub operations.
+ *
+ * An unopened airport presents one clear decision: build a hub. An owned hub
+ * presents operating status, route opportunities, expansion, and disposal.
+ * Locked actions always explain their blocker when pressed.
+ */
+
+import { AirlineBrandMark } from "@/components/airline-identity";
 import { GameAlert, useGameAlert } from "@/components/ui/GameAlert";
 import {
   Colors,
   MIN_TOUCH,
-  Palette,
   Radius,
   Shadow,
   Spacing,
@@ -18,31 +26,23 @@ import {
   useUpdateHubNickname,
   useUpgradeHub,
 } from "@/hooks/useSupabaseWrite";
-import { buildAIRoutes } from "@/lib/AIAirline";
+import { aiServesCorridor, type AIAirline } from "@/lib/AIAirline";
 import {
   CASH_RESERVE_AFTER_BUY,
   HUB_TIER_CONFIG,
-  generateDemands,
-  hubCrowdingLevel,
   hubPurchaseCost,
-  maxRoutesForTier,
   presenceThreshold,
+  refillDemandSlots,
 } from "@/lib/demands";
-import { congestionPenaltyPct } from "@/lib/hubCongestion";
-import { waitingPaxForDemand } from "@/lib/passengerFlow";
-import { fmtCash } from "@/lib/revenue";
-import { getSeasonForRoute } from "@/lib/seasons";
-import type { Airport, Demand, OwnedHub, Route } from "@/store";
+import { dailyFlights, fmtCash } from "@/lib/revenue";
+import type { Airport, Demand, OwnedPlane, Route } from "@/store";
 import {
   useAIAirlines,
-  useAirline,
   useAirportPresence,
   useCash,
-  useDayProgress,
   useGameStore,
   useHubs,
   useOwnedPlanes,
-  useRouteEarnings,
   useRoutes,
   useSelectedAirport,
 } from "@/store";
@@ -59,1114 +59,722 @@ import {
 } from "react-native";
 import CountryFlag from "react-native-country-flag";
 
-// ─────────────────────────────────────────────────────────────────
-// CONSTANTS
-// ─────────────────────────────────────────────────────────────────
+const AIRPORT_COVER_RED = "#B43A35";
+const AIRPORT_COVER_LIGHT = "#FFF4EF";
 
-const CROWDING_CFG = {
-  busy: {
-    color: Colors.amber,
-    bg: Palette.orangeSoft,
-    border: Colors.amber,
-    icon: "alert-circle-outline" as const,
-    label: "Getting Busy",
-    note: "Trust growth slowed",
-  },
-  overcrowded: {
-    color: Colors.orange,
-    bg: Palette.orangeSoft,
-    border: Colors.orange,
-    icon: "warning-outline" as const,
-    label: "Overcrowded",
-    note: "Trust −1/day · Revenue −10%",
-  },
-  crisis: {
-    color: Colors.red,
-    bg: Palette.redSoft,
-    border: Colors.red,
-    icon: "skull-outline" as const,
-    label: "Capacity Crisis",
-    note: "Trust −3/day · Revenue −20%",
-  },
-} as const;
+function passengerCount(value: number | null | undefined): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.floor(value))
+    : 0;
+}
 
-// ─────────────────────────────────────────────────────────────────
-// PREVIEW DEMANDS (unowned airports)
-// ─────────────────────────────────────────────────────────────────
+function playerPassengerPool(demand: Demand): number {
+  const market = passengerCount(demand.base_pax_day);
+  const carried = passengerCount(demand.delivered_pax_today);
+  const rivalCarried = passengerCount(demand.ai_stolen_pax);
 
-function usePreviewDemands(airport: Airport | null, allAirports: Airport[]) {
+  // This is the live pool still available to the player, not a claim that
+  // every passenger has already chosen the airline.
+  return Math.max(carried, market - rivalCarried);
+}
+
+function scheduledDailySeats(route: Route): number {
+  const distance = Math.max(1, route.total_dist_nm ?? route.demand.dist_nm);
+  const cycles = dailyFlights(
+    distance,
+    Math.max(1, route.plane.plane_model.speed_kts),
+  );
+
+  return passengerCount(route.plane.plane_model.pax_capacity) * cycles;
+}
+
+function usePreviewDemands(
+  airport: Airport | null,
+  airports: Airport[],
+  ownedPlanes: OwnedPlane[],
+  gameDay: number,
+): Demand[] {
   return useMemo(() => {
     if (!airport) return [];
-    return generateDemands(
-      airport,
-      allAirports,
-      maxRoutesForTier(1),
-      [],
-      0,
-      true,
-    );
-  }, [airport, allAirports]);
+
+    return refillDemandSlots(airport, airports, [], {
+      hubLevel: 1,
+      gameDay,
+      ownedPlanes,
+    }).map((demand, index) => ({
+      ...demand,
+      id: `preview:${airport.iata}:${demand.dest.iata}:${index}`,
+      airline_id: "preview",
+    }));
+  }, [airport, airports, gameDay, ownedPlanes]);
 }
 
-// ─────────────────────────────────────────────────────────────────
-// TRUST BAR
-// ─────────────────────────────────────────────────────────────────
-
-function TrustBar({ trust, floor }: { trust: number; floor: number }) {
-  const pct = Math.round(trust);
-  const trustColor =
-    pct >= 70 ? Colors.green : pct >= 45 ? Colors.amber : Colors.red;
-
+function SectionHeader({ title, detail }: { title: string; detail?: string }) {
   return (
-    <View style={tb.wrap}>
-      <View style={tb.labelRow}>
-        <Text style={tb.label}>TRUST</Text>
-        <Text style={[tb.value, { color: trustColor }]}>{pct}%</Text>
-      </View>
-      <View style={tb.track}>
-        <View
-          style={[tb.fill, { width: `${pct}%`, backgroundColor: trustColor }]}
-        />
-        {floor > 0 && <View style={[tb.floorMark, { left: `${floor}%` }]} />}
-      </View>
-      <View style={tb.floorRow}>
-        {floor > 0 && <Text style={tb.floorLabel}>Floor {floor}%</Text>}
-        <Text style={[tb.floorLabel, { marginLeft: "auto" }]}>100%</Text>
-      </View>
+    <View style={styles.sectionHeader}>
+      <Text style={styles.sectionTitle}>{title}</Text>
+      {detail ? <Text style={styles.sectionDetail}>{detail}</Text> : null}
     </View>
   );
 }
 
-const tb = StyleSheet.create({
-  wrap: { gap: 4 },
-  labelRow: { flexDirection: "row", justifyContent: "space-between" },
-  label: {
-    fontFamily: Typography.mono,
-    fontSize: 8,
-    color: Colors.muted,
-    fontWeight: "700",
-    letterSpacing: 1.5,
-  },
-  value: { fontFamily: Typography.mono, fontSize: 10, fontWeight: "700" },
-  track: {
-    height: 6,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.inset,
-    overflow: "visible",
-    position: "relative",
-  },
-  fill: { height: "100%", borderRadius: Radius.full },
-  floorMark: {
-    position: "absolute",
-    top: -2,
-    width: 1.5,
-    height: 10,
-    backgroundColor: Colors.muted,
-    opacity: 0.6,
-  },
-  floorRow: { flexDirection: "row" },
-  floorLabel: { fontSize: 8, color: Colors.muted, fontWeight: "700" },
-});
-
-// ─────────────────────────────────────────────────────────────────
-// CONGESTION BANNER — compact, max 2 suggestions, no unbounded growth
-// ─────────────────────────────────────────────────────────────────
-
-function CongestionBanner({
-  crowding,
-  hubDemands,
-  routes,
-  ownedPlanes,
-  onCreateRoute,
+function DataRow({
+  label,
+  value,
+  valueColor = Colors.text,
 }: {
-  crowding: NonNullable<ReturnType<typeof hubCrowdingLevel>>;
-  hubDemands: Demand[];
-  routes: Route[];
-  ownedPlanes: ReturnType<typeof useOwnedPlanes>;
-  onCreateRoute: (d: Demand) => void;
+  label: string;
+  value: string;
+  valueColor?: string;
 }) {
-  if (crowding.level === "normal") return null;
-  const cfg = CROWDING_CFG[crowding.level];
-  if (!cfg) return null;
-
-  // Build max 2 suggestions
-  const idlePlanes = ownedPlanes.filter((p) => !p.route_id);
-  const unserved = hubDemands.filter(
-    (d) => !routes.some((r) => r.active && r.demand.id === d.id),
+  return (
+    <View style={styles.dataRow}>
+      <Text style={styles.dataLabel}>{label}</Text>
+      <Text numberOfLines={2} style={[styles.dataValue, { color: valueColor }]}>
+        {value}
+      </Text>
+    </View>
   );
-  const undersized = hubDemands
-    .filter((d) => routes.some((r) => r.active && r.demand.id === d.id))
-    .map((d) => {
-      const cap = routes
-        .filter((r) => r.active && r.demand.id === d.id)
-        .reduce((sum, r) => sum + r.plane.plane_model.pax_capacity, 0);
-      return { demand: d, gap: d.base_pax_day - cap };
-    })
-    .filter((x) => x.gap > 30);
+}
 
-  const suggestions: {
-    icon: string;
-    text: string;
-    cta?: string;
-    demand?: Demand;
-  }[] = [];
+interface AirportRivalPresence {
+  airline: AIAirline;
+  ownsHub: boolean;
+  serviceCount: number;
+}
 
-  if (unserved.length > 0 && idlePlanes.length > 0) {
-    const d = unserved[0];
-    suggestions.push({
-      icon: "airplane-outline",
-      text: `${idlePlanes.length} idle plane${idlePlanes.length > 1 ? "s" : ""} — assign to ${d.dest.iata}`,
-      cta: "Assign",
-      demand: d,
-    });
-  } else if (unserved.length > 0) {
-    suggestions.push({
-      icon: "cart-outline",
-      text: `${unserved.length} route${unserved.length > 1 ? "s" : ""} unserved — buy a plane`,
-    });
-  }
+function RivalPresenceList({ rivals }: { rivals: AirportRivalPresence[] }) {
+  if (rivals.length === 0) return null;
 
-  if (undersized.length > 0 && suggestions.length < 2) {
-    const worst = undersized.sort((a, b) => b.gap - a.gap)[0];
-    suggestions.push({
-      icon: "people-outline",
-      text: `${worst.demand.dest.iata} needs ${worst.gap} more seats/day`,
-      cta: idlePlanes.length > 0 ? "Add plane" : undefined,
-      demand: idlePlanes.length > 0 ? worst.demand : undefined,
-    });
-  }
+  return (
+    <View style={styles.rivalPresenceList}>
+      {rivals.map(({ airline, ownsHub, serviceCount }) => (
+        <View
+          accessibilityLabel={`${airline.name}, ${airline.code}. ${ownsHub ? "Operates a hub here. " : ""}${serviceCount} active ${serviceCount === 1 ? "service" : "services"}.`}
+          key={airline.id}
+          style={styles.rivalPresenceRow}
+        >
+          <AirlineBrandMark
+            accessibilityLabel=""
+            logoId={airline.logoId}
+            primary={airline.color}
+            secondary={airline.secondaryColor}
+            size={30}
+            variant="leaderboard"
+          />
+          <View style={styles.rivalPresenceCopy}>
+            <Text numberOfLines={1} style={styles.rivalPresenceName}>
+              {airline.name}
+            </Text>
+            <Text numberOfLines={1} style={styles.rivalPresenceMeta}>
+              {airline.code}
+              {ownsHub ? " · Hub" : ""} · {serviceCount}{" "}
+              {serviceCount === 1 ? "service" : "services"}
+            </Text>
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+}
 
-  const penaltyPct = congestionPenaltyPct(crowding.level);
+function RequirementRow({
+  met,
+  label,
+  value,
+}: {
+  met: boolean;
+  label: string;
+  value: string;
+}) {
+  return (
+    <View style={styles.requirementRow}>
+      <Ionicons
+        name={met ? "checkmark-circle" : "ellipse-outline"}
+        size={17}
+        color={met ? Colors.green : Colors.muted}
+      />
+      <Text style={styles.requirementLabel}>{label}</Text>
+      <Text
+        style={[
+          styles.requirementValue,
+          { color: met ? Colors.green : Colors.muted },
+        ]}
+      >
+        {value}
+      </Text>
+    </View>
+  );
+}
 
+function InlineNotice({
+  message,
+  level = "info",
+}: {
+  message: string;
+  level?: "info" | "warning" | "error";
+}) {
+  const color =
+    level === "error"
+      ? Colors.red
+      : level === "warning"
+        ? Colors.amber
+        : Colors.sky;
   return (
     <View
-      style={[
-        cb.wrap,
-        {
-          backgroundColor: cfg.bg,
-          borderColor: cfg.border,
-          borderLeftColor: cfg.color,
-        },
-      ]}
+      accessibilityRole={level === "error" ? "alert" : undefined}
+      style={styles.notice}
     >
-      {/* Top row: icon + title + capacity */}
-      <View style={cb.topRow}>
-        <Ionicons name={cfg.icon} size={15} color={cfg.color} />
-        <Text style={[cb.title, { color: cfg.color }]}>{cfg.label}</Text>
-        <Text style={cb.cap}>{crowding.capacityPct}% capacity</Text>
-      </View>
-
-      {/* Penalties as chips — compact, no multi-line block */}
-      <View style={cb.chips}>
-        {cfg.note.split(" · ").map((chip) => (
-          <View
-            key={chip}
-            style={[cb.chip, { backgroundColor: cfg.color + "18" }]}
-          >
-            <Text style={[cb.chipTxt, { color: cfg.color }]}>{chip}</Text>
-          </View>
-        ))}
-        {penaltyPct > 0 && (
-          <View style={[cb.chip, { backgroundColor: cfg.color + "18" }]}>
-            <Text style={[cb.chipTxt, { color: cfg.color }]}>
-              Efficiency −{penaltyPct}%
-            </Text>
-          </View>
-        )}
-      </View>
-
-      {/* Waiting pax */}
-      <Text style={cb.waiting}>
-        {crowding.waitingPax.toLocaleString()} passengers waiting for more
-        routes
-      </Text>
-
-      {/* Suggestions — capped at 2, compact */}
-      {suggestions.length > 0 && (
-        <View style={cb.suggestions}>
-          <Text style={cb.sugHeading}>WHAT TO DO</Text>
-          {suggestions.map((sug, i) => (
-            <View key={i} style={cb.sugRow}>
-              <View style={[cb.sugIcon, { backgroundColor: cfg.color + "18" }]}>
-                <Ionicons name={sug.icon as any} size={11} color={cfg.color} />
-              </View>
-              <Text style={cb.sugText} numberOfLines={2}>
-                {sug.text}
-              </Text>
-              {sug.cta && sug.demand && (
-                <TouchableOpacity
-                  accessibilityLabel={`${sug.cta} for ${sug.demand.dest.iata}`}
-                  accessibilityRole="button"
-                  style={[cb.sugCta, { borderColor: cfg.color + "55" }]}
-                  onPress={() => onCreateRoute(sug.demand!)}
-                  activeOpacity={0.8}
-                >
-                  <Text style={[cb.sugCtaTxt, { color: cfg.color }]}>
-                    {sug.cta}
-                  </Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          ))}
-        </View>
-      )}
+      <Ionicons
+        name={
+          level === "info" ? "information-circle-outline" : "warning-outline"
+        }
+        size={17}
+        color={color}
+      />
+      <Text style={styles.noticeText}>{message}</Text>
     </View>
   );
 }
 
-const cb = StyleSheet.create({
-  wrap: {
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.md,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderLeftWidth: 3,
-    padding: Spacing.md,
-    gap: 7,
-    ...Shadow.card,
-  },
-  topRow: { flexDirection: "row", alignItems: "center", gap: 6 },
-  title: { fontSize: 13, fontWeight: "700", flex: 1 },
-  cap: {
-    fontFamily: Typography.mono,
-    fontSize: 9,
-    color: Colors.muted,
-    fontWeight: "700",
-  },
-  chips: { flexDirection: "row", flexWrap: "wrap", gap: 5 },
-  chip: { paddingHorizontal: 7, paddingVertical: 3, borderRadius: Radius.full },
-  chipTxt: { fontFamily: Typography.mono, fontSize: 8, fontWeight: "700" },
-  waiting: { fontSize: 11, color: Colors.muted, lineHeight: 15 },
-  suggestions: { gap: 5, marginTop: 2 },
-  sugHeading: {
-    fontSize: 8,
-    fontFamily: Typography.mono,
-    fontWeight: "700",
-    color: Colors.muted,
-    letterSpacing: 1.5,
-  },
-  sugRow: { flexDirection: "row", alignItems: "center", gap: 7 },
-  sugIcon: {
-    width: 22,
-    height: 22,
-    borderRadius: 5,
-    alignItems: "center",
-    justifyContent: "center",
-    flexShrink: 0,
-  },
-  sugText: { flex: 1, fontSize: 10, color: Colors.muted, lineHeight: 14 },
-  sugCta: {
-    minHeight: 34,
-    borderWidth: 1,
-    borderRadius: Radius.md,
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    flexShrink: 0,
-  },
-  sugCtaTxt: { fontSize: 9, fontWeight: "700" },
-});
+function CoverMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.coverMetric}>
+      <Text numberOfLines={1} style={styles.coverMetricValue}>
+        {value}
+      </Text>
+      <Text numberOfLines={1} style={styles.coverMetricLabel}>
+        {label}
+      </Text>
+    </View>
+  );
+}
 
-// ─────────────────────────────────────────────────────────────────
-// DEPARTURE ROW
-// ─────────────────────────────────────────────────────────────────
+function AirportCover({
+  airport,
+  isOwned,
+  tier,
+  trust,
+  activeMarkets,
+  routeLimit,
+  scheduledSeats,
+  opportunities,
+  previewDailyMarket,
+  cost,
+  onClose,
+}: {
+  airport: Airport;
+  isOwned: boolean;
+  tier: number;
+  trust: number;
+  activeMarkets: number;
+  routeLimit: number;
+  scheduledSeats: number;
+  opportunities: number;
+  previewDailyMarket: number;
+  cost: number;
+  onClose: () => void;
+}) {
+  return (
+    <View style={styles.coverBlock}>
+      <View
+        accessible
+        accessibilityLabel={`${airport.city || airport.name} airport cover artwork`}
+        accessibilityRole="image"
+        style={styles.coverArtwork}
+      >
+        <View style={styles.coverGridVerticalOne} />
+        <View style={styles.coverGridVerticalTwo} />
+        <View style={styles.coverGridHorizontalOne} />
+        <View style={styles.coverGridHorizontalTwo} />
 
-function DepartureRow({
+        <Ionicons
+          name="globe-outline"
+          size={142}
+          color="rgba(255,244,239,0.18)"
+          style={styles.coverGlobe}
+        />
+        <View style={styles.flightPath} />
+        <View style={styles.flightPathDotStart} />
+        <View style={styles.flightPathDotEnd} />
+        <Ionicons
+          name="airplane"
+          size={54}
+          color={AIRPORT_COVER_LIGHT}
+          style={styles.coverPlane}
+        />
+
+        <View style={styles.coverTopline}>
+          <View style={styles.coverCountry}>
+            <CountryFlag isoCode={airport.country} size={18} />
+            <Text style={styles.coverCountryText} numberOfLines={1}>
+              {airport.city || airport.country}
+            </Text>
+          </View>
+          <TouchableOpacity
+            accessibilityLabel="Close airport details"
+            accessibilityRole="button"
+            style={styles.coverCloseButton}
+            onPress={onClose}
+            activeOpacity={0.78}
+          >
+            <Ionicons name="close" size={22} color={Colors.textOnColor} />
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.coverCaption}>
+          <View style={styles.coverStatusLine}>
+            <Ionicons
+              name={isOwned ? "business" : "location"}
+              size={13}
+              color={AIRPORT_COVER_LIGHT}
+            />
+            <Text style={styles.coverCaptionLabel}>
+              {isOwned ? `Owned hub · Tier ${tier}` : "Available airport"}
+            </Text>
+          </View>
+          <Text style={styles.airportCode}>{airport.iata}</Text>
+          <Text numberOfLines={1} style={styles.airportName}>
+            {airport.name}
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.coverMetrics}>
+        {isOwned ? (
+          <>
+            <CoverMetric label="Trust" value={`${trust}%`} />
+            <View style={styles.coverMetricDivider} />
+            <CoverMetric
+              label="Active routes"
+              value={`${activeMarkets} / ${routeLimit}`}
+            />
+            <View style={styles.coverMetricDivider} />
+            <CoverMetric
+              label="Seats today"
+              value={scheduledSeats.toLocaleString()}
+            />
+          </>
+        ) : (
+          <>
+            <CoverMetric
+              label="Daily market"
+              value={previewDailyMarket.toLocaleString()}
+            />
+            <View style={styles.coverMetricDivider} />
+            <CoverMetric label="Routes" value={`${opportunities}`} />
+            <View style={styles.coverMetricDivider} />
+            <CoverMetric label="Hub cost" value={fmtCash(cost)} />
+          </>
+        )}
+      </View>
+    </View>
+  );
+}
+
+function RouteOpportunityRow({
   demand,
-  routes,
-  hub,
-  color,
-  dayProgress,
-  onCreateRoute,
-  maxPlaneRange,
-  day,
-  routeEarnings,
+  activeRoutes,
+  owned,
+  idlePlanes,
+  rivals,
+  onOpenRoute,
+  onViewFleet,
+  onManageRoutes,
 }: {
   demand: Demand;
-  routes: Route[];
-  hub: OwnedHub | undefined;
-  color: string;
-  dayProgress: number;
-  onCreateRoute: (d: Demand) => void;
-  maxPlaneRange: number;
-  day: number;
-  routeEarnings: Record<string, number>;
+  activeRoutes: Route[];
+  owned: boolean;
+  idlePlanes: OwnedPlane[];
+  rivals: AIAirline[];
+  onOpenRoute: (demand: Demand) => void;
+  onViewFleet: () => void;
+  onManageRoutes: () => void;
 }) {
-  const activeRoutes = routes.filter(
-    (r) => r.active && r.demand.id === demand.id,
+  const isActive = activeRoutes.length > 0;
+  const capableIdlePlanes = idlePlanes.filter(
+    (plane) => plane.plane_model.range_nm >= demand.dist_nm,
   );
-  const isServed = activeRoutes.length > 0;
-  const firstRoute = activeRoutes[0] ?? null;
-  const noPlaneInRange = !isServed && demand.dist_nm > maxPlaneRange;
-
-  const paxToday = demand.delivered_pax_today ?? 0;
-  const waitingPax = waitingPaxForDemand(demand, dayProgress);
-  const fillPct =
-    demand.base_pax_day > 0
-      ? Math.min(100, Math.round((paxToday / demand.base_pax_day) * 100))
-      : 0;
-
-  const barColor =
-    fillPct >= 80 ? Colors.green : fillPct > 0 ? Colors.amber : Colors.red;
-
-  const revenue = activeRoutes.reduce(
-    (sum, r) => sum + (routeEarnings[r.id] ?? 0),
+  const market = passengerCount(demand.base_pax_day);
+  const carried = passengerCount(demand.delivered_pax_today);
+  const playerPool = playerPassengerPool(demand);
+  const waiting = Math.max(0, playerPool - carried);
+  const scheduledSeats = activeRoutes.reduce(
+    (total, route) => total + scheduledDailySeats(route),
     0,
   );
-
-  const planeLabel =
-    activeRoutes.length > 1
-      ? `${activeRoutes.length} aircraft`
-      : firstRoute?.plane.plane_model.nickname;
-
-  const season = getSeasonForRoute(
-    day,
-    demand.dest?.country,
-    demand.dest?.continent,
-  );
-
-  // Urgency: overloaded first, then active, then unserved ready, then out of range
-  const isOverloaded = isServed && waitingPax > 100;
-
-  return (
-    <View style={[dep.row, isOverloaded && dep.rowUrgent]}>
-      <View
-        style={[
-          dep.stripe,
-          { backgroundColor: isServed ? color : Colors.red + "88" },
-        ]}
-      />
-      <View style={dep.body}>
-        {/* Line 1: destination + pax or status */}
-        <View style={dep.top}>
-          <View style={dep.dest}>
-            <CountryFlag isoCode={demand.dest.country} size={17} />
-            <View style={{ flex: 1, minWidth: 0 }}>
-              <View
-                style={{ flexDirection: "row", alignItems: "center", gap: 4 }}
-              >
-                <Text style={dep.iata}>{demand.dest.iata}</Text>
-                {season && (
-                  <View
-                    style={[
-                      dep.seasonBadge,
-                      { backgroundColor: season.color + "18" },
-                    ]}
-                  >
-                    <Ionicons
-                      name={season.icon as any}
-                      size={8}
-                      color={season.color}
-                    />
-                    <Text style={[dep.seasonTxt, { color: season.color }]}>
-                      {season.pctLabel}
-                    </Text>
-                  </View>
-                )}
-                {/* Overloaded pill inline — eye catches it immediately */}
-                {isOverloaded && (
-                  <View style={dep.overloadedPill}>
-                    <Text style={dep.overloadedTxt}>OVERLOADED</Text>
-                  </View>
-                )}
-              </View>
-              <Text style={dep.city} numberOfLines={1}>
-                {demand.dest.city || demand.dest.name}
-              </Text>
-            </View>
-          </View>
-
-          <View style={dep.right}>
-            {isServed ? (
-              <>
-                <Text
-                  style={[
-                    dep.pax,
-                    { color: paxToday > 0 ? Colors.green : Colors.dim },
-                  ]}
-                >
-                  {paxToday.toLocaleString()}
-                </Text>
-                <Text style={dep.small}>
-                  /{demand.base_pax_day.toLocaleString()} pax
-                </Text>
-              </>
-            ) : (
-              <>
-                {(() => {
-                  const ceiling = demand.pax_ceiling ?? demand.base_pax_day;
-                  const ratio = ceiling > 0 ? demand.base_pax_day / ceiling : 1;
-                  const label = !hub
-                    ? "~" + demand.base_pax_day.toLocaleString()
-                    : ratio >= 0.7
-                      ? "READY"
-                      : ratio >= 0.3
-                        ? "LOSING INTEREST"
-                        : "ALMOST GONE";
-                  const labelColor = !hub
-                    ? Colors.dim
-                    : ratio >= 0.7
-                      ? Colors.amber
-                      : ratio >= 0.3
-                        ? Colors.orange
-                        : Colors.red;
-                  return (
-                    <>
-                      <Text style={[dep.waiting, { color: labelColor }]}>
-                        {label}
-                      </Text>
-                      <Text style={dep.small}>
-                        {hub
-                          ? `${demand.base_pax_day.toLocaleString()} · ${ceiling.toLocaleString()} potential`
-                          : "pax/day"}
-                      </Text>
-                    </>
-                  );
-                })()}
-              </>
-            )}
-          </View>
-        </View>
-
-        {/* Line 2: progress bar + revenue */}
-        {isServed && (
-          <View style={dep.progressRow}>
-            <View style={dep.track}>
-              <View
-                style={[
-                  dep.fill,
-                  { width: `${fillPct}%`, backgroundColor: barColor },
-                ]}
-              />
-            </View>
-            <Text style={[dep.percent, { color: barColor }]}>{fillPct}%</Text>
-            <Text
-              style={[
-                dep.revenue,
-                {
-                  color:
-                    revenue === 0
-                      ? Colors.dim
-                      : revenue > 0
-                        ? Colors.green
-                        : Colors.red,
-                },
-              ]}
-            >
-              {revenue === 0 ? "—" : fmtCash(revenue)}
-            </Text>
-          </View>
-        )}
-
-        {/* Line 3: meta or action */}
-        {isServed ? (
-          <Text style={dep.meta} numberOfLines={1}>
-            {planeLabel}
-            {firstRoute?.via_iata ? ` via ${firstRoute.via_iata}` : ""}
-            {waitingPax > 0 ? ` · ${waitingPax.toLocaleString()} waiting` : ""}
-          </Text>
-        ) : hub ? (
-          <View style={dep.actionRow}>
-            <TouchableOpacity
-              accessibilityLabel={
-                noPlaneInRange
-                  ? `${demand.dest.iata} is out of aircraft range`
-                  : `Create route to ${demand.dest.iata}`
-              }
-              accessibilityRole="button"
-              style={[dep.createBtn, noPlaneInRange && dep.createBtnDisabled]}
-              onPress={() => onCreateRoute(demand)}
-              activeOpacity={0.84}
-              disabled={noPlaneInRange}
-            >
-              <Ionicons
-                name="git-branch-outline"
-                size={12}
-                color={noPlaneInRange ? Colors.muted : Colors.textOnColor}
-              />
-              <Text
-                style={[dep.createTxt, noPlaneInRange && dep.createTxtDisabled]}
-              >
-                {noPlaneInRange ? "Out of range" : "Create Route"}
-              </Text>
-            </TouchableOpacity>
-            {noPlaneInRange && (
-              <Text style={dep.rangeHint} numberOfLines={1}>
-                Try a stop · {demand.dist_nm.toLocaleString()}nm
-              </Text>
-            )}
-          </View>
-        ) : null}
-      </View>
-    </View>
-  );
-}
-
-const dep = StyleSheet.create({
-  row: {
-    flexDirection: "row",
-    overflow: "hidden",
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.sm,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: Radius.lg,
-    backgroundColor: Colors.panel,
-    ...Shadow.card,
-  },
-  // Overloaded rows get a very subtle tint so they stand out in the list
-  rowUrgent: { backgroundColor: Palette.redSoft },
-  stripe: { width: 3, alignSelf: "stretch" },
-  body: {
-    flex: 1,
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.md,
-    gap: 7,
-  },
-  top: { flexDirection: "row", alignItems: "flex-start", gap: Spacing.sm },
-  dest: {
-    flex: 1,
-    minWidth: 0,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 7,
-  },
-  iata: {
-    fontFamily: Typography.mono,
-    fontSize: 15,
-    color: Colors.skyDark,
-    fontWeight: "700",
-    letterSpacing: 0.5,
-  },
-  city: { fontSize: 10, color: Colors.muted, marginTop: 1 },
-  right: { alignItems: "flex-end", minWidth: 76 },
-  pax: { fontFamily: Typography.mono, fontSize: 14, fontWeight: "700" },
-  small: { fontSize: 9, color: Colors.muted, marginTop: 1 },
-  waiting: {
-    fontSize: 9,
-    color: Colors.red,
-    fontFamily: Typography.mono,
-    fontWeight: "700",
-    letterSpacing: 0.8,
-  },
-  overloadedPill: {
-    backgroundColor: Palette.redSoft,
-    borderRadius: 3,
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-  },
-  overloadedTxt: {
-    fontSize: 7,
-    color: Colors.red,
-    fontWeight: "700",
-    letterSpacing: 1,
-  },
-  progressRow: { flexDirection: "row", alignItems: "center", gap: 7 },
-  track: {
-    flex: 1,
-    height: 4,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.inset,
-    overflow: "hidden",
-  },
-  fill: { height: "100%", borderRadius: Radius.full },
-  percent: {
-    minWidth: 32,
-    textAlign: "right",
-    fontSize: 10,
-    fontFamily: Typography.mono,
-    fontWeight: "700",
-  },
-  revenue: {
-    minWidth: 58,
-    textAlign: "right",
-    fontSize: 10,
-    color: Colors.green,
-    fontFamily: Typography.mono,
-    fontWeight: "700",
-  },
-  seasonBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 2,
-    borderRadius: 4,
-    paddingHorizontal: 4,
-    paddingVertical: 1,
-  },
-  seasonTxt: { fontFamily: Typography.mono, fontSize: 8, fontWeight: "700" },
-  meta: { fontSize: 10, color: Colors.muted, fontWeight: "700" },
-  actionRow: { flexDirection: "row", alignItems: "center", gap: Spacing.sm },
-  createBtn: {
-    minHeight: MIN_TOUCH,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: Radius.md,
-    backgroundColor: Colors.sky,
-  },
-  createBtnDisabled: { backgroundColor: Colors.inset },
-  createTxt: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: Colors.textOnColor,
-  },
-  createTxtDisabled: { color: Colors.muted },
-  rangeHint: { flex: 1, fontSize: 9, color: Colors.purple, fontWeight: "700" },
-});
-
-// ─────────────────────────────────────────────────────────────────
-// ARRIVALS SUMMARY
-// ─────────────────────────────────────────────────────────────────
-
-function ArrivalsSummary({
-  playerArrivals,
-  connectingRoutes,
-  aiArrivals,
-  demands,
-  color,
-}: {
-  playerArrivals: Route[];
-  connectingRoutes: Route[];
-  aiArrivals: {
-    iata: string;
-    city: string;
-    country: string;
-    airlineName: string;
-    aiColor: string;
-  }[];
-  demands: Demand[];
-  color: string;
-}) {
-  const playerGrouped = useMemo(() => {
-    const map = new Map<
-      string,
-      { iata: string; city: string; country: string; paxToday: number }
-    >();
-    playerArrivals.forEach((route) => {
-      const demand =
-        demands.find((d) => d.id === route.demand.id) ?? route.demand;
-      const key = demand.origin.iata;
-      const fullPax = demand.delivered_pax_today ?? 0;
-
-      // For connecting routes, some passengers already got off at the via stop.
-      // Only count the through-passengers who actually arrive at this airport.
-      // via_pax_ratio is the fraction that deboard at the stopover, so the
-      // remainder (1 - via_pax_ratio) continues to the final destination.
-      const paxToday =
-        route.via_iata && (route.via_pax_ratio ?? 0) > 0
-          ? Math.round(fullPax * (1 - route.via_pax_ratio!))
-          : fullPax;
-
-      if (paxToday <= 0) return;
-
-      if (map.has(key)) {
-        map.get(key)!.paxToday += paxToday;
-      } else {
-        map.set(key, {
-          iata: demand.origin.iata,
-          city: demand.origin.city,
-          country: demand.origin.country,
-          paxToday,
-        });
-      }
-    });
-    return Array.from(map.values()).sort((a, b) => b.paxToday - a.paxToday);
-  }, [playerArrivals, demands]);
-
-  const connectingGrouped = useMemo(() => {
-    const map = new Map<
-      string,
-      { iata: string; city: string; country: string; dropoffPax: number }
-    >();
-    connectingRoutes.forEach((route) => {
-      const demand =
-        demands.find((d) => d.id === route.demand.id) ?? route.demand;
-      const paxToday = demand.delivered_pax_today ?? 0;
-      const dropoff = Math.round(paxToday * (route.via_pax_ratio ?? 0));
-      if (dropoff <= 0) return;
-      const key = demand.origin.iata;
-      if (map.has(key)) {
-        map.get(key)!.dropoffPax += dropoff;
-      } else {
-        map.set(key, {
-          iata: demand.origin.iata,
-          city: demand.origin.city,
-          country: demand.origin.country,
-          dropoffPax: dropoff,
-        });
-      }
-    });
-    return Array.from(map.values()).sort((a, b) => b.dropoffPax - a.dropoffPax);
-  }, [connectingRoutes, demands]);
-
-  // Total pax arrived today for section header badge
-  const totalArrived =
-    playerGrouped.reduce((s, g) => s + g.paxToday, 0) +
-    connectingGrouped.reduce((s, g) => s + g.dropoffPax, 0);
-
-  const hasAny =
-    playerGrouped.length > 0 ||
-    connectingGrouped.length > 0 ||
-    aiArrivals.length > 0;
-
-  if (!hasAny) {
-    return (
-      <View style={arr.empty}>
-        <Ionicons
-          name="airplane-outline"
-          size={22}
-          color={Colors.dim}
-          style={{ marginBottom: 6 }}
-        />
-        <Text style={arr.emptyTxt}>No flights arriving here yet</Text>
-        <Text style={arr.emptySub}>
-          Arrivals appear once inbound routes are active
-        </Text>
-      </View>
-    );
+  const capacityGap = Math.max(0, playerPool - scheduledSeats);
+  let readiness = "Hub required";
+  let readinessColor: string = Colors.muted;
+  if (owned && isActive) {
+    readiness =
+      capacityGap > 0
+        ? `${capacityGap.toLocaleString()} seats short`
+        : `${scheduledSeats.toLocaleString()} daily seats`;
+    readinessColor = capacityGap > 0 ? Colors.amber : Colors.green;
+  } else if (owned && capableIdlePlanes.length > 0) {
+    readiness = `${capableIdlePlanes.length} aircraft ready`;
+    readinessColor = Colors.green;
+  } else if (owned && idlePlanes.length > 0) {
+    readiness = "Stopover required";
+    readinessColor = Colors.amber;
+  } else if (owned) {
+    readiness = "Aircraft required";
+    readinessColor = Colors.amber;
   }
 
   return (
-    <>
-      {/* Arrived-today total — gives the section meaning */}
-      {totalArrived > 0 && (
-        <View style={arr.totalRow}>
-          <Text style={arr.totalTxt}>
-            {totalArrived.toLocaleString()} pax arrived today
-          </Text>
-        </View>
-      )}
-
-      {playerGrouped.map((g) => (
-        <View key={`player-${g.iata}`} style={arr.row}>
-          <View style={[arr.dot, { backgroundColor: color }]} />
-          <View style={arr.info}>
-            <CountryFlag isoCode={g.country} size={13} />
-            <Text style={arr.origin} numberOfLines={1}>
-              {g.iata} · {g.city}
+    <View style={styles.routeRow}>
+      <View style={styles.routeHeading}>
+        <CountryFlag isoCode={demand.dest.country} size={16} />
+        <View style={styles.routeIdentity}>
+          <View style={styles.routeCodeLine}>
+            <Text style={styles.routeCode}>{demand.dest.iata}</Text>
+            <Text style={styles.routeDistance}>
+              {Math.round(demand.dist_nm).toLocaleString()} nm
             </Text>
           </View>
-          <Text style={arr.pax}>{g.paxToday.toLocaleString()} arrived</Text>
-        </View>
-      ))}
-
-      {connectingGrouped.map((g) => (
-        <View key={`via-${g.iata}`} style={arr.row}>
-          <View style={[arr.dot, { backgroundColor: color, opacity: 0.5 }]} />
-          <View style={arr.info}>
-            <CountryFlag isoCode={g.country} size={13} />
-            <Text style={arr.origin} numberOfLines={1}>
-              {g.iata} · {g.city}
-            </Text>
-            <View style={arr.badge}>
-              <Text style={arr.badgeTxt}>stopover</Text>
-            </View>
-          </View>
-          <Text style={arr.pax}>
-            {g.dropoffPax.toLocaleString()} dropped off
+          <Text style={styles.routeCity} numberOfLines={1}>
+            {demand.dest.city || demand.dest.name}
           </Text>
         </View>
-      ))}
+      </View>
 
-      {aiArrivals.map((g) => (
-        <View key={`ai-${g.iata}-${g.airlineName}`} style={arr.row}>
+      <View style={styles.routeData}>
+        <View style={styles.routeMetric}>
+          <Text style={styles.routeMetricValue}>{market.toLocaleString()}</Text>
+          <Text style={styles.routeMetricLabel}>Daily market</Text>
+        </View>
+        <View style={styles.metricDivider} />
+        <View style={styles.routeMetric}>
+          <Text style={[styles.routeMetricValue, { color: readinessColor }]}>
+            {readiness}
+          </Text>
+          <Text style={styles.routeMetricLabel}>Readiness</Text>
+        </View>
+      </View>
+
+      <View style={styles.routeContext}>
+        {rivals.length === 0 ? (
+          <Text style={styles.routeContextText}>No rival service</Text>
+        ) : (
           <View
-            style={[arr.dot, { backgroundColor: g.aiColor, opacity: 0.6 }]}
-          />
-          <View style={arr.info}>
-            <CountryFlag isoCode={g.country} size={13} />
-            <Text style={arr.origin} numberOfLines={1}>
-              {g.iata} · {g.city}
-            </Text>
-            <View style={[arr.badge, { backgroundColor: g.aiColor + "18" }]}>
-              <Text style={[arr.badgeTxt, { color: g.aiColor }]}>
-                {g.airlineName}
-              </Text>
-            </View>
+            accessibilityLabel={`Rival service by ${rivals.map((rival) => rival.name).join(", ")}`}
+            style={styles.routeRivals}
+          >
+            <Text style={styles.routeContextText}>Rival service</Text>
+            {rivals.slice(0, 2).map((rival) => (
+              <View key={rival.id} style={styles.routeRivalIdentity}>
+                <AirlineBrandMark
+                  accessibilityLabel=""
+                  logoId={rival.logoId}
+                  primary={rival.color}
+                  secondary={rival.secondaryColor}
+                  size={22}
+                  variant="leaderboard"
+                />
+                <Text style={styles.routeRivalCode}>{rival.code}</Text>
+              </View>
+            ))}
+            {rivals.length > 2 ? (
+              <Text style={styles.routeContextText}>+{rivals.length - 2}</Text>
+            ) : null}
           </View>
-          <Text style={[arr.pax, { color: Colors.dim }]}>rival</Text>
-        </View>
-      ))}
-    </>
+        )}
+        {isActive ? (
+          <Text style={styles.routeContextText}>
+            {carried.toLocaleString()} carried · {waiting.toLocaleString()}{" "}
+            waiting
+          </Text>
+        ) : null}
+      </View>
+
+      {owned ? (
+        <TouchableOpacity
+          accessibilityRole="button"
+          style={isActive ? styles.secondaryAction : styles.primaryAction}
+          onPress={
+            isActive
+              ? onManageRoutes
+              : idlePlanes.length > 0
+                ? () => onOpenRoute(demand)
+                : onViewFleet
+          }
+          activeOpacity={0.7}
+        >
+          <Text
+            style={
+              isActive ? styles.secondaryActionText : styles.primaryActionText
+            }
+          >
+            {isActive
+              ? "Manage route"
+              : idlePlanes.length === 0
+                ? "View fleet"
+                : capableIdlePlanes.length > 0
+                  ? "Open route"
+                  : "Plan with a stop"}
+          </Text>
+          <Ionicons
+            name="chevron-forward"
+            size={16}
+            color={isActive ? Colors.skyDark : Colors.textOnColor}
+          />
+        </TouchableOpacity>
+      ) : null}
+    </View>
   );
 }
-
-const arr = StyleSheet.create({
-  row: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.sm,
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.xs ?? 4,
-    paddingVertical: Spacing.sm,
-    paddingHorizontal: Spacing.md,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.panel,
-    ...Shadow.card,
-  },
-  dot: { width: 6, height: 6, borderRadius: 3, flexShrink: 0 },
-  info: {
-    flex: 1,
-    minWidth: 0,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    flexWrap: "wrap",
-  },
-  origin: { fontSize: 12, color: Colors.text, fontWeight: "600" },
-  pax: { fontSize: 11, color: Colors.muted, fontWeight: "600", flexShrink: 0 },
-  badge: {
-    backgroundColor: Colors.inset,
-    borderRadius: 4,
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-  },
-  badgeTxt: {
-    fontSize: 8,
-    color: Colors.muted,
-    fontWeight: "700",
-    letterSpacing: 0.5,
-  },
-  totalRow: {
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.xs ?? 4,
-    paddingVertical: Spacing.xs ?? 4,
-  },
-  totalTxt: { fontSize: 11, color: Colors.muted, fontWeight: "700" },
-  empty: { padding: Spacing.xl, alignItems: "center", gap: 2 },
-  emptyTxt: { fontSize: 13, color: Colors.muted, fontWeight: "700" },
-  emptySub: {
-    fontSize: 11,
-    color: Colors.muted,
-    opacity: 0.6,
-    marginTop: 3,
-    textAlign: "center",
-  },
-});
-
-// ─────────────────────────────────────────────────────────────────
-// MAIN COMPONENT
-// ─────────────────────────────────────────────────────────────────
 
 export default function AirportSheet() {
   const airport = useSelectedAirport();
+  const airports = useGameStore((state) => state.airports);
+  const demands = useGameStore((state) => state.demands);
+  const day = useGameStore((state) => state.airline?.day ?? 1);
+  const closeSheet = useGameStore((state) => state.closeSheet);
+  const openSheet = useGameStore((state) => state.openSheet);
   const hubs = useHubs();
-  const demands = useGameStore((s) => s.demands);
   const routes = useRoutes();
-  const dayProgress = useDayProgress();
-  const airline = useAirline();
   const cash = useCash();
-  const airports = useGameStore((s) => s.airports);
-  const closeSheet = useGameStore((s) => s.closeSheet);
-  const day = useGameStore((s) => s.airline?.day ?? 1);
   const ownedPlanes = useOwnedPlanes();
   const aiAirlines = useAIAirlines();
-  const routeEarnings = useRouteEarnings();
-
-  const tabBarH = useTabBarHeight();
+  const passengerPresence = useAirportPresence(airport?.iata);
+  const tabBarHeight = useTabBarHeight();
   const haptics = useHaptics();
   const sounds = useGameSounds();
+  const gameAlert = useGameAlert();
   const buyHub = useBuyHub();
   const sellHub = useSellHub();
   const upgradeHub = useUpgradeHub();
   const updateHubNickname = useUpdateHubNickname();
-  const gameAlert = useGameAlert();
 
   const [buying, setBuying] = useState(false);
-  const [buyError, setBuyError] = useState<string | null>(null);
   const [selling, setSelling] = useState(false);
   const [upgrading, setUpgrading] = useState(false);
-  const [upgradeError, setUpgradeError] = useState<string | null>(null);
+  const [operationError, setOperationError] = useState<string | null>(null);
   const [editingNickname, setEditingNickname] = useState(false);
   const [nicknameInput, setNicknameInput] = useState("");
 
-  const previewDemands = usePreviewDemands(airport, airports);
-  const paxDelivered = useAirportPresence(airport?.iata);
-  const color = airline?.color ?? Colors.sky;
-
+  const previewDemands = usePreviewDemands(airport, airports, ownedPlanes, day);
   const hub = airport
-    ? hubs.find((h) => h.airport.iata === airport.iata)
+    ? hubs.find((item) => item.airport.iata === airport.iata)
     : undefined;
-  const isOwned = !!hub;
-
+  const isOwned = Boolean(hub);
   const hubDemands = useMemo(
-    () => (airport ? demands.filter((d) => d.hub_iata === airport.iata) : []),
+    () =>
+      airport
+        ? demands.filter((demand) => demand.hub_iata === airport.iata)
+        : [],
     [airport, demands],
   );
-
-  const maxPlaneRange =
-    ownedPlanes.length > 0
-      ? ownedPlanes.reduce((max, p) => Math.max(max, p.plane_model.range_nm), 0)
-      : 0;
-
-  const crowding = isOwned
-    ? hubCrowdingLevel(airport!.iata, demands, airport!)
-    : null;
-
-  const outboundWaiting = isOwned
-    ? hubDemands.reduce(
-        (sum, d) => sum + waitingPaxForDemand(d, dayProgress),
-        0,
-      )
-    : 0;
-
-  // Sort departures: overloaded first → active → unserved → out of range
-  const departures = useMemo(() => {
-    const base = isOwned ? hubDemands : (previewDemands as Demand[]);
-    const withRoutes = base.map((demand, index) => ({
-      demand,
-      routes: routes.filter((r) => r.active && r.demand.id === demand.id),
-      key: demand.id ?? `preview-${index}`,
-    }));
-    return withRoutes.sort((a, b) => {
-      const urgency = (item: typeof a) => {
-        const served = item.routes.length > 0;
-        if (!served) return item.demand.dist_nm > maxPlaneRange ? 3 : 2;
-        const waiting = waitingPaxForDemand(item.demand, dayProgress);
-        return waiting > 100 ? 0 : 1;
-      };
-      return urgency(a) - urgency(b);
-    });
-  }, [isOwned, hubDemands, previewDemands, routes, dayProgress, maxPlaneRange]);
-
-  // Used-slots count for stat row
-  const usedSlots = hubDemands.filter((d) =>
-    routes.some((r) => r.active && r.demand.id === d.id),
-  ).length;
-  const totalSlots =
-    (hub?.tier != null ? HUB_TIER_CONFIG[hub.tier]?.routes : undefined) ?? "?";
-
-  const playerArrivals = useMemo(
+  const activeHubRoutes = useMemo(
     () =>
-      routes.filter(
-        (r) =>
-          r.active &&
-          r.demand.dest.iata === airport?.iata &&
-          r.hub_iata !== airport?.iata,
-      ),
-    [routes, airport?.iata],
+      airport
+        ? routes.filter(
+            (route) => route.active && route.hub_iata === airport.iata,
+          )
+        : [],
+    [airport, routes],
   );
-
-  const connectingRoutes = useMemo(
+  const activeDemandIds = useMemo(
+    () => new Set(activeHubRoutes.map((route) => route.demand.id)),
+    [activeHubRoutes],
+  );
+  const operatedDemands = useMemo(
+    () => hubDemands.filter((demand) => activeDemandIds.has(demand.id)),
+    [activeDemandIds, hubDemands],
+  );
+  const activePlaneIds = useMemo(
     () =>
-      routes.filter(
-        (r) =>
-          r.active &&
-          r.via_iata === airport?.iata &&
-          (r.via_pax_ratio ?? 0) > 0,
+      new Set(
+        routes.filter((route) => route.active).map((route) => route.plane.id),
       ),
-    [routes, airport?.iata],
+    [routes],
   );
-
-  const aiArrivals = useMemo(() => {
-    if (!airport) return [];
-    const seen = new Set<string>();
-    const result: {
-      iata: string;
-      city: string;
-      country: string;
-      airlineName: string;
-      aiColor: string;
-    }[] = [];
-    aiAirlines.forEach((ai) => {
-      buildAIRoutes(ai, airports).forEach((r) => {
-        if (r.dest.iata !== airport.iata) return;
-        const key = `${r.origin.iata}-${ai.id}`;
-        if (seen.has(key)) return;
-        seen.add(key);
-        result.push({
-          iata: r.origin.iata,
-          city: r.origin.city,
-          country: r.origin.country,
-          airlineName: ai.name,
-          aiColor: ai.color,
-        });
-      });
-    });
-    return result;
-  }, [aiAirlines, airports, airport]);
+  const idlePlanes = useMemo(
+    () => ownedPlanes.filter((plane) => !activePlaneIds.has(plane.id)),
+    [activePlaneIds, ownedPlanes],
+  );
 
   if (!airport) return null;
 
+  const opportunities = isOwned ? hubDemands : previewDemands;
+  const activeMarkets = activeDemandIds.size;
+  const tier = hub?.tier ?? 1;
+  const tierConfig = HUB_TIER_CONFIG[tier];
+  const nextTierConfig = HUB_TIER_CONFIG[tier + 1];
+  const routeLimit = tierConfig?.routes ?? 0;
+  const trust = Math.round(hub?.trust ?? 0);
+  const hubPassengers = passengerCount(hub?.hub_pax);
+  const waitingPassengers = operatedDemands.reduce((total, demand) => {
+    const playerPool = playerPassengerPool(demand);
+    return (
+      total +
+      Math.max(0, playerPool - passengerCount(demand.delivered_pax_today))
+    );
+  }, 0);
+  const scheduledSeats = activeHubRoutes.reduce(
+    (total, route) => total + scheduledDailySeats(route),
+    0,
+  );
+  const capacityByDemand = new Map<string, number>();
+  activeHubRoutes.forEach((route) => {
+    capacityByDemand.set(
+      route.demand.id,
+      (capacityByDemand.get(route.demand.id) ?? 0) + scheduledDailySeats(route),
+    );
+  });
+  const capacityGap = operatedDemands.reduce(
+    (total, demand) =>
+      total +
+      Math.max(
+        0,
+        playerPassengerPool(demand) - (capacityByDemand.get(demand.id) ?? 0),
+      ),
+    0,
+  );
+  const underCapacityMarketCount = operatedDemands.filter(
+    (demand) =>
+      playerPassengerPool(demand) > (capacityByDemand.get(demand.id) ?? 0),
+  ).length;
+
+  const rivalPresence: AirportRivalPresence[] = aiAirlines.flatMap(
+    (airline) => {
+      const ownsHub = airline.hubIatas.includes(airport.iata);
+      const serviceCount = airline.routes.filter(
+        (route) =>
+          route.originIata === airport.iata || route.destIata === airport.iata,
+      ).length;
+
+      return ownsHub || serviceCount > 0
+        ? [{ airline, ownsHub, serviceCount }]
+        : [];
+    },
+  );
+  const rivalHubCount = rivalPresence.filter((rival) => rival.ownsHub).length;
+  const rivalServiceCount = rivalPresence.reduce(
+    (total, rival) => total + rival.serviceCount,
+    0,
+  );
+
   const cost = hubPurchaseCost(airport);
   const isFirstHub = hubs.length === 0;
-  const aiHubCount = aiAirlines.filter((ai) =>
-    ai.hubIatas.includes(airport.iata),
-  ).length;
-  const paxNeeded = presenceThreshold(airport, aiHubCount);
-  const presenceReady = isFirstHub || paxDelivered >= paxNeeded;
-  const paxRemaining = Math.max(0, paxNeeded - paxDelivered);
-  const presencePct = isFirstHub
-    ? 1
-    : paxNeeded > 0
-      ? Math.min(1, paxDelivered / paxNeeded)
-      : 1;
+  const requiredCash = isFirstHub ? cost : cost + CASH_RESERVE_AFTER_BUY;
+  const canAfford = cash >= requiredCash;
+  const presenceGoal = presenceThreshold(airport, rivalHubCount);
+  const presenceReady = isFirstHub || passengerPresence >= presenceGoal;
+  const presenceRemaining = Math.max(0, presenceGoal - passengerPresence);
+  const canBuild = presenceReady && canAfford;
+  const previewDailyMarket = opportunities.reduce(
+    (total, demand) => total + passengerCount(demand.base_pax_day),
+    0,
+  );
 
-  const canAfford = isFirstHub
-    ? cash >= cost
-    : cash >= cost + CASH_RESERVE_AFTER_BUY;
-  const canBuy = presenceReady && canAfford;
-
-  const tierNum = (hub?.tier ?? 1) as number;
-  const tierCfg = HUB_TIER_CONFIG[tierNum];
-  const nextTierCfg = HUB_TIER_CONFIG[tierNum + 1];
-  const isMaxTier = tierNum >= 6;
-  const trustPct = Math.round(hub?.trust ?? 0);
-  const hubPax = hub?.hub_pax ?? 0;
-  const trustNeeded = tierCfg?.upgradeTrust ?? 100;
-  const paxNeededForUpgrade = tierCfg?.upgradePax ?? 999_999;
-  const upgradeCost = HUB_UPGRADE_COSTS[tierNum] ?? 999_999;
-  const trustReady = trustPct >= trustNeeded;
-  const paxReady = hubPax >= paxNeededForUpgrade;
-  const cashReady = cash >= upgradeCost;
+  const isMaximumTier = tier >= 6;
+  const trustGoal = tierConfig?.upgradeTrust ?? 100;
+  const passengerGoal = tierConfig?.upgradePax ?? 999_999;
+  const upgradeCost = HUB_UPGRADE_COSTS[tier] ?? 999_999;
+  const trustReady = trust >= trustGoal;
+  const passengersReady = hubPassengers >= passengerGoal;
+  const upgradeCashReady = cash >= upgradeCost;
   const upgradeReady =
-    isOwned && !isMaxTier && trustReady && paxReady && cashReady;
+    isOwned &&
+    !isMaximumTier &&
+    trustReady &&
+    passengersReady &&
+    upgradeCashReady;
 
-  const handleBuy = async () => {
-    haptics.confirm();
-    setBuying(true);
-    setBuyError(null);
-    const { error } = await buyHub(airport, previewDemands as any);
-    setBuying(false);
-    if (error) {
-      setBuyError(error);
-      haptics.error();
+  const explainBuildBlocker = () => {
+    if (!presenceReady) {
+      gameAlert.show({
+        icon: "people-outline",
+        title: "More passenger presence needed",
+        message: `Carry ${presenceRemaining.toLocaleString()} more passengers into ${airport.iata}. This proves your airline can support a hub here.`,
+        buttons: [{ label: "Understood", style: "cancel" }],
+      });
       return;
     }
-    haptics.success();
-    sounds.hubBuy();
+
+    gameAlert.show({
+      icon: "cash-outline",
+      title: "More cash needed",
+      message: isFirstHub
+        ? `You need ${fmtCash(cost - cash)} more to build this hub.`
+        : `You need ${fmtCash(requiredCash - cash)} more. The total includes the ${fmtCash(CASH_RESERVE_AFTER_BUY)} operating reserve.`,
+      buttons: [{ label: "Understood", style: "cancel" }],
+    });
+  };
+
+  const handleBuildHub = async () => {
+    if (buying) return;
+    haptics.confirm();
+    setOperationError(null);
+
+    if (!canBuild) {
+      haptics.error();
+      explainBuildBlocker();
+      return;
+    }
+
+    setBuying(true);
+    try {
+      const { error } = await buyHub(airport);
+      if (error) {
+        setOperationError(error);
+        haptics.error();
+        return;
+      }
+      haptics.success();
+      sounds.hubBuy();
+    } catch {
+      setOperationError("Unable to build this hub. Try again.");
+      haptics.error();
+    } finally {
+      setBuying(false);
+    }
   };
 
   const handleUpgrade = () => {
-    if (!hub) return;
+    if (!hub || !nextTierConfig || upgrading) return;
+
+    if (!upgradeReady) {
+      const missing = [
+        !trustReady ? `${trustGoal - trust}% more trust` : null,
+        !passengersReady
+          ? `${Math.max(0, passengerGoal - hubPassengers).toLocaleString()} more passengers handled`
+          : null,
+        !upgradeCashReady ? `${fmtCash(upgradeCost - cash)} more cash` : null,
+      ].filter((item): item is string => Boolean(item));
+
+      gameAlert.show({
+        icon: "information-circle-outline",
+        title: "Upgrade requirements",
+        message: missing.join("\n"),
+        buttons: [{ label: "Understood", style: "cancel" }],
+      });
+      return;
+    }
+
     gameAlert.show({
       icon: "arrow-up-circle-outline",
-      title: `Upgrade to Tier ${tierNum + 1}`,
-      message:
-        `Upgrade ${hub.airport.iata} to Tier ${tierNum + 1} for ${fmtCash(upgradeCost)}?\n\n` +
-        `• Route slots: ${tierCfg?.routes} → ${nextTierCfg?.routes ?? "?"}\n` +
-        `• Trust floor rises to ${nextTierCfg?.trustFloor ?? 0}%\n` +
-        `• Days-owned counter resets to 0`,
+      title: `Upgrade to tier ${tier + 1}`,
+      message: `Upgrade ${airport.iata} for ${fmtCash(upgradeCost)}? Active market capacity increases from ${tierConfig.routes} to ${nextTierConfig.routes}.`,
       buttons: [
         { label: "Cancel", style: "cancel" },
         {
-          label: `Upgrade · ${fmtCash(upgradeCost)}`,
+          label: `Upgrade for ${fmtCash(upgradeCost)}`,
           style: "default",
           onPress: async () => {
-            haptics.confirm();
             setUpgrading(true);
-            setUpgradeError(null);
+            setOperationError(null);
             const { error } = await upgradeHub(hub.id);
             setUpgrading(false);
             if (error) {
-              setUpgradeError(error);
+              setOperationError(error);
               haptics.error();
-            } else {
-              haptics.success();
+              return;
             }
+            haptics.success();
           },
         },
       ],
@@ -1174,35 +782,24 @@ export default function AirportSheet() {
   };
 
   const handleSell = () => {
-    if (!hub) return;
-    const hubRouteCount = routes.filter(
-      (r) => r.hub_iata === airport.iata && r.active,
-    ).length;
-    const refund = Math.round(hubPurchaseCost(airport) * 0.5);
+    if (!hub || selling) return;
+    const refund = Math.round(cost * 0.5);
     gameAlert.show({
       icon: "storefront-outline",
-      title: "Sell Hub",
-      message:
-        `Sell ${airport.iata} hub for ${fmtCash(refund)}?` +
-        (hubRouteCount > 0
-          ? `\n\nThis deactivates ${hubRouteCount} route${hubRouteCount !== 1 ? "s" : ""} and frees ${hubRouteCount} plane${hubRouteCount !== 1 ? "s" : ""}.`
-          : "") +
-        "\n\nYou'll receive 50% of the purchase price.",
+      title: `Sell ${airport.iata} hub`,
+      message: `You will receive ${fmtCash(refund)}. ${activeHubRoutes.length} active route${activeHubRoutes.length === 1 ? "" : "s"} will close and their aircraft will be released.`,
       buttons: [
-        { label: "Cancel", style: "cancel" },
+        { label: "Keep hub", style: "cancel" },
         {
-          label: "Sell Hub",
+          label: "Sell hub",
           style: "destructive",
           onPress: async () => {
             setSelling(true);
+            setOperationError(null);
             const { error } = await sellHub(hub.id);
             setSelling(false);
             if (error) {
-              gameAlert.show({
-                title: "Error",
-                message: error,
-                buttons: [{ label: "OK", style: "cancel" }],
-              });
+              setOperationError(error);
               haptics.error();
               return;
             }
@@ -1215,897 +812,926 @@ export default function AirportSheet() {
     });
   };
 
-  const handleNicknameEdit = () => {
-    setNicknameInput(hub?.nickname ?? "");
-    setEditingNickname(true);
-  };
-
-  const handleNicknameSave = async () => {
+  const saveNickname = async () => {
     if (!hub) return;
     setEditingNickname(false);
-    await updateHubNickname(hub.id, nicknameInput);
+    setOperationError(null);
+    const { error } = await updateHubNickname(hub.id, nicknameInput);
+    if (error) {
+      setOperationError(error);
+      haptics.error();
+    }
   };
 
-  const handleCreateRoute = (demand: Demand) => {
+  const handleOpenRoute = (demand: Demand) => {
     haptics.tap();
     closeSheet();
     useGameStore.getState().startRouteCreation([demand.origin, demand.dest]);
   };
 
-  // ── Render ────────────────────────────────────────────────────
+  const openAnotherSheet = (sheet: "fleet" | "routes") => {
+    haptics.tap();
+    closeSheet();
+    setTimeout(() => openSheet(sheet), 120);
+  };
 
   return (
     <BottomSheetScrollView
-      style={s.root}
+      style={styles.root}
       contentContainerStyle={[
-        s.content,
-        { paddingBottom: tabBarH + Spacing.xl },
+        styles.content,
+        { paddingBottom: tabBarHeight + Spacing.xxl },
       ]}
       showsVerticalScrollIndicator={false}
     >
-      {/* ── HEADER ─────────────────────────────────────────────── */}
-      <View style={s.header}>
-        <View style={s.headerLeft}>
-          <View style={s.flagMark}>
-            <CountryFlag isoCode={airport.country} size={25} />
+      <AirportCover
+        airport={airport}
+        isOwned={isOwned}
+        tier={tier}
+        trust={trust}
+        activeMarkets={activeMarkets}
+        routeLimit={routeLimit}
+        scheduledSeats={scheduledSeats}
+        opportunities={opportunities.length}
+        previewDailyMarket={previewDailyMarket}
+        cost={cost}
+        onClose={() => {
+          haptics.tap();
+          closeSheet();
+        }}
+      />
+
+      {!isOwned ? (
+        <View style={styles.section}>
+          <SectionHeader title="Establish hub" />
+          <Text style={styles.introText}>
+            Open this airport as a base, unlock its passenger markets, and
+            assign aircraft to new routes.
+          </Text>
+
+          <View style={styles.requirements}>
+            {!isFirstHub ? (
+              <RequirementRow
+                met={presenceReady}
+                label="Passenger presence"
+                value={`${passengerPresence.toLocaleString()} / ${presenceGoal.toLocaleString()}`}
+              />
+            ) : null}
+            <RequirementRow
+              met={cash >= cost}
+              label="Hub purchase"
+              value={fmtCash(cost)}
+            />
+            {!isFirstHub ? (
+              <RequirementRow
+                met={canAfford}
+                label="Cash remaining after purchase"
+                value={`${fmtCash(Math.max(0, cash - cost))} / ${fmtCash(CASH_RESERVE_AFTER_BUY)}`}
+              />
+            ) : null}
           </View>
-          <View style={s.headerText}>
-            <Text style={s.headerKicker}>
-              {isOwned ? "HUB OPERATIONS" : "AIRPORT PROFILE"}
-            </Text>
-            <View style={s.iataRow}>
-              <Text style={s.iata}>{airport.iata}</Text>
-              {isOwned && (
-                <View
-                  style={[
-                    s.pill,
-                    {
-                      backgroundColor: color + "18",
-                      borderColor: color + "44",
-                    },
-                  ]}
-                >
-                  <Ionicons name="checkmark-circle" size={9} color={color} />
-                  <Text style={[s.pillText, { color }]}>Tier {tierNum}</Text>
-                </View>
-              )}
-            </View>
-            <Text style={s.name} numberOfLines={1}>
-              {airport.name}
-            </Text>
-
-            {/* Nickname — only shown when owned */}
-            {isOwned &&
-              hub &&
-              (editingNickname ? (
-                <View style={s.nicknameEditRow}>
-                  <TextInput
-                    style={s.nicknameInput}
-                    value={nicknameInput}
-                    onChangeText={setNicknameInput}
-                    onBlur={handleNicknameSave}
-                    onSubmitEditing={handleNicknameSave}
-                    placeholder="Name this hub…"
-                    placeholderTextColor={Colors.dim}
-                    maxLength={20}
-                    returnKeyType="done"
-                    // Note: autoFocus removed — fights with bottom sheet keyboard
-                    // avoidance. User taps the pencil to trigger, focus is implicit.
-                  />
-                  <TouchableOpacity
-                    accessibilityLabel="Save hub nickname"
-                    accessibilityRole="button"
-                    onPress={handleNicknameSave}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  >
-                    <Ionicons name="checkmark" size={14} color={color} />
-                  </TouchableOpacity>
-                </View>
-              ) : (
-                <TouchableOpacity
-                  accessibilityLabel="Edit hub nickname"
-                  accessibilityRole="button"
-                  onPress={handleNicknameEdit}
-                  activeOpacity={0.7}
-                  style={s.nicknameRow}
-                >
-                  <Ionicons
-                    name="pencil-outline"
-                    size={10}
-                    color={Colors.dim}
-                  />
-                  <Text style={s.nicknameTxt} numberOfLines={1}>
-                    {hub.nickname ?? "Add nickname"}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-
-            <Text style={s.location} numberOfLines={1}>
-              {[airport.city, airport.country, airport.continent]
-                .filter(Boolean)
-                .join(" · ")}
-            </Text>
-          </View>
-        </View>
-
-        <TouchableOpacity
-          accessibilityLabel="Close airport details"
-          accessibilityRole="button"
-          onPress={() => {
-            haptics.tap();
-            closeSheet();
-          }}
-          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-          style={s.closeBtn}
-        >
-          <Ionicons name="close" size={22} color={Colors.text} />
-        </TouchableOpacity>
-      </View>
-
-      {/* ── CROWDING BANNER — hoisted to top so it's the first thing seen ── */}
-      {crowding && crowding.level !== "normal" && (
-        <CongestionBanner
-          crowding={crowding}
-          hubDemands={hubDemands}
-          routes={routes}
-          ownedPlanes={ownedPlanes}
-          onCreateRoute={handleCreateRoute}
-        />
-      )}
-
-      {/* ── BUY SECTION (unowned) ──────────────────────────────── */}
-      {!isOwned && (
-        <View style={s.buySection}>
-          <View style={s.buyTop}>
-            <View>
-              <Text style={s.metaLbl}>COST TO BUY</Text>
-              <Text
-                style={[
-                  s.bigMoney,
-                  { color: canAfford ? Colors.green : Colors.red },
-                ]}
-              >
-                {fmtCash(cost)}
-              </Text>
-            </View>
-            <View style={{ alignItems: "flex-end" }}>
-              <Text style={s.metaLbl}>YOU HAVE</Text>
-              <Text style={[s.bigMoney, { color: Colors.text }]}>
-                {fmtCash(cash)}
-              </Text>
-            </View>
-          </View>
-
-          {/* Presence bar — with 0% and goal labels for context */}
-          {!isFirstHub && (
-            <View style={s.presenceBlock}>
-              <View style={s.presenceLabelRow}>
-                <Text style={s.presenceLabel}>PRESENCE</Text>
-                <Text
-                  style={[
-                    s.presenceValue,
-                    { color: presenceReady ? Colors.green : Colors.dim },
-                  ]}
-                >
-                  {presenceReady
-                    ? "Ready to open! ✓"
-                    : `${paxDelivered.toLocaleString()} / ${paxNeeded.toLocaleString()} pax`}
-                  {aiHubCount > 0 && !presenceReady
-                    ? ` · ${aiHubCount} rival${aiHubCount > 1 ? "s" : ""} here`
-                    : ""}
-                </Text>
-              </View>
-              <View style={s.presenceTrack}>
-                <View
-                  style={[
-                    s.presenceFill,
-                    {
-                      width: `${presencePct * 100}%`,
-                      backgroundColor: presenceReady ? Colors.green : color,
-                    },
-                  ]}
-                />
-              </View>
-              {/* Floor / goal labels */}
-              <View style={s.presenceFloorRow}>
-                <Text style={s.presenceFloorLbl}>0</Text>
-                <Text style={s.presenceFloorLbl}>
-                  Goal: {paxNeeded.toLocaleString()} pax
-                </Text>
-              </View>
-            </View>
-          )}
-
-          {buyError && (
-            <View style={s.errorBox}>
-              <Ionicons name="warning-outline" size={13} color={Colors.red} />
-              <Text style={s.errorText}>{buyError}</Text>
-            </View>
-          )}
 
           <TouchableOpacity
             accessibilityLabel={
-              !presenceReady
-                ? `Fly ${paxRemaining} more passengers here first`
-                : !canAfford
-                  ? `Not enough cash to open ${airport.iata} hub`
-                  : `Open ${airport.iata} hub for ${fmtCash(cost)}`
+              canBuild
+                ? `Build ${airport.iata} hub for ${fmtCash(cost)}`
+                : "Review hub requirements"
             }
             accessibilityRole="button"
+            accessibilityState={{ busy: buying }}
             style={[
-              s.buyBtn,
-              { backgroundColor: canBuy ? Colors.sky : Colors.dim },
-              (!canBuy || buying) && { opacity: 0.5 },
+              styles.primaryButton,
+              !canBuild && styles.blockedPrimaryButton,
             ]}
-            onPress={handleBuy}
-            disabled={buying || !canBuy}
-            activeOpacity={0.86}
+            onPress={handleBuildHub}
+            disabled={buying}
+            activeOpacity={0.7}
           >
             {buying ? (
-              <ActivityIndicator color={Colors.textOnColor} size="small" />
+              <ActivityIndicator size="small" color={Colors.textOnColor} />
             ) : (
               <>
-                <Ionicons
-                  name={
-                    presenceReady ? "add-circle-outline" : "airplane-outline"
-                  }
-                  size={18}
-                  color={Colors.textOnColor}
-                />
-                <Text style={[s.buyText, { color: Colors.textOnColor }]}>
-                  {!presenceReady
-                    ? `Fly ${paxRemaining.toLocaleString()} more passengers here first`
-                    : !canAfford
-                      ? `Need ${fmtCash(cost + CASH_RESERVE_AFTER_BUY)} to open`
-                      : `Open Hub · ${fmtCash(cost)}`}
+                <Text
+                  style={[
+                    styles.primaryButtonText,
+                    !canBuild && styles.blockedPrimaryButtonText,
+                  ]}
+                >
+                  {canBuild
+                    ? `Build hub for ${fmtCash(cost)}`
+                    : "Review build requirements"}
                 </Text>
+                <Ionicons
+                  name="chevron-forward"
+                  size={17}
+                  color={canBuild ? Colors.textOnColor : Colors.skyDark}
+                />
               </>
             )}
           </TouchableOpacity>
-
-          {/* Unowned departure preview — conversion moment */}
-          {previewDemands.length > 0 && (
-            <View style={s.previewNote}>
-              <Ionicons
-                name="lock-closed-outline"
-                size={11}
-                color={Colors.dim}
-              />
-              <Text style={s.previewNoteTxt}>
-                Buy this hub to unlock {previewDemands.length} route
-                {previewDemands.length !== 1 ? "s" : ""}
-              </Text>
-            </View>
-          )}
         </View>
-      )}
+      ) : (
+        <>
+          <View style={styles.section}>
+            <SectionHeader title="Hub operations" detail={`Tier ${tier}`} />
 
-      {/* ── HUB PANEL (owned) ─────────────────────────────────── */}
-      {isOwned && hub && (
-        <View style={s.hubPanel}>
-          <TrustBar trust={hub.trust} floor={hub.trust_floor ?? 0} />
-
-          {/* Stat row — route slots shown as used/total */}
-          <View style={s.statRow}>
-            <View style={s.stat}>
-              <Text style={s.statVal}>
-                <Text style={{ color }}>{usedSlots}</Text>
-                <Text style={{ color: Colors.dim, fontSize: 12 }}>
-                  {" "}
-                  / {totalSlots}
-                </Text>
-              </Text>
-              <Text style={s.statLbl}>Route slots</Text>
-            </View>
-            <View style={s.statDivider} />
-            <View style={s.stat}>
-              <Text style={s.statVal}>
-                {hubPax >= 1000
-                  ? `${(hubPax / 1000).toFixed(1)}k`
-                  : hubPax.toLocaleString()}
-              </Text>
-              <Text style={s.statLbl}>Passengers</Text>
-            </View>
-            <View style={s.statDivider} />
-            <View style={s.stat}>
-              <Text
-                style={[
-                  s.statVal,
-                  {
-                    color:
-                      crowding?.level === "crisis"
-                        ? Colors.red
-                        : crowding?.level === "overcrowded"
-                          ? Colors.orange
-                          : Colors.text,
-                  },
-                ]}
+            {editingNickname ? (
+              <View style={styles.nicknameEditor}>
+                <TextInput
+                  accessibilityLabel="Hub nickname"
+                  maxLength={20}
+                  onChangeText={setNicknameInput}
+                  onSubmitEditing={saveNickname}
+                  placeholder="Hub nickname"
+                  placeholderTextColor={Colors.dim}
+                  returnKeyType="done"
+                  style={styles.nicknameInput}
+                  value={nicknameInput}
+                />
+                <TouchableOpacity
+                  accessibilityLabel="Save hub nickname"
+                  accessibilityRole="button"
+                  style={styles.nicknameSave}
+                  onPress={saveNickname}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.nicknameSaveText}>Save</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <TouchableOpacity
+                accessibilityLabel="Edit hub nickname"
+                accessibilityRole="button"
+                style={styles.nicknameButton}
+                onPress={() => {
+                  setNicknameInput(hub?.nickname ?? "");
+                  setEditingNickname(true);
+                }}
+                activeOpacity={0.7}
               >
-                {crowding?.capacityPct ?? 0}%
-              </Text>
-              <Text style={s.statLbl}>Capacity</Text>
+                <Text style={styles.nicknameText}>
+                  {hub?.nickname || "Add hub nickname"}
+                </Text>
+                <Ionicons
+                  name="pencil-outline"
+                  size={16}
+                  color={Colors.muted}
+                />
+              </TouchableOpacity>
+            )}
+
+            <View style={styles.dataTable}>
+              <DataRow
+                label="Waiting today"
+                value={waitingPassengers.toLocaleString()}
+                valueColor={Colors.text}
+              />
+              <DataRow
+                label="Rival activity"
+                value={
+                  rivalPresence.length === 0
+                    ? "None"
+                    : `${rivalPresence.length} ${rivalPresence.length === 1 ? "airline" : "airlines"} · ${rivalServiceCount} ${rivalServiceCount === 1 ? "service" : "services"}`
+                }
+              />
             </View>
+            <RivalPresenceList rivals={rivalPresence} />
           </View>
 
-          {/* Upgrade block — requirements as vertical list, never wraps awkwardly */}
-          {!isMaxTier && (
-            <View style={s.upgradeBlock}>
-              <View style={s.upgradeRequirements}>
-                <View style={s.req}>
-                  <Ionicons
-                    name={trustReady ? "checkmark-circle" : "ellipse-outline"}
-                    size={13}
-                    color={trustReady ? Colors.green : Colors.dim}
-                  />
-                  <Text
-                    style={[
-                      s.reqTxt,
-                      { color: trustReady ? Colors.green : Colors.dim },
-                    ]}
-                  >
-                    {trustReady
-                      ? `${trustNeeded}% trust ✓`
-                      : `${trustPct}% trust — need ${trustNeeded}%`}
-                  </Text>
-                </View>
-                <View style={s.req}>
-                  <Ionicons
-                    name={paxReady ? "checkmark-circle" : "people-outline"}
-                    size={13}
-                    color={paxReady ? Colors.green : Colors.dim}
-                  />
-                  <Text
-                    style={[
-                      s.reqTxt,
-                      { color: paxReady ? Colors.green : Colors.dim },
-                    ]}
-                  >
-                    {paxReady
-                      ? `${(paxNeededForUpgrade / 1000).toFixed(0)}k passengers ✓`
-                      : `${((paxNeededForUpgrade - hubPax) / 1000).toFixed(1)}k more passengers needed`}
-                  </Text>
-                </View>
-                <View style={s.req}>
-                  <Ionicons
-                    name={cashReady ? "checkmark-circle" : "ellipse-outline"}
-                    size={13}
-                    color={cashReady ? Colors.green : Colors.dim}
-                  />
-                  <Text
-                    style={[
-                      s.reqTxt,
-                      { color: cashReady ? Colors.green : Colors.dim },
-                    ]}
-                  >
-                    {cashReady
-                      ? `${fmtCash(upgradeCost)} ✓`
-                      : `${fmtCash(upgradeCost)} needed`}
-                  </Text>
-                </View>
-              </View>
+          {capacityGap > 0 ? (
+            <View style={styles.sectionCompact}>
+              <InlineNotice
+                level="warning"
+                message={`Daily schedules are short by ${capacityGap.toLocaleString()} seats across ${underCapacityMarketCount} market${underCapacityMarketCount === 1 ? "" : "s"}. Assign another aircraft or use a larger aircraft.`}
+              />
+            </View>
+          ) : null}
 
-              {upgradeError && (
-                <View style={s.errorBox}>
-                  <Ionicons
-                    name="warning-outline"
-                    size={13}
-                    color={Colors.red}
+          <View style={styles.section}>
+            <SectionHeader
+              title="Hub expansion"
+              detail={isMaximumTier ? "Maximum tier" : `Tier ${tier + 1}`}
+            />
+            {isMaximumTier ? (
+              <Text style={styles.introText}>
+                This hub has reached its maximum operating tier.
+              </Text>
+            ) : (
+              <>
+                <View style={styles.requirements}>
+                  <RequirementRow
+                    met={trustReady}
+                    label="Trust"
+                    value={`${trust}% / ${trustGoal}%`}
                   />
-                  <Text style={s.errorText}>{upgradeError}</Text>
+                  <RequirementRow
+                    met={passengersReady}
+                    label="Passengers handled"
+                    value={`${hubPassengers.toLocaleString()} / ${passengerGoal.toLocaleString()}`}
+                  />
+                  <RequirementRow
+                    met={upgradeCashReady}
+                    label="Upgrade cost"
+                    value={fmtCash(upgradeCost)}
+                  />
                 </View>
-              )}
-
-              <TouchableOpacity
-                accessibilityLabel={`Upgrade hub to tier ${tierNum + 1}`}
-                accessibilityRole="button"
-                style={[
-                  s.upgradeBtn,
-                  {
-                    borderColor: upgradeReady ? color + "66" : Colors.border,
-                    backgroundColor: upgradeReady
-                      ? color + "14"
-                      : "transparent",
-                  },
-                  (!upgradeReady || upgrading) && { opacity: 0.45 },
-                ]}
-                onPress={handleUpgrade}
-                disabled={!upgradeReady || upgrading}
-                activeOpacity={0.84}
-              >
-                {upgrading ? (
-                  <ActivityIndicator size="small" color={color} />
-                ) : (
-                  <>
-                    <Ionicons
-                      name="arrow-up-circle-outline"
-                      size={16}
-                      color={upgradeReady ? color : Colors.dim}
-                    />
-                    <View style={{ flex: 1 }}>
-                      <Text
-                        style={[
-                          s.upgradeTxt,
-                          { color: upgradeReady ? color : Colors.dim },
-                        ]}
-                      >
-                        Upgrade to Tier {tierNum + 1}
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityState={{ busy: upgrading }}
+                  style={styles.secondaryButton}
+                  onPress={handleUpgrade}
+                  disabled={upgrading}
+                  activeOpacity={0.7}
+                >
+                  {upgrading ? (
+                    <ActivityIndicator size="small" color={Colors.skyDark} />
+                  ) : (
+                    <>
+                      <Text style={styles.secondaryButtonText}>
+                        {upgradeReady
+                          ? `Upgrade hub for ${fmtCash(upgradeCost)}`
+                          : "Review upgrade requirements"}
                       </Text>
-                      {nextTierCfg && (
-                        <Text style={s.upgradeDetail}>
-                          Unlocks {nextTierCfg.routes} routes · trust stays
-                          above {nextTierCfg.trustFloor}%
-                        </Text>
-                      )}
-                    </View>
-                    {upgradeReady && (
                       <Ionicons
                         name="chevron-forward"
-                        size={14}
-                        color={color + "88"}
+                        size={17}
+                        color={Colors.skyDark}
                       />
-                    )}
-                  </>
-                )}
-              </TouchableOpacity>
-            </View>
-          )}
-
-          {isMaxTier && (
-            <View style={s.maxBadge}>
-              <Ionicons name="star" size={11} color={color} />
-              <Text style={[s.maxTxt, { color }]}>Maximum tier reached</Text>
-            </View>
-          )}
-        </View>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+        </>
       )}
 
-      <View style={s.divider} />
-
-      {/* ── DEPARTURES ────────────────────────────────────────── */}
-      <View style={s.sectionHeader}>
-        <View style={s.sectionTitleRow}>
-          <Ionicons name="airplane-outline" size={13} color={color} />
-          <Text style={s.eyebrow}>DEPARTURES</Text>
+      {operationError ? (
+        <View style={styles.sectionCompact}>
+          <InlineNotice level="error" message={operationError} />
         </View>
-        {isOwned && outboundWaiting > 0 && (
-          <View style={s.waitingBadge}>
-            <Text style={s.waitingBadgeTxt}>
-              {outboundWaiting.toLocaleString()} waiting
+      ) : null}
+
+      <View style={styles.routesSection}>
+        <View style={styles.routesSectionHeader}>
+          <SectionHeader
+            title={isOwned ? "Route opportunities" : "Routes unlocked with hub"}
+            detail={`${opportunities.length}`}
+          />
+        </View>
+        <Text style={styles.sectionDescription}>
+          {isOwned
+            ? "Select a market and assign an aircraft. Opportunities stay open until replaced."
+            : "These markets unlock when the hub opens."}
+        </Text>
+
+        {opportunities.length === 0 ? (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyTitle}>No reachable destinations</Text>
+            <Text style={styles.emptyText}>
+              Purchase an aircraft with more range to unlock destinations from
+              this airport.
             </Text>
+          </View>
+        ) : (
+          <View style={styles.routeList}>
+            {opportunities.map((demand) => {
+              const demandRoutes = activeHubRoutes.filter(
+                (route) => route.demand.id === demand.id,
+              );
+              const rivals = aiAirlines.filter((rival) =>
+                aiServesCorridor(rival, demand.origin.iata, demand.dest.iata),
+              );
+
+              return (
+                <RouteOpportunityRow
+                  key={demand.id}
+                  demand={demand}
+                  activeRoutes={demandRoutes}
+                  idlePlanes={idlePlanes}
+                  owned={isOwned}
+                  rivals={rivals}
+                  onOpenRoute={handleOpenRoute}
+                  onViewFleet={() => openAnotherSheet("fleet")}
+                  onManageRoutes={() => openAnotherSheet("routes")}
+                />
+              );
+            })}
           </View>
         )}
       </View>
 
-      {departures.length === 0 ? (
-        <View style={s.emptyBoard}>
-          <Ionicons
-            name="map-outline"
-            size={22}
-            color={Colors.dim}
-            style={{ marginBottom: 6 }}
-          />
-          <Text style={s.emptyTxt}>No routes available here yet</Text>
-          {!isOwned && (
-            <Text style={s.emptySub}>
-              Buy this hub to unlock routes · {fmtCash(cost)}
-            </Text>
-          )}
+      {isOwned && hub ? (
+        <View style={styles.dangerSection}>
+          <TouchableOpacity
+            accessibilityLabel={`Sell ${airport.iata} hub`}
+            accessibilityRole="button"
+            accessibilityState={{ busy: selling }}
+            style={styles.sellButton}
+            onPress={handleSell}
+            disabled={selling}
+            activeOpacity={0.7}
+          >
+            {selling ? (
+              <ActivityIndicator size="small" color={Colors.red} />
+            ) : (
+              <>
+                <View style={styles.sellCopy}>
+                  <Text style={styles.sellTitle}>Sell hub</Text>
+                  <Text style={styles.sellDetail}>
+                    {fmtCash(Math.round(cost * 0.5))} refund. Active routes will
+                    close.
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={17} color={Colors.red} />
+              </>
+            )}
+          </TouchableOpacity>
         </View>
-      ) : (
-        departures.map(({ demand, routes: demandRoutes, key }) => (
-          <DepartureRow
-            key={key}
-            demand={demand}
-            routes={demandRoutes}
-            hub={hub}
-            color={color}
-            dayProgress={dayProgress}
-            onCreateRoute={handleCreateRoute}
-            maxPlaneRange={maxPlaneRange}
-            day={day}
-            routeEarnings={routeEarnings}
-          />
-        ))
-      )}
+      ) : null}
 
-      {/* ── ARRIVALS ──────────────────────────────────────────── */}
-      <View style={[s.sectionHeader, { marginTop: Spacing.md }]}>
-        <View style={s.sectionTitleRow}>
-          <Ionicons name="download-outline" size={13} color={Colors.dim} />
-          <Text style={s.eyebrow}>ARRIVALS</Text>
-        </View>
-      </View>
-      <ArrivalsSummary
-        playerArrivals={playerArrivals}
-        connectingRoutes={connectingRoutes}
-        aiArrivals={aiArrivals}
-        demands={demands}
-        color={color}
-      />
-
-      {/* ── SELL — quiet, text-style, bottom of sheet ─────────── */}
-      {isOwned && hub && (
-        <TouchableOpacity
-          accessibilityLabel={`Sell ${airport.iata} hub`}
-          accessibilityRole="button"
-          style={s.sellHubBtn}
-          onPress={handleSell}
-          disabled={selling}
-          activeOpacity={0.7}
-        >
-          {selling ? (
-            <ActivityIndicator size="small" color={Colors.red} />
-          ) : (
-            <>
-              <View style={{ flex: 1 }}>
-                <Text style={s.sellHubTitle}>Sell Hub</Text>
-                <Text style={s.sellHubSub}>
-                  {fmtCash(Math.round(hubPurchaseCost(airport) * 0.5))} refund ·
-                  deactivates routes
-                </Text>
-              </View>
-              <Ionicons
-                name="chevron-forward"
-                size={14}
-                color={Colors.red + "66"}
-              />
-            </>
-          )}
-        </TouchableOpacity>
-      )}
-
-      <View style={{ height: 48 }} />
       <GameAlert ref={gameAlert.ref} />
     </BottomSheetScrollView>
   );
 }
 
-// ─────────────────────────────────────────────────────────────────
-// STYLES
-// ─────────────────────────────────────────────────────────────────
-
-const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: Colors.surface },
+const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: Colors.bg },
   content: { paddingBottom: Spacing.xxl },
-
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.sm,
-    paddingBottom: Spacing.md,
-    gap: Spacing.sm,
+  coverBlock: {
+    backgroundColor: Colors.panel,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSection,
+    ...Shadow.floating,
   },
-  headerLeft: {
+  coverArtwork: {
+    height: 168,
+    overflow: "hidden",
+    backgroundColor: AIRPORT_COVER_RED,
+  },
+  coverGridVerticalOne: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    left: "24%",
+    width: 1,
+    backgroundColor: "rgba(255,244,239,0.10)",
+  },
+  coverGridVerticalTwo: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    right: "22%",
+    width: 1,
+    backgroundColor: "rgba(255,244,239,0.10)",
+  },
+  coverGridHorizontalOne: {
+    position: "absolute",
+    top: 54,
+    left: 0,
+    right: 0,
+    height: 1,
+    backgroundColor: "rgba(255,244,239,0.10)",
+  },
+  coverGridHorizontalTwo: {
+    position: "absolute",
+    top: 112,
+    left: 0,
+    right: 0,
+    height: 1,
+    backgroundColor: "rgba(255,244,239,0.10)",
+  },
+  coverGlobe: {
+    position: "absolute",
+    right: -18,
+    top: 31,
+  },
+  flightPath: {
+    position: "absolute",
+    width: 188,
+    height: 2,
+    right: 61,
+    top: 87,
+    backgroundColor: "rgba(255,244,239,0.48)",
+    transform: [{ rotate: "-12deg" }],
+  },
+  flightPathDotStart: {
+    position: "absolute",
+    right: 244,
+    top: 103,
+    width: 8,
+    height: 8,
+    borderRadius: Radius.full,
+    backgroundColor: AIRPORT_COVER_LIGHT,
+  },
+  flightPathDotEnd: {
+    position: "absolute",
+    right: 57,
+    top: 63,
+    width: 8,
+    height: 8,
+    borderRadius: Radius.full,
+    backgroundColor: AIRPORT_COVER_LIGHT,
+  },
+  coverPlane: {
+    position: "absolute",
+    right: "31%",
+    top: 54,
+    transform: [{ rotate: "-12deg" }],
+  },
+  coverTopline: {
+    position: "absolute",
+    top: Spacing.md,
+    left: Spacing.lg,
+    right: Spacing.md,
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "space-between",
+  },
+  coverCountry: {
+    maxWidth: "70%",
+    minHeight: 32,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+    paddingHorizontal: Spacing.sm,
+    backgroundColor: "rgba(17,24,32,0.30)",
+    borderRadius: Radius.md,
+  },
+  coverCountryText: {
+    flexShrink: 1,
+    color: Colors.textOnColor,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
+    fontWeight: Typography.weight.bold,
+  },
+  coverCloseButton: {
+    width: MIN_TOUCH,
+    height: MIN_TOUCH,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(17,24,32,0.28)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.42)",
+    borderRadius: Radius.md,
+  },
+  coverCaption: {
+    position: "absolute",
+    left: Spacing.lg,
+    right: 82,
+    bottom: Spacing.md,
+  },
+  coverStatusLine: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.xs,
+  },
+  coverCaptionLabel: {
+    color: AIRPORT_COVER_LIGHT,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
+    fontWeight: Typography.weight.semibold,
+  },
+  airportCode: {
+    color: Colors.textOnColor,
+    fontFamily: Typography.mono,
+    fontSize: 30,
+    lineHeight: 34,
+    fontWeight: Typography.weight.bold,
+    marginTop: Spacing.xxs,
+  },
+  airportName: {
+    color: Colors.textOnColor,
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: Typography.weight.semibold,
+  },
+  coverMetrics: {
+    minHeight: 62,
+    flexDirection: "row",
+    alignItems: "stretch",
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.sm,
+    backgroundColor: Colors.panel,
+  },
+  coverMetric: {
+    flex: 1,
+    justifyContent: "center",
+    minWidth: 0,
+  },
+  coverMetricDivider: {
+    width: StyleSheet.hairlineWidth,
+    marginHorizontal: Spacing.sm,
+    backgroundColor: Colors.border,
+  },
+  coverMetricValue: {
+    color: Colors.text,
+    fontFamily: Typography.mono,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: Typography.weight.bold,
+  },
+  coverMetricLabel: {
+    color: Colors.muted,
+    fontSize: 9,
+    lineHeight: 13,
+    marginTop: Spacing.xxs,
+  },
+  section: {
+    marginHorizontal: Spacing.md,
+    marginTop: Spacing.lg,
+    padding: Spacing.lg,
+    backgroundColor: Colors.panel,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  sectionCompact: {
+    marginHorizontal: Spacing.md,
+    marginTop: Spacing.md,
+    paddingHorizontal: Spacing.md,
+    backgroundColor: "#FFF7EC",
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: "#D8BE98",
+  },
+  sectionHeader: {
+    minHeight: 32,
+    flexDirection: "row",
+    alignItems: "baseline",
+    justifyContent: "space-between",
     gap: Spacing.md,
+  },
+  sectionTitle: {
+    flex: 1,
+    color: Colors.text,
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: Typography.weight.bold,
+  },
+  sectionDetail: {
+    color: Colors.muted,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.caption,
+    textAlign: "right",
+  },
+  introText: {
+    color: Colors.muted,
+    fontSize: Typography.size.label,
+    lineHeight: 19,
+    paddingBottom: Spacing.md,
+  },
+  dataTable: {
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
+  },
+  dataRow: {
+    minHeight: 42,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.lg,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+  },
+  dataLabel: {
+    flex: 1,
+    color: Colors.muted,
+    fontSize: Typography.size.label,
+  },
+  dataValue: {
+    flex: 1,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.label,
+    fontWeight: Typography.weight.semibold,
+    textAlign: "right",
+  },
+  rivalPresenceList: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+  },
+  rivalPresenceRow: {
+    minHeight: 48,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Colors.border,
+  },
+  rivalPresenceCopy: {
     flex: 1,
     minWidth: 0,
   },
-  flagMark: {
-    width: MIN_TOUCH,
-    height: MIN_TOUCH,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: Radius.md,
-    backgroundColor: Colors.panel,
-    overflow: "hidden",
-    ...Shadow.card,
-  },
-  headerText: { flex: 1, minWidth: 0 },
-  headerKicker: {
-    color: Colors.skyDark,
-    fontFamily: Typography.mono,
-    fontSize: 8,
-    letterSpacing: 1.3,
-  },
-  closeBtn: {
-    width: MIN_TOUCH,
-    height: MIN_TOUCH,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: Radius.full,
-    backgroundColor: Colors.inset,
-  },
-  iataRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    flexWrap: "wrap",
-  },
-  iata: {
-    fontFamily: Typography.display,
-    fontSize: 30,
-    lineHeight: 32,
+  rivalPresenceName: {
     color: Colors.text,
-    letterSpacing: 1,
+    fontSize: Typography.size.caption,
+    fontWeight: Typography.weight.semibold,
   },
-  pill: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 3,
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    borderRadius: Radius.full,
-    borderWidth: 1,
-  },
-  pillText: {
-    fontFamily: Typography.mono,
-    fontSize: 8,
-    fontWeight: "700",
-    letterSpacing: 0.5,
-  },
-  name: { fontSize: 13, color: Colors.text, fontWeight: "700", marginTop: 2 },
-  location: { fontSize: 10, color: Colors.muted, lineHeight: 15, marginTop: 1 },
-
-  nicknameRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    marginTop: 2,
-  },
-  nicknameTxt: {
-    fontSize: 11,
+  rivalPresenceMeta: {
     color: Colors.muted,
-    fontWeight: "700",
-    fontStyle: "italic",
+    fontFamily: Typography.mono,
+    fontSize: 10,
+    lineHeight: 15,
   },
-  // Edit row with explicit confirm button — avoids autoFocus keyboard fight
-  nicknameEditRow: {
+  requirements: {
+    paddingVertical: Spacing.md,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: Colors.borderSection,
+  },
+  requirementRow: {
+    minHeight: 34,
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
-    marginTop: 2,
+    gap: Spacing.sm,
+  },
+  requirementLabel: {
+    flex: 1,
+    color: Colors.text,
+    fontSize: Typography.size.caption,
+  },
+  requirementValue: {
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.caption,
+    fontWeight: Typography.weight.semibold,
+    textAlign: "right",
+  },
+  notice: {
+    minHeight: 48,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: Spacing.sm,
+    paddingVertical: Spacing.md,
+    borderTopWidth: 1,
     borderBottomWidth: 1,
-    borderBottomColor: Colors.dim,
-    paddingBottom: 2,
+    borderColor: Colors.borderSection,
+  },
+  noticeText: {
+    flex: 1,
+    color: Colors.text,
+    fontSize: Typography.size.caption,
+    lineHeight: 17,
+  },
+  primaryButton: {
+    minHeight: MIN_TOUCH,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: Spacing.sm,
+    marginTop: Spacing.md,
+    paddingHorizontal: Spacing.md,
+    backgroundColor: Colors.sky,
+    borderRadius: Radius.md,
+  },
+  primaryButtonText: {
+    color: Colors.textOnColor,
+    fontSize: Typography.size.label,
+    fontWeight: Typography.weight.semibold,
+    textAlign: "center",
+  },
+  blockedPrimaryButton: {
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.borderSection,
+  },
+  blockedPrimaryButtonText: { color: Colors.skyDark },
+  secondaryButton: {
+    minHeight: MIN_TOUCH,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: Spacing.md,
+    borderWidth: 1,
+    borderColor: Colors.borderSection,
+    borderRadius: Radius.md,
+  },
+  secondaryButtonText: {
+    flex: 1,
+    color: Colors.skyDark,
+    fontSize: Typography.size.label,
+    fontWeight: Typography.weight.semibold,
+  },
+  nicknameButton: {
+    minHeight: MIN_TOUCH,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
+  },
+  nicknameText: {
+    flex: 1,
+    color: Colors.muted,
+    fontSize: Typography.size.label,
+  },
+  nicknameEditor: {
+    minHeight: MIN_TOUCH,
+    flexDirection: "row",
+    alignItems: "center",
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
   },
   nicknameInput: {
     flex: 1,
-    fontSize: 11,
+    minHeight: MIN_TOUCH,
     color: Colors.text,
-    fontWeight: "700",
+    fontSize: Typography.size.body,
     paddingVertical: 0,
   },
-
-  divider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: Colors.border,
-    marginVertical: Spacing.md,
+  nicknameSave: {
+    minWidth: 60,
+    minHeight: MIN_TOUCH,
+    alignItems: "flex-end",
+    justifyContent: "center",
   },
-
-  // Buy section
-  buySection: {
+  nicknameSaveText: {
+    color: Colors.skyDark,
+    fontSize: Typography.size.label,
+    fontWeight: Typography.weight.semibold,
+  },
+  routesSection: {
+    marginTop: Spacing.xl,
+    paddingTop: Spacing.lg,
+    paddingBottom: Spacing.xl,
+    backgroundColor: Colors.bg,
+    borderTopWidth: 1,
+    borderColor: Colors.borderSection,
+  },
+  routesSectionHeader: {
     marginHorizontal: Spacing.lg,
-    paddingHorizontal: Spacing.md,
-    marginBottom: Spacing.md,
-    gap: Spacing.sm,
-    paddingVertical: Spacing.md,
+  },
+  sectionDescription: {
+    color: Colors.muted,
+    fontSize: Typography.size.caption,
+    lineHeight: 17,
+    marginHorizontal: Spacing.lg,
+    paddingBottom: Spacing.sm,
+  },
+  routeList: {
+    marginHorizontal: Spacing.md,
+    overflow: "hidden",
+    backgroundColor: Colors.panel,
+    borderRadius: Radius.lg,
     borderWidth: 1,
     borderColor: Colors.border,
-    borderRadius: Radius.lg,
-    backgroundColor: Colors.panel,
-    ...Shadow.card,
   },
-  buyTop: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-    justifyContent: "space-between",
+  routeRow: {
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
   },
-  metaLbl: {
-    fontFamily: Typography.mono,
-    fontSize: 8,
-    color: Colors.muted,
-    letterSpacing: 1.5,
-    marginBottom: 4,
-    fontWeight: "700",
-  },
-  bigMoney: {
-    fontFamily: Typography.mono,
-    fontSize: 19,
-    fontWeight: "700",
-    letterSpacing: 0.3,
-  },
-  errorBox: {
+  routeHeading: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
-    backgroundColor: Palette.redSoft,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.red,
-    padding: Spacing.sm,
+    gap: Spacing.sm,
   },
-  errorText: { flex: 1, fontSize: 11, color: Colors.red, fontWeight: "700" },
-  buyBtn: {
+  routeIdentity: { flex: 1, minWidth: 0 },
+  routeCodeLine: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    justifyContent: "space-between",
+    gap: Spacing.md,
+  },
+  routeCode: {
+    color: Colors.text,
+    fontFamily: Typography.mono,
+    fontSize: 16,
+    fontWeight: Typography.weight.bold,
+  },
+  routeDistance: {
+    color: Colors.muted,
+    fontFamily: Typography.mono,
+    fontSize: 10,
+  },
+  routeCity: { color: Colors.muted, fontSize: 10, marginTop: 2 },
+  routeData: {
+    minHeight: 46,
+    flexDirection: "row",
+    alignItems: "stretch",
+    marginTop: Spacing.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.border,
+  },
+  routeMetric: { flex: 1, justifyContent: "center" },
+  metricDivider: {
+    width: StyleSheet.hairlineWidth,
+    backgroundColor: Colors.border,
+    marginVertical: Spacing.sm,
+    marginHorizontal: Spacing.md,
+  },
+  routeMetricValue: {
+    color: Colors.text,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.caption,
+    fontWeight: Typography.weight.bold,
+  },
+  routeMetricLabel: { color: Colors.muted, fontSize: 9, marginTop: 2 },
+  routeContext: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+    gap: Spacing.sm,
+    paddingTop: Spacing.sm,
+  },
+  routeContextText: {
+    color: Colors.muted,
+    fontSize: Typography.size.caption,
+    lineHeight: 16,
+  },
+  routeRivals: {
+    minHeight: 22,
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: Spacing.xs,
+  },
+  routeRivalIdentity: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+  },
+  routeRivalCode: {
+    color: Colors.text,
+    fontFamily: Typography.mono,
+    fontSize: 10,
+    fontWeight: Typography.weight.semibold,
+  },
+  primaryAction: {
+    minHeight: MIN_TOUCH,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: Spacing.sm,
-    borderRadius: Radius.lg,
-    minHeight: MIN_TOUCH + 4,
+    marginTop: Spacing.sm,
+    backgroundColor: Colors.sky,
+    borderRadius: Radius.md,
   },
-  buyText: {
-    fontSize: 12,
-    fontWeight: "700",
-    letterSpacing: 0.2,
-    textAlign: "center",
+  primaryActionText: {
+    color: Colors.textOnColor,
+    fontSize: Typography.size.label,
+    fontWeight: Typography.weight.semibold,
   },
-
-  presenceBlock: { gap: 5 },
-  presenceLabelRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  presenceLabel: {
-    fontFamily: Typography.mono,
-    fontSize: 8,
-    color: Colors.muted,
-    fontWeight: "700",
-    letterSpacing: 1.5,
-  },
-  presenceValue: { fontSize: 10, fontWeight: "700" },
-  presenceTrack: {
-    height: 5,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.inset,
-    overflow: "hidden",
-  },
-  presenceFill: { height: "100%", borderRadius: Radius.full },
-  presenceFloorRow: { flexDirection: "row", justifyContent: "space-between" },
-  presenceFloorLbl: { fontSize: 8, color: Colors.muted, fontWeight: "700" },
-
-  // Unlock preview note on unowned airports
-  previewNote: {
+  secondaryAction: {
+    minHeight: MIN_TOUCH,
     flexDirection: "row",
     alignItems: "center",
-    gap: 5,
-    paddingVertical: 6,
+    justifyContent: "center",
+    gap: Spacing.sm,
+    marginTop: Spacing.sm,
+    backgroundColor: Colors.skyDim,
+    borderRadius: Radius.md,
   },
-  previewNoteTxt: { fontSize: 11, color: Colors.muted, fontWeight: "700" },
-
-  // Hub panel
-  hubPanel: {
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.md,
-    gap: Spacing.md,
+  secondaryActionText: {
+    color: Colors.skyDark,
+    fontSize: Typography.size.label,
+    fontWeight: Typography.weight.semibold,
+  },
+  emptyState: {
+    marginHorizontal: Spacing.md,
     padding: Spacing.md,
+    backgroundColor: Colors.panel,
+    borderRadius: Radius.lg,
     borderWidth: 1,
     borderColor: Colors.border,
-    borderRadius: Radius.lg,
-    backgroundColor: Colors.panel,
-    ...Shadow.card,
   },
-
-  statRow: {
+  emptyTitle: {
+    color: Colors.text,
+    fontSize: 13,
+    fontWeight: Typography.weight.semibold,
+  },
+  emptyText: {
+    color: Colors.muted,
+    fontSize: Typography.size.caption,
+    lineHeight: 17,
+    marginTop: Spacing.xs,
+  },
+  dangerSection: {
+    marginHorizontal: Spacing.md,
+    marginTop: Spacing.lg,
+    paddingHorizontal: Spacing.lg,
+    backgroundColor: Colors.panel,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  sellButton: {
+    minHeight: 56,
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: Colors.bg,
-    borderRadius: Radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.border,
+    gap: Spacing.md,
     paddingVertical: Spacing.sm,
   },
-  stat: { flex: 1, alignItems: "center", gap: 2 },
-  statVal: {
-    fontFamily: Typography.mono,
-    fontSize: 15,
-    fontWeight: "700",
-    color: Colors.text,
-  },
-  statLbl: {
-    fontFamily: Typography.mono,
-    fontSize: 8,
-    color: Colors.muted,
-    fontWeight: "700",
-    letterSpacing: 0.5,
-  },
-  statDivider: {
-    width: StyleSheet.hairlineWidth,
-    height: 28,
-    backgroundColor: Colors.border,
-  },
-
-  // Upgrade — requirements as vertical column, never wraps
-  upgradeBlock: { gap: Spacing.sm },
-  upgradeRequirements: { flexDirection: "column", gap: 6 },
-  req: { flexDirection: "row", alignItems: "center", gap: 6 },
-  reqTxt: { fontSize: 11, fontWeight: "700", flex: 1 },
-
-  upgradeBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.sm,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 10,
-  },
-  upgradeTxt: { fontSize: 13, fontWeight: "700" },
-  upgradeDetail: {
-    fontSize: 10,
-    color: Colors.muted,
-    fontWeight: "700",
-    marginTop: 1,
-  },
-
-  maxBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    alignSelf: "flex-start",
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.inset,
-  },
-  maxTxt: { fontSize: 10, fontWeight: "700" },
-
-  // Section headers
-  sectionHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: Spacing.lg,
-    paddingBottom: Spacing.xs,
-  },
-  sectionTitleRow: { flexDirection: "row", alignItems: "center", gap: 5 },
-  eyebrow: {
-    fontFamily: Typography.mono,
-    fontSize: 9,
-    color: Colors.skyDark,
-    letterSpacing: 2.5,
-    fontWeight: "700",
-  },
-  waitingBadge: {
-    backgroundColor: Palette.redSoft,
-    borderRadius: Radius.full,
-    borderWidth: 1,
-    borderColor: Colors.red,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-  },
-  waitingBadgeTxt: {
-    fontFamily: Typography.mono,
-    fontSize: 9,
+  sellCopy: { flex: 1 },
+  sellTitle: {
     color: Colors.red,
-    fontWeight: "700",
+    fontSize: Typography.size.label,
+    fontWeight: Typography.weight.semibold,
   },
-
-  emptyBoard: { padding: Spacing.xl, alignItems: "center", gap: 2 },
-  emptyTxt: { fontSize: 13, color: Colors.muted, fontWeight: "700" },
-  emptySub: {
-    fontSize: 11,
+  sellDetail: {
     color: Colors.muted,
-    opacity: 0.6,
-    marginTop: 4,
-    textAlign: "center",
-  },
-
-  // Sell — quiet text-style, no solid fill, no shadow
-  sellHubBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    marginHorizontal: Spacing.lg,
-    marginTop: Spacing.lg,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.md,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.red,
-    backgroundColor: Palette.redSoft,
-  },
-  sellHubTitle: { fontSize: 13, fontWeight: "700", color: Colors.red },
-  sellHubSub: {
-    fontSize: 10,
-    color: Colors.red,
-    opacity: 0.6,
-    fontWeight: "600",
-    marginTop: 1,
+    fontSize: Typography.size.caption,
+    lineHeight: 17,
+    marginTop: Spacing.xxs,
   },
 });

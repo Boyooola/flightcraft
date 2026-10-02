@@ -1,46 +1,50 @@
 /**
- * Flightcraft visual foundation
+ * Flightcraft visual foundation.
  *
- * Direction: modern airport operations — bright, practical, and tactile.
- * Warm paper surfaces keep the interface out of "generic dark dashboard"
- * territory, while aviation blue and safety colours make actions readable.
+ * Direction: a flat aviation operations interface. Structure comes from type,
+ * spacing, and dividers. Blue identifies actions. Other colours are reserved
+ * for operational status and are not used as decoration.
  */
 
 export const Palette = {
-  cloud: "#F5F2EA",
-  paper: "#FFFDF8",
+  cloud: "#F2F4F3",
+  paper: "#FFFFFF",
   white: "#FFFFFF",
-  ink: "#182532",
-  slate: "#68737D",
-  mist: "#A5ADB3",
-  line: "#D9D7CF",
-  blue: "#1769AA",
-  blueDeep: "#0E4F82",
-  blueSoft: "#DCECF6",
-  green: "#2E8B65",
-  greenSoft: "#DDEFE6",
-  orange: "#E98A2E",
-  orangeSoft: "#F8E8D5",
-  red: "#D94841",
-  redSoft: "#F8DEDC",
-  violet: "#7458A6",
-  violetSoft: "#EAE3F3",
+  ink: "#111820",
+  slate: "#52606B",
+  mist: "#7D8790",
+  line: "#CDD3D7",
+
+  blue: "#075D82",
+  blueDeep: "#063F58",
+  blueSoft: "#E7EDF0",
+
+  green: "#24734E",
+  greenSoft: "#E8EEEA",
+  orange: "#A55B00",
+  orangeSoft: "#F1ECE4",
+  red: "#B43A35",
+  redSoft: "#F1E8E7",
+
+  // Kept for compatibility. Purple UI decoration is intentionally removed.
+  violet: "#405463",
+  violetSoft: "#E9EDEF",
 } as const;
 
 export const Colors = {
-  // Canvas and surfaces
+  // Surfaces
   bg: Palette.cloud,
   surface: Palette.paper,
   panel: Palette.white,
   raised: Palette.white,
-  inset: "#ECE9E1",
+  inset: "#E9ECEB",
 
-  // Dividers and focus states
-  border: "rgba(24,37,50,0.13)",
-  borderSection: "rgba(24,37,50,0.20)",
-  borderHi: "rgba(23,105,170,0.55)",
+  // Structural lines and input focus
+  border: Palette.line,
+  borderSection: "#AEB7BD",
+  borderHi: Palette.blue,
 
-  // Primary and operational accents
+  // Primary action and semantic status
   sky: Palette.blue,
   skyDark: Palette.blueDeep,
   skyDim: Palette.blueSoft,
@@ -50,29 +54,27 @@ export const Colors = {
   purple: Palette.violet,
   orange: Palette.orange,
 
-  // Text hierarchy
+  // Text
   text: Palette.ink,
   muted: Palette.slate,
   dim: Palette.mist,
   textOnColor: Palette.white,
 
-  // Aircraft-family identification
-  embraer: Palette.green,
-  bombardier: Palette.blue,
-  boeing: Palette.orange,
-  airbus: Palette.violet,
+  // Aircraft families use the same restrained blue and neutral system.
+  embraer: Palette.blue,
+  bombardier: Palette.slate,
+  boeing: Palette.blueDeep,
+  airbus: Palette.ink,
 
-  // Scrims used behind dialogs and temporary overlays
-  overlay: "rgba(24,37,50,0.48)",
-  overlayLight: "rgba(24,37,50,0.18)",
+  // Scrims are functional layers behind modal content.
+  overlay: "rgba(17,24,32,0.52)",
+  overlayLight: "rgba(17,24,32,0.18)",
 } as const;
 
 export const Typography = {
-  // Display is reserved for large airline/airport-style headings.
-  display: "BebasNeue" as const,
-  // Mono is for flight numbers, money, time, and compact operational data.
+  // Headings use the native system face. SpaceMono is loaded in app/_layout.
+  display: undefined as undefined,
   mono: "SpaceMono" as const,
-  // Body uses the native platform font for comfortable reading.
   body: undefined as undefined,
   weight: {
     regular: "400" as const,
@@ -85,14 +87,14 @@ export const Typography = {
     label: 12,
     body: 15,
     title: 20,
-    display: 32,
+    display: 30,
   },
   lineHeight: {
     caption: 15,
     label: 16,
     body: 22,
     title: 26,
-    display: 36,
+    display: 34,
   },
 } as const;
 
@@ -108,37 +110,37 @@ export const Spacing = {
 } as const;
 
 export const Radius = {
-  sm: 6,
-  md: 10,
-  lg: 14,
-  xl: 20,
+  sm: 3,
+  md: 5,
+  lg: 8,
+  xl: 10,
   full: 9999,
 } as const;
 
-/** Subtle elevation for paper-like cards; avoid floating glass panels. */
+/**
+ * Flat surfaces have no elevation. The floating token is intentionally subtle
+ * and should be limited to temporary overlays and modal controls.
+ */
 export const Shadow = {
   card: {
     shadowColor: Palette.ink,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 2,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0,
+    shadowRadius: 0,
+    elevation: 0,
   },
   floating: {
     shadowColor: Palette.ink,
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.14,
-    shadowRadius: 18,
-    elevation: 6,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 3,
   },
 } as const;
 
-// Minimum comfortable touch target (Apple HIG and Material guidance).
 export const MIN_TOUCH = 44;
 
-// A daylight basemap keeps geography legible beneath the operational UI.
 export const MAP_STYLE = "mapbox://styles/mapbox/light-v11";
 
-// A custom Mapbox Studio style can still be supplied without changing code.
 export const MAP_STYLE_URL =
   process.env.EXPO_PUBLIC_MAPBOX_STYLE_URL ?? MAP_STYLE;

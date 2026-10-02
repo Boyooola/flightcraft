@@ -1,13 +1,11 @@
 /**
- * Flightcraft privacy policy presented as a readable in-game document.
+ * FlightCraft privacy policy presented as a readable in-game document.
  */
 
 import {
   Colors,
   MIN_TOUCH,
-  Palette,
   Radius,
-  Shadow,
   Spacing,
   Typography,
 } from "@/constants/theme";
@@ -22,81 +20,71 @@ const LAST_UPDATED = "September 2026";
 
 function PolicySection({
   number,
-  icon,
   title,
   children,
 }: {
   number: string;
-  icon: keyof typeof Ionicons.glyphMap;
   title: string;
   children: ReactNode;
 }) {
   return (
-    <View style={sectionStyles.card}>
-      <View style={sectionStyles.header}>
-        <View style={sectionStyles.numberBox}>
-          <Text style={sectionStyles.number}>{number}</Text>
-        </View>
-        <View style={sectionStyles.icon}>
-          <Ionicons name={icon} size={17} color={Colors.sky} />
-        </View>
-        <Text style={sectionStyles.title}>{title}</Text>
+    <View style={styles.policySection}>
+      <View style={styles.policyHeading}>
+        <Text style={styles.policyNumber}>{number}</Text>
+        <Text accessibilityRole="header" style={styles.policyTitle}>
+          {title}
+        </Text>
       </View>
-
-      <View style={sectionStyles.body}>{children}</View>
+      <View style={styles.policyBody}>{children}</View>
     </View>
   );
 }
 
 function Paragraph({ children }: { children: ReactNode }) {
-  return <Text style={sectionStyles.paragraph}>{children}</Text>;
+  return <Text style={styles.paragraph}>{children}</Text>;
 }
 
 function Bullet({ children }: { children: ReactNode }) {
   return (
-    <View style={sectionStyles.bulletRow}>
-      <View style={sectionStyles.bullet} />
-      <Text style={sectionStyles.bulletText}>{children}</Text>
+    <View style={styles.bulletRow}>
+      <Text accessibilityElementsHidden style={styles.bulletMark}>
+        •
+      </Text>
+      <Text style={styles.bulletText}>{children}</Text>
     </View>
   );
 }
 
-function ServiceRow({ name, purpose }: { name: string; purpose: string }) {
-  return (
-    <View style={serviceStyles.row}>
-      <Ionicons
-        name="checkmark-circle-outline"
-        size={15}
-        color={Colors.green}
-      />
-      <View style={serviceStyles.copy}>
-        <Text style={serviceStyles.name}>{name}</Text>
-        <Text style={serviceStyles.purpose}>{purpose}</Text>
-      </View>
-    </View>
-  );
-}
-
-function SummaryItem({
-  icon,
+function SummaryRow({
   label,
   value,
-  color,
-  surface,
+  last = false,
 }: {
-  icon: keyof typeof Ionicons.glyphMap;
   label: string;
   value: string;
-  color: string;
-  surface: string;
+  last?: boolean;
 }) {
   return (
-    <View style={summaryStyles.item}>
-      <View style={[summaryStyles.icon, { backgroundColor: surface }]}>
-        <Ionicons name={icon} size={17} color={color} />
-      </View>
-      <Text style={summaryStyles.label}>{label}</Text>
-      <Text style={summaryStyles.value}>{value}</Text>
+    <View style={[styles.summaryRow, last && styles.lastRow]}>
+      <Text style={styles.summaryLabel}>{label}</Text>
+      <Text style={styles.summaryValue}>{value}</Text>
+    </View>
+  );
+}
+
+function ServiceRow({
+  name,
+  purpose,
+  last = false,
+}: {
+  name: string;
+  purpose: string;
+  last?: boolean;
+}) {
+  return (
+    <View style={[styles.serviceRow, last && styles.lastRow]}>
+      <Text style={styles.serviceName}>{name}</Text>
+      <Text style={styles.servicePurpose}>{purpose}</Text>
     </View>
   );
 }
@@ -115,23 +103,21 @@ export default function PrivacyPolicySheet() {
       showsVerticalScrollIndicator={false}
     >
       <View style={styles.header}>
-        <View style={styles.headerMark}>
+        <View style={styles.headerIcon}>
           <Ionicons
             name="shield-checkmark-outline"
-            size={21}
-            color={Colors.green}
+            size={22}
+            color={Colors.skyDark}
           />
         </View>
-
         <View style={styles.headerCopy}>
-          <Text style={styles.kicker}>YOUR DATA</Text>
-          <Text style={styles.screenTitle}>Privacy Policy</Text>
-          <Text style={styles.subtitle}>Flightcraft mobile game</Text>
+          <Text style={styles.screenTitle}>Privacy policy</Text>
+          <Text style={styles.subtitle}>Last updated {LAST_UPDATED}</Text>
         </View>
-
         <TouchableOpacity
           accessibilityLabel="Close privacy policy"
           accessibilityRole="button"
+          activeOpacity={0.7}
           onPress={closeSheet}
           style={styles.closeButton}
         >
@@ -139,70 +125,47 @@ export default function PrivacyPolicySheet() {
         </TouchableOpacity>
       </View>
 
-      <View style={styles.introCard}>
-        <View style={styles.introTop}>
-          <View style={styles.introCopy}>
-            <Text style={styles.introLabel}>PLAIN-LANGUAGE SUMMARY</Text>
-            <Text style={styles.introTitle}>
-              Your game data powers your airline.
-            </Text>
-          </View>
-          <View style={styles.updatedPill}>
-            <Text style={styles.updatedLabel}>UPDATED</Text>
-            <Text style={styles.updatedValue}>{LAST_UPDATED}</Text>
-          </View>
-        </View>
-
-        <Text style={styles.introText}>
-          This policy explains what Flightcraft collects, why it is needed, who
+      <View style={styles.introduction}>
+        <Text accessibilityRole="header" style={styles.introductionTitle}>
+          How FlightCraft handles game data
+        </Text>
+        <Text style={styles.introductionText}>
+          This policy explains what FlightCraft collects, why it is needed, who
           helps provide the game, and the choices available to you.
         </Text>
+      </View>
 
-        <View style={summaryStyles.row}>
-          <SummaryItem
-            icon="save-outline"
-            label="GAME DATA"
-            value="Saved progress"
-            color={Colors.sky}
-            surface={Palette.blueSoft}
+      <View style={styles.summarySection}>
+        <Text style={styles.summaryTitle}>Summary</Text>
+        <View style={styles.summaryTable}>
+          <SummaryRow
+            label="Game progress"
+            value="Stored on device and in Supabase"
           />
-          <SummaryItem
-            icon="game-controller-outline"
-            label="IDENTITY"
-            value="Play Games ID"
-            color={Colors.purple}
-            surface={Palette.violetSoft}
+          <SummaryRow
+            label="Player identity"
+            value="Play Games ID and display name"
           />
-          <SummaryItem
-            icon="eye-off-outline"
-            label="REWARDED ADS"
-            value="Optional only"
-            color={Colors.amber}
-            surface={Palette.orangeSoft}
-          />
-        </View>
-
-        <View style={styles.noSaleBanner}>
-          <Ionicons name="hand-left-outline" size={16} color={Colors.green} />
-          <Text style={styles.noSaleText}>
-            Flightcraft does not sell your personal data.
-          </Text>
+          <SummaryRow label="Rewarded ads" value="Optional only" />
+          <SummaryRow label="Personal data sale" value="Not sold" last />
         </View>
       </View>
 
-      <View style={styles.documentLabelRow}>
-        <Text style={styles.documentLabel}>FULL POLICY</Text>
-        <Text style={styles.documentHint}>Read each section below</Text>
+      <View style={styles.documentHeading}>
+        <Text accessibilityRole="header" style={styles.documentTitle}>
+          Full policy
+        </Text>
+        <Text style={styles.documentHint}>12 sections</Text>
       </View>
 
-      <PolicySection number="01" icon="business-outline" title="Who We Are">
+      <PolicySection number="01" title="Who we are">
         <Paragraph>
-          Flightcraft is a mobile airline tycoon game. This privacy policy
-          applies to the Flightcraft mobile app and related game services.
+          FlightCraft is a mobile airline tycoon game. This privacy policy
+          applies to the FlightCraft mobile app and related game services.
         </Paragraph>
       </PolicySection>
 
-      <PolicySection number="02" icon="server-outline" title="Data We Collect">
+      <PolicySection number="02" title="Data we collect">
         <Paragraph>
           We collect game-related data needed to operate the game, including:
         </Paragraph>
@@ -217,11 +180,7 @@ export default function PrivacyPolicySheet() {
         </Paragraph>
       </PolicySection>
 
-      <PolicySection
-        number="03"
-        icon="game-controller-outline"
-        title="How We Use Data"
-      >
+      <PolicySection number="03" title="How we use data">
         <Paragraph>We use this data to:</Paragraph>
         <Bullet>Save and restore your airline progress</Bullet>
         <Bullet>Operate achievements and leaderboard features</Bullet>
@@ -229,7 +188,7 @@ export default function PrivacyPolicySheet() {
         <Bullet>Diagnose crashes and maintain app stability</Bullet>
       </PolicySection>
 
-      <PolicySection number="04" icon="trophy-outline" title="Leaderboard">
+      <PolicySection number="04" title="Leaderboard">
         <Paragraph>
           If you use leaderboard features, your chosen airline name and score
           may be visible to other players. Your airline name does not need to be
@@ -237,14 +196,10 @@ export default function PrivacyPolicySheet() {
         </Paragraph>
       </PolicySection>
 
-      <PolicySection
-        number="05"
-        icon="cloud-outline"
-        title="Storage and Security"
-      >
+      <PolicySection number="05" title="Storage and security">
         <Paragraph>
           Game data is stored on your device and in Supabase. Your account is
-          identified by your Google Play Games player ID. Flightcraft does not
+          identified by your Google Play Games player ID. FlightCraft does not
           store a password for your game account.
         </Paragraph>
         <Paragraph>
@@ -253,43 +208,35 @@ export default function PrivacyPolicySheet() {
         </Paragraph>
       </PolicySection>
 
-      <PolicySection number="06" icon="videocam-outline" title="Advertising">
+      <PolicySection number="06" title="Advertising">
         <Paragraph>
-          Flightcraft may offer rewarded video ads powered by Google AdMob.
+          FlightCraft may offer rewarded video ads powered by Google AdMob.
           These ads appear only after you choose to watch one in exchange for an
           in-game reward.
         </Paragraph>
         <Paragraph>
-          Flightcraft requests non-personalized rewarded ads. Google AdMob may
+          FlightCraft requests non-personalized rewarded ads. Google AdMob may
           still process device or advertising identifiers under Google&apos;s
           own privacy terms. Advertising preferences can be managed in your
           device or Google account settings.
         </Paragraph>
       </PolicySection>
 
-      <PolicySection
-        number="07"
-        icon="notifications-outline"
-        title="Notifications"
-      >
+      <PolicySection number="07" title="Notifications">
         <Paragraph>
-          Flightcraft may schedule local notifications on your device to remind
+          FlightCraft may schedule local notifications on your device to remind
           you about game progress or rewards. The current app does not upload a
           push-notification token. Notifications can be disabled in your device
           settings.
         </Paragraph>
       </PolicySection>
 
-      <PolicySection
-        number="08"
-        icon="link-outline"
-        title="Third-Party Services"
-      >
+      <PolicySection number="08" title="Third-party services">
         <Paragraph>
-          Flightcraft uses service providers for authentication, cloud storage,
+          FlightCraft uses service providers for authentication, cloud storage,
           crash reporting, advertising, and app distribution:
         </Paragraph>
-        <View style={serviceStyles.list}>
+        <View style={styles.serviceTable}>
           <ServiceRow
             name="Google Play Games Services"
             purpose="Player identity, achievements, and leaderboards"
@@ -309,6 +256,7 @@ export default function PrivacyPolicySheet() {
           <ServiceRow
             name="Expo / EAS"
             purpose="Application building and distribution"
+            last
           />
         </View>
         <Paragraph>
@@ -316,23 +264,19 @@ export default function PrivacyPolicySheet() {
         </Paragraph>
       </PolicySection>
 
-      <PolicySection number="09" icon="people-outline" title="Children">
+      <PolicySection number="09" title="Children">
         <Paragraph>
-          Flightcraft is intended for a general audience. We do not knowingly
+          FlightCraft is intended for a general audience. We do not knowingly
           collect personal information from children under 13. If you believe a
           child has provided personal information, contact us so we can review
           and delete it when appropriate.
         </Paragraph>
       </PolicySection>
 
-      <PolicySection
-        number="10"
-        icon="person-circle-outline"
-        title="Your Choices and Rights"
-      >
+      <PolicySection number="10" title="Your choices and rights">
         <Paragraph>
           You may use Delete airline data in Settings to permanently remove your
-          Flightcraft airline and saved progress from our servers.
+          FlightCraft airline and saved progress from our servers.
         </Paragraph>
         <Bullet>Disable local notifications in device settings</Bullet>
         <Bullet>
@@ -343,11 +287,11 @@ export default function PrivacyPolicySheet() {
         </Bullet>
         <Paragraph>
           Google Play Games achievements and leaderboard records are managed by
-          Google and are not deleted with your Flightcraft airline data.
+          Google and are not deleted with your FlightCraft airline data.
         </Paragraph>
       </PolicySection>
 
-      <PolicySection number="11" icon="refresh-outline" title="Policy Updates">
+      <PolicySection number="11" title="Policy updates">
         <Paragraph>
           We may update this privacy policy from time to time. Important changes
           will be reflected in the Last updated date and may also be
@@ -355,19 +299,21 @@ export default function PrivacyPolicySheet() {
         </Paragraph>
       </PolicySection>
 
-      <PolicySection number="12" icon="mail-outline" title="Contact">
+      <PolicySection number="12" title="Contact">
         <Paragraph>
           For privacy questions or data requests, contact us through the
-          Flightcraft page on the Google Play Store.
+          FlightCraft page on the Google Play Store.
         </Paragraph>
       </PolicySection>
 
       <View style={styles.footer}>
-        <View style={styles.footerMark}>
-          <Ionicons name="shield-checkmark" size={17} color={Colors.green} />
-        </View>
-        <View>
-          <Text style={styles.footerTitle}>Flightcraft Privacy Policy</Text>
+        <Ionicons
+          name="shield-checkmark-outline"
+          size={18}
+          color={Colors.skyDark}
+        />
+        <View style={styles.footerCopy}>
+          <Text style={styles.footerTitle}>FlightCraft privacy policy</Text>
           <Text style={styles.footerText}>Last updated {LAST_UPDATED}</Text>
         </View>
       </View>
@@ -375,325 +321,232 @@ export default function PrivacyPolicySheet() {
   );
 }
 
-const summaryStyles = StyleSheet.create({
-  row: {
-    flexDirection: "row",
-    gap: Spacing.sm,
-  },
-  item: {
-    flex: 1,
-    alignItems: "center",
-    backgroundColor: Palette.cloud,
-    borderRadius: Radius.md,
-    paddingHorizontal: Spacing.xs,
-    paddingVertical: Spacing.sm,
-  },
-  icon: {
-    width: 34,
-    height: 34,
-    borderRadius: Radius.full,
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: Spacing.xs,
-  },
-  label: {
-    color: Colors.dim,
-    fontSize: 7,
-    fontWeight: Typography.weight.bold,
-    letterSpacing: 0.6,
-    textAlign: "center",
-  },
-  value: {
-    color: Colors.text,
-    fontSize: 9,
-    lineHeight: 13,
-    fontWeight: Typography.weight.bold,
-    textAlign: "center",
-    marginTop: Spacing.xxs,
-  },
-});
-
-const serviceStyles = StyleSheet.create({
-  list: {
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    overflow: "hidden",
-  },
-  row: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: Spacing.sm,
-    backgroundColor: Palette.cloud,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.border,
-  },
-  copy: {
-    flex: 1,
-  },
-  name: {
-    color: Colors.text,
-    fontSize: 11,
-    lineHeight: 15,
-    fontWeight: Typography.weight.bold,
-  },
-  purpose: {
-    color: Colors.muted,
-    fontSize: 10,
-    lineHeight: 14,
-    marginTop: Spacing.xxs,
-  },
-});
-
-const sectionStyles = StyleSheet.create({
-  card: {
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.md,
-    backgroundColor: Colors.panel,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    padding: Spacing.md,
-  },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.sm,
-    marginBottom: Spacing.md,
-  },
-  numberBox: {
-    width: 28,
-    height: 28,
-    borderRadius: Radius.md,
-    backgroundColor: Colors.inset,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  number: {
-    color: Colors.muted,
-    fontFamily: Typography.mono,
-    fontSize: 9,
-    fontWeight: Typography.weight.bold,
-  },
-  icon: {
-    width: 34,
-    height: 34,
-    borderRadius: Radius.md,
-    backgroundColor: Palette.blueSoft,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  title: {
-    flex: 1,
-    color: Colors.text,
-    fontSize: 15,
-    lineHeight: 19,
-    fontWeight: Typography.weight.bold,
-  },
-  body: {
-    gap: Spacing.sm,
-  },
-  paragraph: {
-    color: Colors.muted,
-    fontSize: 12,
-    lineHeight: 19,
-  },
-  bulletRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: Spacing.sm,
-    paddingLeft: Spacing.xs,
-  },
-  bullet: {
-    width: 6,
-    height: 6,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.sky,
-    marginTop: 6,
-  },
-  bulletText: {
-    flex: 1,
-    color: Colors.muted,
-    fontSize: 11,
-    lineHeight: 17,
-  },
-});
-
 const styles = StyleSheet.create({
   root: {
     flex: 1,
+    backgroundColor: Colors.surface,
   },
   content: {
-    paddingBottom: Spacing.xxl,
+    backgroundColor: Colors.surface,
   },
   header: {
+    minHeight: 68,
     flexDirection: "row",
     alignItems: "center",
     gap: Spacing.md,
     paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.sm,
-    paddingBottom: Spacing.lg,
+    paddingVertical: Spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
   },
-  headerMark: {
-    width: 44,
-    height: 44,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.green,
-    backgroundColor: Palette.greenSoft,
+  headerIcon: {
+    width: 42,
+    height: 42,
     alignItems: "center",
     justifyContent: "center",
   },
   headerCopy: {
     flex: 1,
-  },
-  kicker: {
-    color: Colors.green,
-    fontSize: 9,
-    fontWeight: Typography.weight.bold,
-    letterSpacing: 1.7,
+    minWidth: 0,
   },
   screenTitle: {
     color: Colors.text,
-    fontFamily: Typography.display,
-    fontSize: 29,
-    lineHeight: 31,
-    letterSpacing: 0.5,
+    fontSize: Typography.size.title,
+    lineHeight: Typography.lineHeight.title,
+    fontWeight: Typography.weight.bold,
   },
   subtitle: {
+    marginTop: Spacing.xxs,
     color: Colors.muted,
-    fontSize: Typography.size.caption,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
   },
   closeButton: {
     width: MIN_TOUCH,
     height: MIN_TOUCH,
-    borderRadius: Radius.full,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.panel,
     alignItems: "center",
     justifyContent: "center",
+    borderRadius: Radius.md,
   },
-  introCard: {
+  introduction: {
     marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.xl,
-    backgroundColor: Colors.panel,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderLeftWidth: 5,
-    borderLeftColor: Colors.green,
-    padding: Spacing.lg,
-    gap: Spacing.md,
-    ...Shadow.card,
+    paddingVertical: Spacing.xl,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSection,
   },
-  introTop: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    gap: Spacing.md,
-  },
-  introCopy: {
-    flex: 1,
-  },
-  introLabel: {
-    color: Colors.green,
-    fontSize: 8,
+  introductionTitle: {
+    color: Colors.text,
+    fontSize: 20,
+    lineHeight: 27,
     fontWeight: Typography.weight.bold,
-    letterSpacing: 1.1,
   },
-  introTitle: {
+  introductionText: {
+    marginTop: Spacing.sm,
+    color: Colors.muted,
+    fontSize: Typography.size.body,
+    lineHeight: Typography.lineHeight.body,
+  },
+  summarySection: {
+    marginTop: Spacing.xl,
+    paddingHorizontal: Spacing.lg,
+  },
+  summaryTitle: {
+    minHeight: 36,
     color: Colors.text,
     fontSize: 18,
-    lineHeight: 23,
+    lineHeight: 24,
     fontWeight: Typography.weight.bold,
-    marginTop: Spacing.xs,
   },
-  updatedPill: {
-    alignItems: "flex-end",
-    backgroundColor: Palette.greenSoft,
-    borderRadius: Radius.md,
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: 6,
+  summaryTable: {
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSection,
   },
-  updatedLabel: {
-    color: Colors.green,
-    fontSize: 7,
-    fontWeight: Typography.weight.bold,
-    letterSpacing: 0.7,
-  },
-  updatedValue: {
-    color: Colors.text,
-    fontSize: 9,
-    fontWeight: Typography.weight.bold,
-    marginTop: Spacing.xxs,
-  },
-  introText: {
-    color: Colors.muted,
-    fontSize: 12,
-    lineHeight: 19,
-  },
-  noSaleBanner: {
+  summaryRow: {
+    minHeight: 54,
     flexDirection: "row",
     alignItems: "center",
-    gap: Spacing.sm,
-    backgroundColor: Palette.greenSoft,
-    borderRadius: Radius.md,
-    padding: Spacing.sm,
+    gap: Spacing.lg,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
   },
-  noSaleText: {
+  lastRow: {
+    borderBottomWidth: 0,
+  },
+  summaryLabel: {
+    width: "35%",
+    color: Colors.text,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.body,
+    fontWeight: Typography.weight.semibold,
+  },
+  summaryValue: {
     flex: 1,
-    color: Colors.green,
-    fontSize: 11,
-    lineHeight: 15,
-    fontWeight: Typography.weight.bold,
+    color: Colors.muted,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.body,
+    textAlign: "right",
   },
-  documentLabelRow: {
+  documentHeading: {
+    minHeight: 62,
+    marginTop: Spacing.xl,
     marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.sm,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    gap: Spacing.md,
   },
-  documentLabel: {
-    color: Colors.muted,
-    fontSize: 9,
+  documentTitle: {
+    color: Colors.text,
+    fontSize: 20,
+    lineHeight: 27,
     fontWeight: Typography.weight.bold,
-    letterSpacing: 1.7,
   },
   documentHint: {
-    color: Colors.dim,
-    fontSize: 9,
+    color: Colors.muted,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+  },
+  policySection: {
+    marginHorizontal: Spacing.lg,
+    paddingVertical: Spacing.xl,
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
+  },
+  policyHeading: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    gap: Spacing.md,
+  },
+  policyNumber: {
+    width: 28,
+    color: Colors.muted,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+  },
+  policyTitle: {
+    flex: 1,
+    color: Colors.text,
+    fontSize: 18,
+    lineHeight: 24,
+    fontWeight: Typography.weight.bold,
+  },
+  policyBody: {
+    marginTop: Spacing.md,
+    paddingLeft: 28 + Spacing.md,
+    gap: Spacing.sm,
+  },
+  paragraph: {
+    color: Colors.muted,
+    fontSize: 14,
+    lineHeight: 22,
+  },
+  bulletRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: Spacing.sm,
+  },
+  bulletMark: {
+    width: 10,
+    color: Colors.skyDark,
+    fontSize: 15,
+    lineHeight: 20,
+  },
+  bulletText: {
+    flex: 1,
+    color: Colors.muted,
+    fontSize: 14,
+    lineHeight: 21,
+  },
+  serviceTable: {
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  serviceRow: {
+    paddingVertical: Spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+  },
+  serviceName: {
+    color: Colors.text,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+    fontWeight: Typography.weight.bold,
+  },
+  servicePurpose: {
+    marginTop: Spacing.xxs,
+    color: Colors.muted,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.body,
   },
   footer: {
-    marginHorizontal: Spacing.lg,
     marginTop: Spacing.sm,
+    marginHorizontal: Spacing.lg,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
     gap: Spacing.sm,
-    paddingTop: Spacing.lg,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Colors.border,
+    paddingVertical: Spacing.lg,
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
   },
-  footerMark: {
-    width: 34,
-    height: 34,
-    borderRadius: Radius.full,
-    backgroundColor: Palette.greenSoft,
-    alignItems: "center",
-    justifyContent: "center",
+  footerCopy: {
+    flex: 1,
   },
   footerTitle: {
     color: Colors.text,
-    fontSize: 11,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
     fontWeight: Typography.weight.bold,
   },
   footerText: {
-    color: Colors.dim,
-    fontSize: 9,
     marginTop: Spacing.xxs,
+    color: Colors.muted,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
   },
 });

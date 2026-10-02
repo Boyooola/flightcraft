@@ -1,17 +1,3 @@
-/**
- * lib/revenue.ts
- *
- * v0.4.0 revenue system
- *
- * Improvements:
- * - Proper utilization-based fixed cost amortization
- * - Demand elasticity affects realized passengers
- * - More realistic aircraft productivity
- * - Explicit load factor support
- * - Stable fixed vs variable airline economics
- * - Sequential group filling retained
- */
-
 import { passengerFareMultiplier } from "@/lib/passengerTypes";
 
 import type { HaulClass } from "@/store";
@@ -25,6 +11,7 @@ export interface PriceStrategyConfig {
   shortLabel: string;
   fareMultiplier: number;
   demandMultiplier: number;
+  /** Kept for compatibility. Passenger preference is calculated elsewhere. */
   popularityBonus: number;
   description: string;
 }
@@ -33,6 +20,7 @@ export interface AircraftUtilization {
   flightsPerDay: number;
   utilization: number;
   band: UtilizationBand;
+  /** Scheduling is descriptive and never changes route economics. */
   multiplier: number;
   label: string;
 }
@@ -41,65 +29,56 @@ export interface RouteRevenueResult {
   gross: number;
   cost: number;
   net: number;
-
   ypp: number;
-
   loadFactor: number;
+  /** Legacy alias for load factor. True market share is calculated elsewhere. */
   marketCapture: number;
-
   priceStrategy: PriceStrategy;
   fareMultiplier: number;
   demandMultiplier: number;
-
   utilization: AircraftUtilization;
-
   congestionMultiplier: number;
 }
 
-const SHORT_BASE_FARE = 28;
-const MEDIUM_BASE_FARE = 42;
-const LONG_BASE_FARE = 95;
+const MIN_FARE = 28;
+const HOURS_PER_DAY = 24;
+const DEFAULT_TURNAROUND_HOURS = 0.8;
+const DEFAULT_BUFFER_HOURS = 0.4;
 
-const MIN_PAYOUT = 30;
+function finiteNumber(value: number, fallback = 0): number {
+  return Number.isFinite(value) ? value : fallback;
+}
 
-/**
- * Real airline economics:
- *
- * ~90–95% fixed
- * ~5–10% passenger-variable
- */
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(maximum, Math.max(minimum, finiteNumber(value, minimum)));
+}
 
-const FIXED_COST_RATIO = 0.93;
-const VARIABLE_COST_RATIO = 0.07;
+function nonNegative(value: number): number {
+  return Math.max(0, finiteNumber(value));
+}
 
 export function haulFromDistance(distNm: number): HaulClass {
-  if (distNm < 1_000) return "short";
-  if (distNm < 3_500) return "medium";
+  const distance = nonNegative(distNm);
+  if (distance < 1_000) return "short";
+  if (distance < 3_500) return "medium";
   return "long";
 }
 
-function baseFareForHaul(haul: HaulClass): number {
-  if (haul === "long") return LONG_BASE_FARE;
-  if (haul === "medium") return MEDIUM_BASE_FARE;
-  return SHORT_BASE_FARE;
-}
+/**
+ * Base fare for one passenger before passenger mix and pricing strategy.
+ *
+ * The stepped distance bands keep the rule easy to tune without abrupt fare
+ * jumps at the short, medium, and long-haul boundaries.
+ */
+function distanceFare(distNm: number): number {
+  const distance = nonNegative(distNm);
+  const shortDistance = Math.min(distance, 1_000);
+  const mediumDistance = Math.min(Math.max(distance - 1_000, 0), 2_500);
+  const longDistance = Math.max(distance - 3_500, 0);
 
-function distanceBonus(distNm: number): number {
-  if (distNm < 300) return 1.0;
-  if (distNm < 1_000) return 1.15;
-  if (distNm < 2_500) return 1.35;
-  if (distNm < 5_000) return 1.65;
-  return 2.0;
-}
-
-function trustMultiplier(trustPct: number): number {
-  const trust = Math.max(0, Math.min(100, trustPct));
-
-  if (trust < 50) {
-    return 0.85 + (trust / 50) * 0.15;
-  }
-
-  return 1.0 + ((trust - 50) / 50) * 0.25;
+  return (
+    24 + shortDistance * 0.016 + mediumDistance * 0.022 + longDistance * 0.026
+  );
 }
 
 export function yieldPerPax(
@@ -107,30 +86,26 @@ export function yieldPerPax(
   trustPct: number,
   distNm?: number,
 ): number {
-  const dist = distNm ?? 500;
-  const resolvedHaul = distNm ? haulFromDistance(distNm) : haul;
+  // These parameters remain in the public API for existing callers. Haul is
+  // derived from distance and trust affects passenger choice, not ticket price.
+  void haul;
+  void trustPct;
 
-  const fare =
-    baseFareForHaul(resolvedHaul) *
-    distanceBonus(dist) *
-    trustMultiplier(trustPct);
-
-  return Math.max(MIN_PAYOUT, Math.round(fare));
+  const fare = distanceFare(distNm ?? 500);
+  return Math.max(MIN_FARE, Math.round(fare));
 }
 
 export function computePriceElasticity(distNm: number): number {
-  if (distNm < 800) return 1.25;
-  if (distNm < 3_000) return 1.0;
+  const distance = nonNegative(distNm);
+  if (distance < 800) return 1.25;
+  if (distance < 3_000) return 1;
   return 0.75;
 }
 
 export function normalizePriceStrategy(
   strategy?: string | null,
 ): PriceStrategy {
-  if (strategy === "low" || strategy === "premium") {
-    return strategy;
-  }
-
+  if (strategy === "low" || strategy === "premium") return strategy;
   return "standard";
 }
 
@@ -139,64 +114,61 @@ export function priceStrategyConfig(
   elasticity = 1,
 ): PriceStrategyConfig {
   const normalized = normalizePriceStrategy(strategy);
-
-  const safeElasticity = Math.max(0.5, Math.min(1.5, elasticity));
+  const safeElasticity = clamp(elasticity, 0.5, 1.5);
 
   if (normalized === "low") {
     return {
       strategy: "low",
-      label: "Low Fare",
+      label: "Low fare",
       shortLabel: "Low",
       fareMultiplier: 0.85,
-      demandMultiplier: 1 + 0.25 * safeElasticity,
-      popularityBonus: 1,
-      description: "+Demand, -Yield",
+      demandMultiplier: Math.min(1.3, 1 + 0.2 * safeElasticity),
+      popularityBonus: 0,
+      description: "More demand, lower fare",
     };
   }
 
   if (normalized === "premium") {
     return {
       strategy: "premium",
-      label: "Premium",
+      label: "Premium fare",
       shortLabel: "Premium",
-      fareMultiplier: 1.28,
-      demandMultiplier: Math.max(0.55, 1 - 0.2 * safeElasticity),
-      popularityBonus: -1,
-      description: "+Yield, -Demand",
+      fareMultiplier: 1.2,
+      demandMultiplier: Math.max(0.7, 1 - 0.18 * safeElasticity),
+      popularityBonus: 0,
+      description: "Higher fare, lower demand",
     };
   }
 
   return {
     strategy: "standard",
-    label: "Standard",
+    label: "Standard fare",
     shortLabel: "Standard",
     fareMultiplier: 1,
     demandMultiplier: 1,
     popularityBonus: 0,
-    description: "Balanced",
+    description: "Balanced fare and demand",
   };
 }
 
 /**
- * Realistic aircraft productivity.
- *
- * Includes:
- * - flight time
- * - turnaround time
- * - operational buffer
+ * Maximum complete service cycles an aircraft can operate in one game day.
+ * One cycle includes the outbound flight, return flight, turnaround, and a
+ * small recovery buffer.
  */
-
 export function dailyFlights(
   distNm: number,
   speedKts: number,
-  turnaroundHours = 0.8,
-  bufferHours = 0.4,
+  turnaroundHours = DEFAULT_TURNAROUND_HOURS,
+  bufferHours = DEFAULT_BUFFER_HOURS,
 ): number {
-  const flightHours = distNm / Math.max(1, speedKts);
+  const distance = Math.max(1, nonNegative(distNm));
+  const speed = Math.max(1, nonNegative(speedKts));
+  const turnaround = nonNegative(turnaroundHours);
+  const buffer = nonNegative(bufferHours);
+  const cycleHours = (distance / speed) * 2 + turnaround + buffer;
 
-  const cycleHours = flightHours * 2 + turnaroundHours + bufferHours;
-
-  return Math.max(1, Math.floor(24 / Math.max(1, cycleHours)));
+  return Math.max(1, Math.floor(HOURS_PER_DAY / Math.max(1, cycleHours)));
 }
 
 export function computeAircraftUtilization(params: {
@@ -204,29 +176,30 @@ export function computeAircraftUtilization(params: {
   speedKts: number;
   turnaroundHours?: number;
 }): AircraftUtilization {
-  const { distNm, speedKts, turnaroundHours = 0.8 } = params;
+  const flightsPerDay = dailyFlights(
+    params.distNm,
+    params.speedKts,
+    params.turnaroundHours,
+  );
+  const utilization = clamp(flightsPerDay / 4, 0, 1.5);
 
-  const flightsPerDay = dailyFlights(distNm, speedKts, turnaroundHours);
-
-  const utilization = Math.min(1.5, flightsPerDay / 4);
-
-  if (utilization < 0.6) {
+  if (flightsPerDay <= 1) {
     return {
       flightsPerDay,
       utilization,
       band: "underused",
-      multiplier: 0.88,
-      label: "Underused",
+      multiplier: 1,
+      label: "Light schedule",
     };
   }
 
-  if (utilization > 1.15) {
+  if (flightsPerDay >= 6) {
     return {
       flightsPerDay,
       utilization,
       band: "overused",
-      multiplier: 0.94,
-      label: "Overused",
+      multiplier: 1,
+      label: "Intensive schedule",
     };
   }
 
@@ -234,11 +207,27 @@ export function computeAircraftUtilization(params: {
     flightsPerDay,
     utilization,
     band: "healthy",
-    multiplier: 1.0,
-    label: "Healthy",
+    multiplier: 1,
+    label: "Balanced schedule",
   };
 }
 
+/** Operating cost for one completed service cycle. */
+function rotationOperatingCost(
+  distNm: number,
+  costPerSector: number,
+  fuelPerNm: number,
+  loadFactor: number,
+): number {
+  const distance = nonNegative(distNm);
+  const fixedCost = nonNegative(costPerSector);
+  const fuelCost = distance * nonNegative(fuelPerNm);
+  const fuelLoadMultiplier = 0.92 + clamp(loadFactor, 0, 1) * 0.08;
+
+  return Math.round(fixedCost + fuelCost * fuelLoadMultiplier);
+}
+
+/** Estimated operating cost for every scheduled cycle in one day. */
 export function routeOperatingCost(
   distNm: number,
   speedKts: number,
@@ -247,27 +236,21 @@ export function routeOperatingCost(
   loadFactor = 1,
 ): number {
   const flights = dailyFlights(distNm, speedKts);
-
-  /**
-   * Fuel varies slightly with load.
-   * Most costs remain fixed.
-   */
-
-  const fuelMultiplier = 0.92 + loadFactor * 0.08;
-
-  const rawCost =
-    flights * (costPerSector + distNm * fuelPerNm * fuelMultiplier);
-
-  return Math.round(rawCost);
+  return (
+    flights *
+    rotationOperatingCost(distNm, costPerSector, fuelPerNm, loadFactor)
+  );
 }
 
+/**
+ * Settles one completed service cycle. Only boarded passengers earn revenue;
+ * the aircraft's operating cost is paid even when the flight is empty.
+ */
 export function calcRouteRevenue(params: {
   distNm: number;
   speedKts: number;
   trustPct: number;
-  /** Actual passengers boarded this rotation */
   boardedPax: number;
-  /** Maximum seats on this plane */
   seatCapacity: number;
   costPerSector: number;
   fuelPerNm: number;
@@ -278,80 +261,61 @@ export function calcRouteRevenue(params: {
   businessPct: number;
   leisurePct: number;
 }): RouteRevenueResult {
-  const {
-    distNm,
-    speedKts,
-    trustPct,
-    boardedPax,
+  const distance = nonNegative(params.distNm);
+  const seatCapacity = Math.max(
+    1,
+    Math.floor(nonNegative(params.seatCapacity)),
+  );
+  const boardedPax = Math.min(
     seatCapacity,
-    costPerSector,
-    fuelPerNm,
-    crowdMultiplier = 1.0,
-    priceStrategy = "standard",
-    priceElasticity = computePriceElasticity(distNm),
-    congestionMultiplier = 1.0,
-    businessPct = 0.25,
-    leisurePct = 0.75,
-  } = params;
-
-  const mix = { businessPct, leisurePct };
-  const fareMul = passengerFareMultiplier(mix);
-
-  const safeBoarded = Math.max(0, Math.min(boardedPax, seatCapacity));
-  const safeSeatCap = Math.max(1, seatCapacity);
-
-  const pricing = priceStrategyConfig(priceStrategy, priceElasticity);
-  const haul = haulFromDistance(distNm);
-  const ypp = yieldPerPax(haul, trustPct, distNm) * fareMul;
-
-  // Load factor — how full the plane is (0–1)
-  const loadFactor = safeBoarded / safeSeatCap;
-  // Market capture — how much of seated pax were delivered
-  const marketCapture = loadFactor;
-
-  // Revenue — only from boarded pax
+    Math.floor(nonNegative(params.boardedPax)),
+  );
+  const loadFactor = boardedPax / seatCapacity;
+  const pricing = priceStrategyConfig(
+    params.priceStrategy,
+    params.priceElasticity,
+  );
+  const businessPct = nonNegative(params.businessPct);
+  const leisurePct = nonNegative(params.leisurePct);
+  const mixTotal = businessPct + leisurePct;
+  const mix =
+    mixTotal > 0
+      ? {
+          businessPct: businessPct / mixTotal,
+          leisurePct: leisurePct / mixTotal,
+        }
+      : { businessPct: 0.25, leisurePct: 0.75 };
+  const ypp = Math.round(
+    yieldPerPax(haulFromDistance(distance), params.trustPct, distance) *
+      passengerFareMultiplier(mix),
+  );
+  const operatingMultiplier = clamp(params.crowdMultiplier, 0, 2);
+  const congestionMultiplier = clamp(params.congestionMultiplier, 0, 2);
   const gross = Math.round(
-    safeBoarded *
+    boardedPax *
       ypp *
       pricing.fareMultiplier *
-      crowdMultiplier *
+      operatingMultiplier *
       congestionMultiplier,
   );
-
-  // Utilization
-  const utilization = computeAircraftUtilization({ distNm, speedKts });
-
-  // Cost per rotation — daily cost divided by rotations
-  const rotations = Math.max(1, dailyFlights(distNm, speedKts));
-  const dailyCost = routeOperatingCost(
-    distNm,
-    speedKts,
-    costPerSector,
-    fuelPerNm,
+  const cost = rotationOperatingCost(
+    distance,
+    params.costPerSector,
+    params.fuelPerNm,
     loadFactor,
   );
-  const costPerRotation = Math.round(dailyCost / rotations);
-
-  // Fixed costs — paid regardless of how many pax boarded
-  const fixedCost = Math.round(
-    (costPerRotation * FIXED_COST_RATIO) /
-      Math.max(0.7, utilization.multiplier),
-  );
-  // Variable costs — tiny portion that scales with load
-  const variableCost = Math.round(
-    costPerRotation * VARIABLE_COST_RATIO * loadFactor,
-  );
-
-  const cost = fixedCost + variableCost;
-  const net = gross - cost;
+  const utilization = computeAircraftUtilization({
+    distNm: distance,
+    speedKts: params.speedKts,
+  });
 
   return {
     gross,
     cost,
-    net,
+    net: gross - cost,
     ypp,
     loadFactor,
-    marketCapture,
+    marketCapture: loadFactor,
     priceStrategy: pricing.strategy,
     fareMultiplier: pricing.fareMultiplier,
     demandMultiplier: pricing.demandMultiplier,
@@ -368,46 +332,43 @@ export interface GroupRevenueResult {
 }
 
 export function dailyInterest(loan: number, annualRatePct: number): number {
-  return Math.round((loan * (annualRatePct / 100)) / 365);
+  const principal = nonNegative(loan);
+  const annualRate = nonNegative(annualRatePct) / 100;
+  return Math.round((principal * annualRate) / 365);
+}
+
+function safeCashValue(value: number): number {
+  const safe = finiteNumber(value);
+  return Math.abs(safe) < 0.5 ? 0 : safe;
 }
 
 export function fmtCash(value: number): string {
-  const sign = value < 0 ? "-" : "";
-  const abs = Math.abs(value ?? 0);
+  const safe = safeCashValue(value);
+  const sign = safe < 0 ? "-" : "";
+  const abs = Math.abs(safe);
 
   if (abs >= 1_000_000_000) {
     return `${sign}$${(abs / 1_000_000_000).toFixed(1)}B`;
   }
-
   if (abs >= 1_000_000) {
     return `${sign}$${(abs / 1_000_000).toFixed(1)}M`;
   }
-
-  if (abs >= 1_000) {
-    return `${sign}$${Math.round(abs / 1000)}K`;
-  }
-
+  if (abs >= 1_000) return `${sign}$${Math.round(abs / 1_000)}K`;
   return `${sign}$${Math.round(abs).toLocaleString()}`;
 }
 
 export function fmtCashExact(value: number): string {
-  const abs = Math.abs(value ?? 0);
-  const sign = value < 0 ? "-$" : "+$";
-
-  return sign + Math.round(abs).toLocaleString();
+  const safe = safeCashValue(value);
+  const sign = safe < 0 ? "-$" : "+$";
+  return sign + Math.round(Math.abs(safe)).toLocaleString();
 }
 
 export function fmtCashShort(value: number): string {
-  const abs = Math.abs(value ?? 0);
-  const sign = value < 0 ? "-$" : "+$";
+  const safe = safeCashValue(value);
+  const abs = Math.abs(safe);
+  const sign = safe < 0 ? "-$" : "+$";
 
-  if (abs >= 1_000_000) {
-    return sign + (abs / 1_000_000).toFixed(1) + "M";
-  }
-
-  if (abs >= 1_000) {
-    return sign + Math.round(abs / 1000) + "K";
-  }
-
+  if (abs >= 1_000_000) return sign + (abs / 1_000_000).toFixed(1) + "M";
+  if (abs >= 1_000) return sign + Math.round(abs / 1_000) + "K";
   return sign + Math.round(abs).toLocaleString();
 }

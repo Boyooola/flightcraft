@@ -11,11 +11,7 @@
 import { seedHash } from "@/lib/seed";
 
 export type GlobalContractKind =
-  | "move_pax"
-  | "clear_slots"
-  | "earn_net"
-  | "stable_hubs"
-  | "anti_rival";
+  "move_pax" | "clear_slots" | "earn_net" | "stable_hubs" | "anti_rival";
 
 export type GlobalContractStatus = "active" | "completed" | "failed";
 

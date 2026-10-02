@@ -1,23 +1,16 @@
 /**
- * lib/demandWaves.ts
+ * Predictable, one-day passenger surges for existing route opportunities.
  *
- * Endgame pressure layer: deterministic demand waves.
- *
- * Every few days, the world creates a passenger spike.
- * This does NOT create individual passengers. It boosts pax_day on existing
- * pending demands, then the passengerFlow system makes those pax appear over
- * the day.
+ * A wave never creates a destination, extends aircraft range, or changes the
+ * permanent OD market. It only adds travelers to suitable opportunities that
+ * already exist for the current day.
  */
 
 import { seedHash } from "@/lib/seed";
 import type { Demand, OwnedHub } from "@/store";
 
 export type DemandWaveKind =
-  | "holiday"
-  | "business"
-  | "festival"
-  | "school_break"
-  | "global_rush";
+  "holiday" | "business" | "festival" | "school_break" | "network_rush";
 
 export interface DemandWave {
   id: string;
@@ -25,11 +18,8 @@ export interface DemandWave {
   title: string;
   icon: string;
   desc: string;
-  effect: string;
-  multiplier: number;
-  maxTargets: number;
-  targetHint: string;
-  revenueMultiplier: number;
+  increasePercent: number;
+  targetLimit: number;
 }
 
 export interface DemandWaveUpdate {
@@ -48,186 +38,278 @@ export interface AppliedDemandWave {
   affectedHubs: string[];
 }
 
+export const DEMAND_WAVE_INTERVAL_DAYS = 7;
+
 const WAVES: Omit<DemandWave, "id">[] = [
   {
     kind: "holiday",
-    title: "Holiday Rush",
-    icon: "gift-outline",
-    desc: "Travelers are flooding airports for holiday trips. Add capacity fast.",
-    effect: "+40% pax on selected demand slots",
-    multiplier: 1.4,
-    maxTargets: 5,
-    targetHint: "busy leisure routes",
-    revenueMultiplier: 1.08,
+    title: "Holiday travel",
+    icon: "calendar-outline",
+    desc: "Leisure bookings are higher on selected routes today.",
+    increasePercent: 30,
+    targetLimit: 4,
   },
   {
     kind: "business",
-    title: "Business Surge",
+    title: "Business travel",
     icon: "briefcase-outline",
-    desc: "Business travelers are moving between major cities today.",
-    effect: "+30% pax on medium and long routes",
-    multiplier: 1.3,
-    maxTargets: 4,
-    targetHint: "medium/long demand",
-    revenueMultiplier: 1.12,
+    desc: "Corporate bookings are higher on key city routes today.",
+    increasePercent: 25,
+    targetLimit: 3,
   },
   {
     kind: "festival",
-    title: "Festival Travel",
-    icon: "musical-notes-outline",
-    desc: "A regional event is creating a sudden passenger spike from one hub.",
-    effect: "+60% pax from one hub",
-    multiplier: 1.6,
-    maxTargets: 3,
-    targetHint: "one crowded hub",
-    revenueMultiplier: 1.05,
+    title: "Regional event",
+    icon: "location-outline",
+    desc: "A local event is increasing travel from one of your hubs today.",
+    increasePercent: 35,
+    targetLimit: 3,
   },
   {
     kind: "school_break",
-    title: "School Break",
-    icon: "people-circle-outline",
-    desc: "Families are traveling on short and medium routes.",
-    effect: "+35% pax on short/medium demand",
-    multiplier: 1.35,
-    maxTargets: 5,
-    targetHint: "short/medium routes",
-    revenueMultiplier: 1.05,
+    title: "School break",
+    icon: "people-outline",
+    desc: "Family travel is higher on short and medium routes today.",
+    increasePercent: 25,
+    targetLimit: 4,
   },
   {
-    kind: "global_rush",
-    title: "Global Rush",
-    icon: "earth-outline",
-    desc: "Passenger demand spikes across the whole network.",
-    effect: "+25% pax across many open slots",
-    multiplier: 1.25,
-    maxTargets: 8,
-    targetHint: "network-wide",
-    revenueMultiplier: 1.15,
+    kind: "network_rush",
+    title: "Network rush",
+    icon: "airplane-outline",
+    desc: "Passenger demand is slightly higher across the network today.",
+    increasePercent: 15,
+    targetLimit: 6,
   },
 ];
 
-export function isDemandWaveDay(day: number): boolean {
-  if (day < 7) return false;
+const DESTINATION_TIER_SCORE: Record<Demand["dest"]["tier"], number> = {
+  local: 0,
+  minor: 20,
+  regional: 40,
+  major: 70,
+  large: 90,
+  mega: 110,
+};
 
-  // Early game gets a softer cadence, late game gets stricter pressure.
-  if (day < 35) return day % 7 === 0;
-  return day % 5 === 0;
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+function normalizedIata(value: string | null | undefined): string {
+  return value?.trim().toUpperCase() ?? "";
+}
+
+function nonNegativeInteger(value: number | null | undefined): number {
+  return Math.max(
+    0,
+    Math.round(typeof value === "number" && Number.isFinite(value) ? value : 0),
+  );
+}
+
+function businessShare(demand: Demand): number {
+  return clamp(demand.business_pct ?? 0.25, 0, 1);
+}
+
+function leisureShare(demand: Demand): number {
+  return clamp(demand.leisure_pct ?? 1 - businessShare(demand), 0, 1);
+}
+
+function uniqueOpenDemands(demands: readonly Demand[]): Demand[] {
+  const byId = new Map<string, Demand>();
+
+  demands.forEach((demand) => {
+    if (!demand.id || demand.status !== "pending") return;
+    if (!normalizedIata(demand.origin?.iata)) return;
+    if (!normalizedIata(demand.dest?.iata)) return;
+    if (nonNegativeInteger(demand.base_pax_day) === 0) return;
+    byId.set(demand.id, demand);
+  });
+
+  return [...byId.values()];
+}
+
+export function isDemandWaveDay(day: number): boolean {
+  const safeDay = Math.floor(day);
+  return (
+    Number.isFinite(safeDay) &&
+    safeDay >= DEMAND_WAVE_INTERVAL_DAYS &&
+    safeDay % DEMAND_WAVE_INTERVAL_DAYS === 0
+  );
 }
 
 export function generateDemandWave(
   day: number,
   gameSeed: string = "DEFAULT",
 ): DemandWave {
-  const idx = seedHash(gameSeed, "demand-wave", day) % WAVES.length;
-  const base = WAVES[idx];
+  const safeDay = Math.max(1, Math.floor(day));
+  const seed = gameSeed.trim() || "DEFAULT";
+  const base = WAVES[seedHash(seed, "demand-wave", safeDay) % WAVES.length];
 
   return {
     ...base,
-    id: `wave-${day}-${base.kind}`,
+    id: `wave-${safeDay}-${base.kind}`,
   };
 }
 
-function scoreDemandForWave(
-  demand: Demand,
+function festivalHubIata(params: {
+  day: number;
+  gameSeed: string;
+  demands: readonly Demand[];
+  hubs: readonly OwnedHub[];
+}): string | null {
+  const openHubIatas = new Set(
+    params.demands.map((demand) => normalizedIata(demand.hub_iata)),
+  );
+  const ownedWithOpenDemand = params.hubs
+    .map((hub) => normalizedIata(hub.airport.iata))
+    .filter((iata) => iata && openHubIatas.has(iata));
+  const candidates =
+    ownedWithOpenDemand.length > 0
+      ? ownedWithOpenDemand
+      : [...openHubIatas].filter(Boolean);
+
+  if (candidates.length === 0) return null;
+
+  const index =
+    seedHash(params.gameSeed, "festival-hub", params.day) % candidates.length;
+  return candidates[index];
+}
+
+function eligibleDemands(
+  demands: readonly Demand[],
   wave: DemandWave,
-  preferredHubIata?: string,
-): number {
-  let score = demand.base_pax_day ?? 0;
+  selectedFestivalHub: string | null,
+): Demand[] {
+  switch (wave.kind) {
+    case "holiday":
+      return [...demands];
+    case "business":
+      return [...demands];
+    case "festival":
+      return selectedFestivalHub
+        ? demands.filter(
+            (demand) => normalizedIata(demand.hub_iata) === selectedFestivalHub,
+          )
+        : [];
+    case "school_break":
+      return demands.filter((demand) => demand.haul !== "long");
+    case "network_rush":
+      return [...demands];
+  }
+}
 
-  if (wave.kind === "business") {
-    if (demand.haul === "medium") score += 400;
-    if (demand.haul === "long") score += 650;
-    if (demand.haul === "short") score -= 250;
+function demandScore(params: {
+  demand: Demand;
+  wave: DemandWave;
+  day: number;
+  gameSeed: string;
+}): number {
+  const { demand, wave, day, gameSeed } = params;
+  const baseDemand = nonNegativeInteger(demand.base_pax_day);
+  const variety =
+    seedHash(gameSeed, "wave-route", day, wave.kind, demand.id) % 101;
+
+  let relevance = 0;
+  switch (wave.kind) {
+    case "holiday":
+      relevance =
+        leisureShare(demand) * 300 + DESTINATION_TIER_SCORE[demand.dest.tier];
+      break;
+    case "business":
+      relevance = businessShare(demand) * 400;
+      if (demand.haul === "medium") relevance += 60;
+      if (demand.haul === "long") relevance += 90;
+      break;
+    case "festival":
+      relevance = leisureShare(demand) * 120;
+      break;
+    case "school_break":
+      relevance = leisureShare(demand) * 300;
+      if (demand.haul === "short") relevance += 80;
+      break;
+    case "network_rush":
+      relevance = 0;
+      break;
   }
 
-  if (wave.kind === "school_break") {
-    if (demand.haul === "short") score += 450;
-    if (demand.haul === "medium") score += 250;
-    if (demand.haul === "long") score -= 250;
-  }
-
-  if (wave.kind === "festival" && preferredHubIata) {
-    if (demand.hub_iata === preferredHubIata) score += 1000;
-    else score -= 500;
-  }
-
-  if (wave.kind === "global_rush") {
-    score += demand.delivered_pax_today > 0 ? 150 : 0;
-  }
-
-  if (wave.kind === "holiday") {
-    score +=
-      demand.dest.tier === "mega" || demand.dest.tier === "major" ? 250 : 0;
-  }
-
-  return score;
+  return baseDemand + relevance + variety;
 }
 
 export function applyDemandWave(params: {
   day: number;
   gameSeed: string;
-  demands: Demand[];
-  hubs: OwnedHub[];
+  demands: readonly Demand[];
+  hubs: readonly OwnedHub[];
 }): AppliedDemandWave | null {
-  const { day, gameSeed, demands, hubs } = params;
+  const safeDay = Math.floor(params.day);
+  if (!isDemandWaveDay(safeDay)) return null;
 
-  if (!isDemandWaveDay(day)) return null;
+  const gameSeed = params.gameSeed.trim() || "DEFAULT";
+  const wave = generateDemandWave(safeDay, gameSeed);
+  const openDemands = uniqueOpenDemands(params.demands);
+  if (openDemands.length === 0) return null;
 
-  const wave = generateDemandWave(day, gameSeed);
-  const pending = demands.filter((demand) => demand.status === "pending");
+  const selectedFestivalHub =
+    wave.kind === "festival"
+      ? festivalHubIata({
+          day: safeDay,
+          gameSeed,
+          demands: openDemands,
+          hubs: params.hubs,
+        })
+      : null;
+  const candidates = eligibleDemands(openDemands, wave, selectedFestivalHub);
+  if (candidates.length === 0) return null;
 
-  if (pending.length === 0) return null;
-
-  const preferredHubIata =
-    wave.kind === "festival" && hubs.length > 0
-      ? hubs[seedHash(gameSeed, "wave-festival-hub", day) % hubs.length]
-          ?.airport.iata
-      : undefined;
-
-  const ranked = [...pending]
+  const selected = candidates
     .map((demand) => ({
       demand,
-      score: scoreDemandForWave(demand, wave, preferredHubIata),
+      score: demandScore({ demand, wave, day: safeDay, gameSeed }),
     }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, Math.min(wave.maxTargets, pending.length));
+    .sort(
+      (left, right) =>
+        right.score - left.score ||
+        left.demand.id.localeCompare(right.demand.id),
+    )
+    .slice(0, wave.targetLimit)
+    .map(({ demand }) => demand);
 
-  const updates: DemandWaveUpdate[] = ranked
-    .map(({ demand }) => {
-      const oldPaxDay = demand.base_pax_day ?? 0;
-      const newPaxDay = Math.max(
-        oldPaxDay + 1,
-        Math.round(oldPaxDay * wave.multiplier),
-      );
+  const updates = selected.map((demand): DemandWaveUpdate => {
+    const oldPaxDay = nonNegativeInteger(demand.base_pax_day);
+    const addedPax = Math.max(
+      1,
+      Math.round(oldPaxDay * (wave.increasePercent / 100)),
+    );
 
-      return {
-        demandId: demand.id,
-        oldPaxDay,
-        newPaxDay,
-        addedPax: Math.max(0, newPaxDay - oldPaxDay),
-        originIata: demand.origin.iata,
-        destIata: demand.dest.iata,
-      };
-    })
-    .filter((update) => update.addedPax > 0);
+    return {
+      demandId: demand.id,
+      oldPaxDay,
+      newPaxDay: oldPaxDay + addedPax,
+      addedPax,
+      originIata: normalizedIata(demand.origin.iata),
+      destIata: normalizedIata(demand.dest.iata),
+    };
+  });
 
-  if (updates.length === 0) return null;
-
-  const affectedHubs = Array.from(
-    new Set(
+  const demandById = new Map(selected.map((demand) => [demand.id, demand]));
+  const affectedHubs = [
+    ...new Set(
       updates
-        .map((update) => {
-          const demand = demands.find((d) => d.id === update.demandId);
-          return demand?.hub_iata;
-        })
-        .filter(Boolean) as string[],
+        .map((update) =>
+          normalizedIata(demandById.get(update.demandId)?.hub_iata),
+        )
+        .filter(Boolean),
     ),
-  );
+  ].sort();
 
   return {
     wave,
     updates,
-    totalAddedPax: updates.reduce((sum, update) => sum + update.addedPax, 0),
+    totalAddedPax: updates.reduce(
+      (total, update) => total + update.addedPax,
+      0,
+    ),
     affectedHubs,
   };
 }

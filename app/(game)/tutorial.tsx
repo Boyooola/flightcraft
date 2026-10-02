@@ -1,115 +1,91 @@
 /**
- * app/(game)/tutorial.tsx
+ * First-flight tutorial.
  *
- * DIRECTED onboarding — guides player through their FIRST actions.
- * Instead of passive text cards, each step highlights what to do
- * and waits for the player to actually do it before advancing.
- *
- * Steps:
- *   1. BUY HUB   — pulse a hub dot, prompt player to tap it
- *   2. BUY PLANE — open Fleet automatically, prompt to buy starter plane
- *   3. CREATE ROUTE — activate FAB, prompt to tap hub then dest
- *   4. SPEED UP  — show speed controls
- *   5. DONE      — dismiss tutorial
+ * This guide follows the real game state. A step is complete only after the
+ * player performs its action, so the tutorial cannot drift away from the map,
+ * sheets, or a restored save.
  */
 
-import { Colors, Radius, Spacing } from "@/constants/theme";
 import {
+  Colors,
+  MIN_TOUCH,
+  Radius,
+  Spacing,
+  Typography,
+} from "@/constants/theme";
+import { useHaptics } from "@/hooks/useHaptics";
+import {
+  useActiveSheet,
   useAirline,
   useGameStore,
   useHubs,
   useOwnedPlanes,
+  useRouteCreationActive,
   useRoutes,
 } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
-import { useEffect, useRef, useState } from "react";
-import {
-  Animated,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from "react-native";
+import { useEffect, useState } from "react";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-type Step = "hub" | "plane" | "route" | "speed" | "done";
+type TutorialStep = "hub" | "plane" | "route" | "speed" | "done";
+type IconName = keyof typeof Ionicons.glyphMap;
 
-interface StepDef {
-  id: Step;
-  icon: string;
+interface TutorialContent {
+  icon: IconName;
   title: string;
   body: string;
-  action: string; // what the player should do right now
-  checkDone: (state: {
-    hubCount: number;
-    planeCount: number;
-    routeCount: number;
-  }) => boolean;
+  instruction?: string;
+  buttonLabel?: string;
 }
 
-const STEPS: StepDef[] = [
-  {
-    id: "hub",
-    icon: "location",
-    title: "Buy your first hub",
-    body: "Tap any airport dot on the map to open it, then tap Buy Hub. Start with a regional or domestic airport — they're cheaper.",
-    action: "👆 Tap an airport on the map",
-    checkDone: (s) => s.hubCount >= 1,
+const STEP_ORDER: TutorialStep[] = ["hub", "plane", "route", "speed"];
+
+const CONTENT: Record<TutorialStep, TutorialContent> = {
+  hub: {
+    icon: "location-outline",
+    title: "Build your first hub",
+    body: "Tap an airport marker. Review the cost, then choose Build hub.",
+    instruction: "Tap an airport on the map",
   },
-  {
-    id: "plane",
-    icon: "airplane",
-    title: "Buy an aircraft",
-    body: "Open the Fleet tab below and buy your first aircraft. Start with the cheapest available — it's enough to get your first route running.",
-    action: "👇 Open Fleet tab and buy a plane",
-    checkDone: (s) => s.planeCount >= 1,
+  plane: {
+    icon: "airplane-outline",
+    title: "Buy your first aircraft",
+    body: "Open Fleet, choose Buy aircraft, and purchase an affordable starter aircraft.",
+    buttonLabel: "Open Fleet",
   },
-  {
-    id: "route",
-    icon: "add-circle-outline",
-    title: "Create your first route",
-    body: "Tap the ✈ button in the centre of the tab bar to enter route creation. Then tap your hub, then a destination. The banner at top will guide you.",
-    action: "👇 Tap the ✈ button below",
-    checkDone: (s) => s.routeCount >= 1,
+  route: {
+    icon: "git-network-outline",
+    title: "Open your first route",
+    body: "Choose your hub, then a destination. Select an aircraft in the route review.",
+    buttonLabel: "Start route",
   },
-  {
-    id: "speed",
+  speed: {
     icon: "speedometer-outline",
-    title: "Speed up time",
-    body: "Your route earns revenue as planes fly. Tap 2× or 3× in the top bar to speed things up. Watch the TODAY counter grow in real time.",
-    action: "☝️ Tap 2× or 3× in the top bar",
-    checkDone: () => false, // advance manually — speed not in store state check
+    title: "Start the simulation",
+    body: "Tap 2x or 3x in the operations header. Aircraft will fly automatically and today's result will update.",
+    instruction: "Tap 2x or 3x in the top bar",
   },
-  {
-    id: "done",
-    icon: "checkmark-circle",
-    title: "You're ready!",
-    body: "Your airline is in the air. Check Missions (flag pill, top right) for daily goals. Open Achievements to see what to unlock next.",
-    action: "Tap below to start playing",
-    checkDone: () => false,
+  done: {
+    icon: "checkmark-circle-outline",
+    title: "Your airline is operating",
+    body: "Watch the map, review Routes, and use Finance to track results.",
+    buttonLabel: "Continue playing",
   },
-];
+};
 
-function ProgressDots({ current, color }: { current: number; color: string }) {
-  return (
-    <View style={pd.wrap}>
-      {STEPS.filter((s) => s.id !== "done").map((step, i) => (
-        <View
-          key={step.id}
-          style={[
-            pd.dot,
-            i < current && { backgroundColor: color, opacity: 0.4 },
-            i === current && { backgroundColor: color, width: 20 },
-          ]}
-        />
-      ))}
-    </View>
-  );
+function requiredStep(
+  hubCount: number,
+  planeCount: number,
+  routeCount: number,
+  speed: number,
+): TutorialStep {
+  if (hubCount === 0) return "hub";
+  if (planeCount === 0) return "plane";
+  if (routeCount === 0) return "route";
+  if (speed <= 1) return "speed";
+  return "done";
 }
-const pd = StyleSheet.create({
-  wrap: { flexDirection: "row", gap: 5, alignItems: "center" },
-  dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: Colors.dim },
-});
 
 export default function TutorialScreen() {
   const insets = useSafeAreaInsets();
@@ -117,202 +93,262 @@ export default function TutorialScreen() {
   const hubs = useHubs();
   const planes = useOwnedPlanes();
   const routes = useRoutes();
-  const openSheet = useGameStore((s) => s.openSheet);
-  const setPhase = useGameStore((s) => s.setPhase);
+  const activeSheet = useActiveSheet();
+  const routeCreationActive = useRouteCreationActive();
+  const haptics = useHaptics();
 
-  const color = airline?.color ?? Colors.sky;
+  const openSheet = useGameStore((state) => state.openSheet);
+  const closeSheet = useGameStore((state) => state.closeSheet);
+  const startRouteCreation = useGameStore((state) => state.startRouteCreation);
+  const clearRouteCreation = useGameStore((state) => state.clearRouteCreation);
+  const setPhase = useGameStore((state) => state.setPhase);
+
+  const activeRouteCount = routes.filter((route) => route.active).length;
   const speed = airline?.speed ?? 1;
-  const [idx, setIdx] = useState(0);
-  const step = STEPS[Math.min(idx, STEPS.length - 1)];
+  const [stepId, setStepId] = useState<TutorialStep>(() =>
+    requiredStep(hubs.length, planes.length, activeRouteCount, speed),
+  );
 
-  // Pulse animation for action hint
-  const pulse = useRef(new Animated.Value(1)).current;
   useEffect(() => {
-    const anim = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, {
-          toValue: 1.05,
-          duration: 800,
-          useNativeDriver: true,
-        }),
-        Animated.timing(pulse, {
-          toValue: 1.0,
-          duration: 800,
-          useNativeDriver: true,
-        }),
-      ]),
+    const nextStep = requiredStep(
+      hubs.length,
+      planes.length,
+      activeRouteCount,
+      speed,
     );
-    anim.start();
-    return () => anim.stop();
-  }, [idx]);
 
-  // Auto-advance when player completes the action
-  useEffect(() => {
-    if (idx >= STEPS.length - 1) return;
-    const state = {
-      hubCount: hubs.length,
-      planeCount: planes.length,
-      routeCount: routes.filter((r) => r.active).length,
-    };
-    // Speed step auto-advances when player taps 2x or 3x
-    if (step.id === "speed" && speed > 1) {
-      const t = setTimeout(
-        () => setIdx((i) => Math.min(i + 1, STEPS.length - 1)),
-        600,
-      );
-      return () => clearTimeout(t);
-    }
-    if (STEPS[idx].checkDone(state)) {
-      // Short delay so player sees the result before advancing
-      const t = setTimeout(
-        () => setIdx((i) => Math.min(i + 1, STEPS.length - 1)),
-        800,
-      );
-      return () => clearTimeout(t);
-    }
-  }, [idx, hubs.length, planes.length, routes.length, speed]);
+    if (nextStep === stepId) return;
 
-  const handleNext = () => {
-    if (step.id === "done") {
-      setPhase("playing");
-      return;
-    }
-    // Open relevant sheet on "plane" step
-    if (step.id === "plane") openSheet("fleet");
-    setIdx((i) => Math.min(i + 1, STEPS.length - 1));
+    const timer = setTimeout(() => {
+      closeSheet();
+      setStepId(nextStep);
+      if (nextStep === "done") haptics.success();
+      else haptics.tap();
+    }, 350);
+
+    return () => clearTimeout(timer);
+  }, [
+    activeRouteCount,
+    closeSheet,
+    haptics,
+    hubs.length,
+    planes.length,
+    speed,
+    stepId,
+  ]);
+
+  const finishTutorial = () => {
+    haptics.confirm();
+    clearRouteCreation();
+    setPhase("playing");
   };
 
-  const handleSkip = () => setPhase("playing");
+  const handlePrimaryAction = () => {
+    haptics.confirm();
 
-  const bottom = insets.bottom + 80 + Spacing.md;
-  const isDoneStep = step.id === "done";
+    if (stepId === "plane") {
+      openSheet("fleet");
+      return;
+    }
+
+    if (stepId === "route") {
+      startRouteCreation();
+      return;
+    }
+
+    if (stepId === "done") finishTutorial();
+  };
+
+  // The relevant sheet or route banner supplies the next instructions. Keeping
+  // this panel hidden prevents two guides from competing for the same space.
+  if (activeSheet !== null || routeCreationActive) return null;
+
+  const content = CONTENT[stepId];
+  const isDone = stepId === "done";
+  const stepIndex = isDone ? STEP_ORDER.length : STEP_ORDER.indexOf(stepId);
+  const visibleStep = Math.min(stepIndex + 1, STEP_ORDER.length);
+  const progressWidth = `${(visibleStep / STEP_ORDER.length) * 100}%` as const;
 
   return (
     <View
-      style={[StyleSheet.absoluteFillObject, { zIndex: 150, elevation: 150 }]}
       pointerEvents="box-none"
+      style={[StyleSheet.absoluteFillObject, styles.layer]}
     >
-      {/* Semi-transparent backdrop — only at bottom so map is still usable */}
       <View
-        style={[s.backdrop, { bottom: 0, height: bottom + 200 }]}
-        pointerEvents="none"
-      />
-
-      {/* Tutorial card — bottom of screen */}
-      <View
-        style={[
-          s.card,
-          {
-            bottom,
-            left: Spacing.lg,
-            right: Spacing.lg,
-            borderColor: color + "44",
-          },
-        ]}
+        accessibilityLiveRegion="polite"
+        accessibilityLabel={`${content.title}. ${content.body}`}
+        style={[styles.panel, { bottom: insets.bottom + 70 + Spacing.md }]}
       >
-        {/* Skip */}
-        {!isDoneStep && (
-          <TouchableOpacity style={s.skipBtn} onPress={handleSkip}>
-            <Text style={s.skipTxt}>Skip tutorial</Text>
-          </TouchableOpacity>
-        )}
-
-        {/* Header */}
-        <View style={s.header}>
-          <View style={[s.iconBox, { backgroundColor: color + "1a" }]}>
-            <Ionicons name={step.icon as any} size={22} color={color} />
-          </View>
-          <View style={s.headerRight}>
-            <ProgressDots current={idx} color={color} />
-            <Text style={s.stepTitle}>{step.title}</Text>
-          </View>
+        <View style={styles.progressHeader}>
+          <Text style={styles.progressLabel}>
+            {isDone ? "First flight complete" : `Step ${visibleStep} of 4`}
+          </Text>
+          {!isDone ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Skip tutorial"
+              hitSlop={4}
+              onPress={finishTutorial}
+              style={({ pressed }) => [
+                styles.skipButton,
+                pressed && styles.textButtonPressed,
+              ]}
+            >
+              <Text style={styles.skipLabel}>Skip tutorial</Text>
+            </Pressable>
+          ) : null}
         </View>
 
-        {/* Body */}
-        <Text style={s.body}>{step.body}</Text>
+        <View style={styles.progressTrack}>
+          <View style={[styles.progressFill, { width: progressWidth }]} />
+        </View>
 
-        {/* Action hint — pulsing prompt showing what to do right now */}
-        {/* {!isDoneStep && (
-          <Animated.View
-            style={[
-              s.actionHint,
-              { borderColor: color + "55", backgroundColor: color + "10" },
-              { transform: [{ scale: pulse }] },
+        <View style={styles.headingRow}>
+          <View style={styles.iconBox}>
+            <Ionicons name={content.icon} size={21} color={Colors.skyDark} />
+          </View>
+          <Text accessibilityRole="header" style={styles.title}>
+            {content.title}
+          </Text>
+        </View>
+
+        <Text style={styles.body}>{content.body}</Text>
+
+        {content.instruction ? (
+          <View style={styles.instructionRow}>
+            <Ionicons name="navigate-outline" size={17} color={Colors.sky} />
+            <Text style={styles.instruction}>{content.instruction}</Text>
+          </View>
+        ) : null}
+
+        {content.buttonLabel ? (
+          <Pressable
+            accessibilityRole="button"
+            onPress={handlePrimaryAction}
+            style={({ pressed }) => [
+              styles.primaryButton,
+              pressed && styles.primaryButtonPressed,
             ]}
           >
-            <Text style={[s.actionTxt, { color }]}>{step.action}</Text>
-          </Animated.View>
-        )} */}
-
-        {/* Next / Done button */}
-        <TouchableOpacity
-          style={[s.nextBtn, { backgroundColor: color }]}
-          onPress={handleNext}
-          activeOpacity={0.85}
-        >
-          <Text style={s.nextTxt}>
-            {isDoneStep
-              ? "Start Playing →"
-              : step.id === "speed"
-                ? "Got it →"
-                : "Next →"}
-          </Text>
-        </TouchableOpacity>
+            <Text style={styles.primaryButtonLabel}>{content.buttonLabel}</Text>
+          </Pressable>
+        ) : null}
       </View>
     </View>
   );
 }
 
-const s = StyleSheet.create({
-  backdrop: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    backgroundColor: "rgba(4,9,15,0.6)",
+const styles = StyleSheet.create({
+  layer: {
+    zIndex: 40,
   },
-  card: {
+  panel: {
     position: "absolute",
-    backgroundColor: "rgba(8,15,30,0.97)",
-    borderRadius: Radius.xl,
+    right: Spacing.md,
+    left: Spacing.md,
+    padding: Spacing.lg,
+    backgroundColor: Colors.surface,
     borderWidth: 1,
-    padding: Spacing.md,
-    gap: Spacing.sm,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 12,
-    elevation: 10,
+    borderColor: Colors.borderSection,
+    borderRadius: Radius.lg,
+    gap: Spacing.md,
   },
-  skipBtn: { alignSelf: "flex-end" },
-  skipTxt: { fontSize: 10, color: Colors.dim },
-  header: { flexDirection: "row", alignItems: "center", gap: Spacing.md },
-  iconBox: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
+  progressHeader: {
+    minHeight: MIN_TOUCH,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: -Spacing.sm,
+    marginBottom: -Spacing.md,
+  },
+  progressLabel: {
+    color: Colors.muted,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
+  },
+  skipButton: {
+    minWidth: MIN_TOUCH,
+    minHeight: MIN_TOUCH,
     alignItems: "center",
     justifyContent: "center",
+    paddingHorizontal: Spacing.xs,
   },
-  headerRight: { flex: 1, gap: 4 },
-  stepTitle: { fontSize: 15, color: Colors.text, fontWeight: "700" },
-  body: { fontSize: 12, color: Colors.muted, lineHeight: 18 },
-  actionHint: {
-    borderRadius: Radius.md,
-    borderWidth: 1,
+  skipLabel: {
+    color: Colors.muted,
+    fontSize: Typography.size.label,
+    fontWeight: Typography.weight.medium,
+    lineHeight: Typography.lineHeight.label,
+  },
+  textButtonPressed: {
+    opacity: 0.58,
+  },
+  progressTrack: {
+    height: 2,
+    overflow: "hidden",
+    backgroundColor: Colors.border,
+  },
+  progressFill: {
+    height: 2,
+    backgroundColor: Colors.sky,
+  },
+  headingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.md,
+  },
+  iconBox: {
+    width: 36,
+    height: 36,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: Colors.skyDim,
+    borderRadius: Radius.sm,
+  },
+  title: {
+    flex: 1,
+    color: Colors.text,
+    fontSize: Typography.size.body,
+    fontWeight: Typography.weight.bold,
+    lineHeight: Typography.lineHeight.body,
+  },
+  body: {
+    color: Colors.muted,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.body,
+  },
+  instructionRow: {
+    minHeight: MIN_TOUCH,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
     paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
-    alignItems: "center",
+    backgroundColor: Colors.bg,
+    borderLeftWidth: 2,
+    borderLeftColor: Colors.sky,
   },
-  actionTxt: { fontSize: 12, fontWeight: "700", textAlign: "center" },
-  nextBtn: {
-    borderRadius: Radius.lg,
-    paddingVertical: Spacing.sm + 2,
-    alignItems: "center",
+  instruction: {
+    flex: 1,
+    color: Colors.text,
+    fontSize: Typography.size.label,
+    fontWeight: Typography.weight.semibold,
+    lineHeight: Typography.lineHeight.label,
   },
-  nextTxt: {
-    fontSize: 13,
-    color: "#fff",
-    fontWeight: "700",
-    letterSpacing: 0.5,
+  primaryButton: {
+    minHeight: MIN_TOUCH,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: Spacing.lg,
+    backgroundColor: Colors.sky,
+    borderRadius: Radius.md,
+  },
+  primaryButtonPressed: {
+    backgroundColor: Colors.skyDark,
+  },
+  primaryButtonLabel: {
+    color: Colors.textOnColor,
+    fontSize: Typography.size.label,
+    fontWeight: Typography.weight.semibold,
+    lineHeight: Typography.lineHeight.label,
   },
 });

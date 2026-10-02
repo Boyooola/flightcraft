@@ -1,212 +1,229 @@
 /**
- * hooks/useAchievementChecker.ts
+ * Evaluates achievements once after each completed game day.
  *
- * Checks all achievements every day tick.
- * State is derived purely from airport data (continent, country)
- * with no hardcoded country sets — intercontinental checks use
- * the continent field directly.
+ * The checker reads the finished day's route and demand snapshot. It derives
+ * crowding, opportunity coverage, passenger totals, and mission completions
+ * from real game state rather than placeholder values.
  */
 
-import { type AchievementId } from "@/constants/playGames";
+import type { AchievementId } from "@/constants/playGames";
 import {
-  setAchievementSteps as pgSetSteps,
-  unlockAchievement as pgUnlock,
+  setAchievementSteps as setPlayGamesSteps,
+  unlockAchievement as unlockPlayGamesAchievement,
 } from "@/hooks/usePlayGames";
-import { ACHIEVEMENTS, type AchievementState } from "@/lib/achievements";
 import {
-  useDailyMissions,
-  useEarnedAchievements,
-  useGameStore,
-  useMissionsCompleted,
-} from "@/store";
+  ACHIEVEMENTS,
+  isPlayGamesAchievementId,
+  type AchievementState,
+} from "@/lib/achievements";
+import {
+  activeDemandCount,
+  demandSlotsForHub,
+  hubCrowdingLevel,
+  type CrowdingLevel,
+} from "@/lib/demands";
+import { useEarnedAchievements, useGameStore } from "@/store";
 import { useEffect, useRef } from "react";
 
+const CROWDING_PRIORITY: Record<CrowdingLevel, number> = {
+  normal: 0,
+  busy: 1,
+  overcrowded: 2,
+  crisis: 3,
+};
+
+function totalPresencePassengers(
+  presence: ReturnType<typeof useGameStore.getState>["presence"],
+): number {
+  return presence.reduce(
+    (total, row) => total + Math.max(0, row.total_pax_delivered ?? 0),
+    0,
+  );
+}
+
 export function useAchievementChecker() {
-  const lastDay = useRef<number>(-1);
-  const totalPaxRef = useRef<number>(0);
+  const activeAirlineId = useRef<string | null>(null);
+  const lastDay = useRef(-1);
+  const totalPassengers = useRef(0);
+  const previousMissionTotal = useRef(0);
 
   const earned = useEarnedAchievements();
-  const airline = useGameStore((s) => s.airline);
-  const routes = useGameStore((s) => s.routes);
-  const hubs = useGameStore((s) => s.hubs);
-  const ownedPlanes = useGameStore((s) => s.ownedPlanes);
-  const demands = useGameStore((s) => s.demands);
-  const missionsCompleted = useMissionsCompleted();
-  const dailyMissions = useDailyMissions();
-  const earnAchievement = useGameStore((s) => s.earnAchievement);
+  const airline = useGameStore((state) => state.airline);
+  const routes = useGameStore((state) => state.routes);
+  const hubs = useGameStore((state) => state.hubs);
+  const ownedPlanes = useGameStore((state) => state.ownedPlanes);
+  const demands = useGameStore((state) => state.demands);
+  const presence = useGameStore((state) => state.presence);
+  const loadComplete = useGameStore((state) => state.loadComplete);
+  const phase = useGameStore((state) => state.phase);
 
   useEffect(() => {
-    if (!airline) return;
-    if (airline.day === lastDay.current) return;
+    if (!airline || !loadComplete || phase !== "playing") return;
+
+    const changedAirline = activeAirlineId.current !== airline.id;
+    if (changedAirline || lastDay.current < 0) {
+      activeAirlineId.current = airline.id;
+      lastDay.current = airline.day;
+      totalPassengers.current = totalPresencePassengers(presence);
+      previousMissionTotal.current = useGameStore.getState().missionsCompleted;
+      return;
+    }
+
+    if (airline.day <= lastDay.current) {
+      lastDay.current = airline.day;
+      return;
+    }
     lastDay.current = airline.day;
 
-    const activeRoutes = routes.filter((r) => r.active);
-
-    // Continents + countries from active route endpoints
+    const activeRoutes = routes.filter((route) => route.active);
     const continents = new Set<string>();
     const countries = new Set<string>();
-    activeRoutes.forEach((r) => {
-      [r.demand.origin, r.demand.dest].forEach((ap) => {
-        if (ap.continent) continents.add(ap.continent);
-        if (ap.country) countries.add(ap.country);
+
+    activeRoutes.forEach((route) => {
+      [route.demand.origin, route.demand.dest].forEach((airport) => {
+        if (airport.continent) continents.add(airport.continent);
+        if (airport.country) countries.add(airport.country);
       });
     });
 
-    // Plane families owned
-    const planesFamilies = new Set(
-      ownedPlanes.map((p) => p.plane_model.family).filter(Boolean),
+    const planeFamilies = new Set(
+      ownedPlanes.map((plane) => plane.plane_model.family).filter(Boolean),
     );
 
-    // Pax
     const totalPaxToday = demands.reduce(
-      (sum, d) => sum + (d.delivered_pax_today ?? 0),
+      (total, demand) => total + Math.max(0, demand.delivered_pax_today ?? 0),
       0,
     );
-    totalPaxRef.current += totalPaxToday;
 
-    // Trust
-    const maxTrust = hubs.reduce((max, h) => Math.max(max, h.trust), 0);
-    const avgTrust =
-      hubs.length > 0 ? hubs.reduce((s, h) => s + h.trust, 0) / hubs.length : 0;
+    // Revenue settlement runs before this effect. The rendered presence value
+    // is the previous total, while the live store may already include today.
+    // Taking the larger valid total avoids both missed and double-counted pax.
+    const livePresenceTotal = totalPresencePassengers(
+      useGameStore.getState().presence,
+    );
+    totalPassengers.current = Math.max(
+      totalPassengers.current + totalPaxToday,
+      livePresenceTotal,
+    );
 
-    // Longest route
+    const maxTrust = hubs.reduce(
+      (highest, hub) => Math.max(highest, hub.trust),
+      0,
+    );
+    const averageTrust =
+      hubs.length > 0
+        ? hubs.reduce((total, hub) => total + hub.trust, 0) / hubs.length
+        : 0;
+
     const longestRoute = activeRoutes.reduce(
-      (max, r) => Math.max(max, r.total_dist_nm ?? r.demand.dist_nm),
+      (longest, route) =>
+        Math.max(longest, route.total_dist_nm ?? route.demand.dist_nm),
       0,
     );
 
-    // Hubs on different continents
-    const hubContinents = new Set(
-      hubs.map((h) => h.airport.continent).filter(Boolean),
+    const crowdingLevels = hubs.map(
+      (hub) => hubCrowdingLevel(hub.airport.iata, demands, hub.airport).level,
     );
-    const hubsOnDiffCont = hubContinents.size >= 2;
+    const maxCrowding = crowdingLevels.reduce<CrowdingLevel>(
+      (highest, level) =>
+        CROWDING_PRIORITY[level] > CROWDING_PRIORITY[highest] ? level : highest,
+      "normal",
+    );
 
-    // Intercontinental route checks — derived from continent field, no hardcoded lists
-    // "AS" = Asia, "EU" = Europe, "NA" = North America, "SA" = South America, "OC" = Oceania, "AF" = Africa
-    const intraAsiaRoute = activeRoutes.some(
-      (r) =>
-        r.demand.origin.continent === "AS" && r.demand.dest.continent === "AS",
-    );
-    const intraEuropeRoute = activeRoutes.some(
-      (r) =>
-        r.demand.origin.continent === "EU" && r.demand.dest.continent === "EU",
-    );
-    const transAtlantic = activeRoutes.some((r) => {
-      const conts = [r.demand.origin.continent, r.demand.dest.continent]
-        .sort()
-        .join("-");
-      return conts === "EU-NA";
+    const allHubsFull =
+      hubs.length > 0 &&
+      hubs.every(
+        (hub) =>
+          activeDemandCount(hub.airport.iata, demands) >=
+          demandSlotsForHub({ hubLevel: hub.tier }),
+      );
+
+    const transAtlantic = activeRoutes.some((route) => {
+      const continentsForRoute = [
+        route.demand.origin.continent,
+        route.demand.dest.continent,
+      ].sort();
+      return continentsForRoute[0] === "EU" && continentsForRoute[1] === "NA";
     });
-    const transPacific = activeRoutes.some((r) => {
-      const oc = r.demand.origin.continent;
-      const dc = r.demand.dest.continent;
+
+    const transPacific = activeRoutes.some((route) => {
+      const origin = route.demand.origin.continent;
+      const destination = route.demand.dest.continent;
+      const originInAmericas = origin === "NA" || origin === "SA";
+      const destinationInAmericas =
+        destination === "NA" || destination === "SA";
+      const originAcrossPacific = origin === "AS" || origin === "OC";
+      const destinationAcrossPacific =
+        destination === "AS" || destination === "OC";
+
       return (
-        (oc === "NA" && (dc === "AS" || dc === "OC")) ||
-        ((oc === "AS" || oc === "OC") && dc === "NA")
+        (originInAmericas && destinationAcrossPacific) ||
+        (destinationInAmericas && originAcrossPacific)
       );
     });
 
-    // Home continent → another continent
-    // "Home" = continent of first hub purchased
-    const homeContinent = hubs.length > 0 ? hubs[0].airport.continent : null;
-    const homeToWorld = homeContinent
-      ? activeRoutes.some(
-          (r) =>
-            (r.demand.origin.continent === homeContinent &&
-              r.demand.dest.continent !== homeContinent) ||
-            (r.demand.dest.continent === homeContinent &&
-              r.demand.origin.continent !== homeContinent),
-        )
-      : false;
-
-    // Labour corridor — any route to Middle East region
-    // Derived from continent "AS" + country in Gulf area via a simple heuristic:
-    // Middle East airports are in Asia (AS) but not East/SE Asia
-    // We flag routes >2500nm within AS continent as likely ME corridors
-    const labourCorridor = activeRoutes.some(
-      (r) =>
-        r.demand.origin.continent === "AS" &&
-        r.demand.dest.continent === "AS" &&
-        (r.total_dist_nm ?? r.demand.dist_nm) > 2_500,
+    // Mission checking is declared before this hook and completes missions
+    // synchronously at rollover. Read the live lifetime count so achievements
+    // include missions completed during this exact settlement.
+    const missionTotal = useGameStore.getState().missionsCompleted;
+    const missionsToday = Math.max(
+      0,
+      missionTotal - previousMissionTotal.current,
     );
+    previousMissionTotal.current = missionTotal;
 
-    // Diaspora route — any long haul >4000nm
-    const diasporaRoute = longestRoute > 4_000;
-
-    // Missions
-    const doneToday = dailyMissions.filter((m) => m.completed).length;
-    const allMissionsToday = doneToday >= 3 && dailyMissions.length >= 3;
+    const launchedRoutes = Math.max(
+      activeRoutes.length,
+      airline.demand_score ?? 0,
+    );
 
     const state: AchievementState = {
       day: airline.day,
       cash: airline.cash,
-      loan: airline.loan,
       netWorth: airline.cash - airline.loan,
       activeRoutes: activeRoutes.length,
-      totalRoutes: airline.demand_score ?? 0,
+      totalRoutes: launchedRoutes,
       hubs: hubs.length,
       ownedPlanes: ownedPlanes.length,
-      reputation: airline.reputation ?? 0,
       totalPaxToday,
-      totalPaxAllTime: totalPaxRef.current,
+      totalPaxAllTime: totalPassengers.current,
       maxTrust,
-      avgTrust,
+      avgTrust: averageTrust,
       continents,
       countries,
-      regions: new Set(),
-      hasConnecting: activeRoutes.some((r) => !!r.via_iata),
-      hasLongHaul: longestRoute > 3_500,
+      hasConnecting: activeRoutes.some((route) => Boolean(route.via_iata)),
+      hasLongHaul: activeRoutes.some((route) => route.demand.haul === "long"),
       hasUltraLong: longestRoute > 6_000,
-      hasUltraUltra: longestRoute > 9_000,
       debtFree: airline.loan <= 0,
-      allHubsFull: hubs.length > 0 && hubs.every((h) => h.trust >= 100),
-      maxCrowding: "normal",
-      homeToWorld,
-      labourCorridor,
-      diasporaRoute,
-      intraAsiaRoute,
-      intraEuropeRoute,
+      allHubsFull,
+      maxCrowding,
       transAtlantic,
       transPacific,
-      planesFamilies,
+      planesFamilies: planeFamilies,
       speed3Active: airline.speed === 3 && activeRoutes.length >= 10,
-      missionsCompleted,
-      missionsToday: doneToday,
-      allMissionsToday,
-      routeStreak: 0,
-      hubsOnDiffCont,
-      longestRoute,
-      mostTrustedHub: maxTrust,
-      hasRouteToEvery: continents.size >= 6,
-      // PH fields removed — replaced by global equivalents above
-      phHub: false,
-      phMidEastRoute: false,
-      phEuropeRoute: false,
-      phAmericaRoute: false,
+      missionsCompleted: missionTotal,
+      missionsToday,
     };
 
     ACHIEVEMENTS.forEach((achievement) => {
       if (earned[achievement.id] !== undefined) return;
       if (!achievement.check(state)) return;
 
-      earnAchievement(achievement.id, airline.day);
+      useGameStore.getState().earnAchievement(achievement.id, airline.day);
+      if (isPlayGamesAchievementId(achievement.id)) {
+        void unlockPlayGamesAchievement(achievement.id);
+      }
 
-      // Unlock on Google Play Games
-      pgUnlock(achievement.id as AchievementId);
-
-      // Accumulate for weekly challenge tracking
-      const wp = useGameStore.getState().weeklyProgress;
-      useGameStore
-        .getState()
-        .updateWeeklyProgress({ achEarned: wp.achEarned + achievement.points });
+      useGameStore.getState().addWeeklyProgress({
+        achievementPoints: achievement.points,
+      });
     });
 
-    // Sync incremental achievements progress to Play Games
     const incrementalUpdates: [AchievementId, number][] = [
-      ["pax_10k_all_time", Math.min(10000, totalPaxRef.current)],
+      ["pax_10k_all_time", Math.min(10_000, totalPassengers.current)],
       [
         "pax_100k_all_time",
-        Math.min(10000, Math.floor(totalPaxRef.current / 10)),
+        Math.min(10_000, Math.floor(totalPassengers.current / 10)),
       ],
       ["routes_5", Math.min(5, activeRoutes.length)],
       ["routes_10", Math.min(10, activeRoutes.length)],
@@ -217,13 +234,24 @@ export function useAchievementChecker() {
       ["planes_3", Math.min(3, ownedPlanes.length)],
       ["planes_10", Math.min(10, ownedPlanes.length)],
       ["planes_25", Math.min(25, ownedPlanes.length)],
-      ["missions_10", Math.min(10, missionsCompleted)],
-      ["missions_30", Math.min(30, missionsCompleted)],
+      ["missions_10", Math.min(10, missionTotal)],
+      ["missions_30", Math.min(30, missionTotal)],
       ["countries_5", Math.min(5, countries.size)],
       ["countries_15", Math.min(15, countries.size)],
     ];
+
     incrementalUpdates.forEach(([id, steps]) => {
-      if (steps > 0) pgSetSteps(id, steps);
+      if (steps > 0) void setPlayGamesSteps(id, steps);
     });
-  }, [airline?.day]);
+  }, [
+    airline,
+    demands,
+    earned,
+    hubs,
+    loadComplete,
+    ownedPlanes,
+    phase,
+    presence,
+    routes,
+  ]);
 }

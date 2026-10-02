@@ -2,26 +2,27 @@
  * hooks/useSupabaseWrite.ts
  *
  * Centralised Supabase write-back.
- * Pattern: optimistic store update first → async DB write → rollback on error.
+ * Pattern: optimistic store update first, then database write, then rollback.
  *
  * Multi-plane route model:
  *   - 1 route row = 1 assigned plane
  *   - multiple route rows may share the same demand_id
  *   - assigning a plane does NOT mark demand as served
- *   - demand is considered cleared by passenger flow when delivered_pax_today >= pax_day
+ *   - serving today's passengers never deletes or replaces the destination
+ *   - missing opportunity slots are refilled once when the game day changes
  */
 
 import { gameSounds } from "@/hooks/useGameSounds";
 import { ResolvedChoice } from "@/lib/choiceEvents";
 import {
+  activeDemandCount,
   CASH_RESERVE_AFTER_BUY,
-  computePaxCeiling,
-  generateDemands,
-  generateOneDemand,
+  demandSlotsForHub,
+  generateHubOpportunities,
   HUB_TIER_CONFIG,
   hubPurchaseCost,
-  maxRoutesForTier,
   presenceThreshold,
+  routeOpportunityToLegacyDemand,
   simulatePaxDay,
 } from "@/lib/demands";
 import { fmtCash } from "@/lib/revenue";
@@ -29,6 +30,167 @@ import { supabase } from "@/lib/supabase";
 import type { Airport, Demand, HubTier, OwnedPlane, PlaneModel } from "@/store";
 import { useGameStore } from "@/store";
 import { useCallback, useEffect } from "react";
+
+type DemandDraft = Omit<Demand, "id" | "airline_id">;
+
+interface OpportunityRefreshResult {
+  added: number;
+  error: string | null;
+}
+
+const opportunityRefreshes = new Map<
+  string,
+  Promise<OpportunityRefreshResult>
+>();
+
+function demandDraftsForHub(params: {
+  hub: Airport;
+  airports: readonly Airport[];
+  ownedPlanes: readonly OwnedPlane[];
+  gameDay: number;
+  hubLevel: number;
+  count?: number;
+  existingDestinationIatas?: readonly string[];
+}): DemandDraft[] {
+  const airportByIata = new Map(
+    params.airports.map((airport) => [airport.iata, airport]),
+  );
+  const opportunities = generateHubOpportunities({
+    hub: params.hub,
+    airports: params.airports,
+    ownedPlanes: params.ownedPlanes,
+    gameDay: params.gameDay,
+    hubLevel: params.hubLevel,
+    count: params.count,
+    existingDestinationIatas: params.existingDestinationIatas,
+  });
+
+  return opportunities.flatMap((opportunity) => {
+    const destination = airportByIata.get(opportunity.destinationIata);
+    if (!destination) return [];
+    return [
+      routeOpportunityToLegacyDemand(
+        opportunity,
+        params.hub,
+        destination,
+        params.gameDay,
+      ),
+    ];
+  });
+}
+
+async function insertDemandDrafts(params: {
+  airlineId: string;
+  hubIata: string;
+  drafts: readonly DemandDraft[];
+}): Promise<Demand[]> {
+  if (params.drafts.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from("demands")
+    .insert(
+      params.drafts.map((draft) => ({
+        airline_id: params.airlineId,
+        hub_iata: params.hubIata,
+        origin_iata: draft.origin.iata,
+        dest_iata: draft.dest.iata,
+        dist_nm: draft.dist_nm,
+        haul: draft.haul,
+        status: "pending",
+        popularity: draft.popularity,
+        base_pax_day: draft.base_pax_day,
+        pax_ceiling: draft.pax_ceiling,
+        delivered_pax_today: 0,
+        ai_stolen_pax: 0,
+      })),
+    )
+    .select();
+
+  if (error) throw new Error(error.message);
+
+  const draftByDestination = new Map(
+    params.drafts.map((draft) => [draft.dest.iata, draft]),
+  );
+
+  return (data ?? []).flatMap((row) => {
+    const draft = draftByDestination.get(row.dest_iata);
+    if (!draft) return [];
+    return [
+      {
+        ...draft,
+        id: row.id,
+        airline_id: row.airline_id ?? params.airlineId,
+        hub_iata: params.hubIata,
+        status: "pending" as const,
+        delivered_pax_today: 0,
+        ai_stolen_pax: 0,
+      },
+    ];
+  });
+}
+
+async function ensureHubOpportunitySlots(
+  hubIata: string,
+): Promise<OpportunityRefreshResult> {
+  const initial = useGameStore.getState();
+  const airline = initial.airline;
+  const hub = initial.hubs.find((item) => item.airport.iata === hubIata);
+  if (!airline || !hub) return { added: 0, error: "Hub not found" };
+
+  const refreshKey = `${airline.id}:${hubIata}:${airline.day}`;
+  const running = opportunityRefreshes.get(refreshKey);
+  if (running) return running;
+
+  const refresh = (async (): Promise<OpportunityRefreshResult> => {
+    const state = useGameStore.getState();
+    const hubDemands = state.demands.filter(
+      (demand) => demand.hub_iata === hubIata,
+    );
+    const visibleSlots = demandSlotsForHub({ hubLevel: hub.tier });
+    const missingSlots = Math.max(
+      0,
+      visibleSlots - activeDemandCount(hubIata, state.demands),
+    );
+    if (missingSlots === 0) return { added: 0, error: null };
+
+    const drafts = demandDraftsForHub({
+      hub: hub.airport,
+      airports: state.airports,
+      ownedPlanes: state.ownedPlanes,
+      gameDay: airline.day,
+      hubLevel: hub.tier,
+      count: missingSlots,
+      // Include dismissed rows so the replacement is genuinely different.
+      existingDestinationIatas: hubDemands.map((demand) => demand.dest.iata),
+    });
+    if (drafts.length === 0) return { added: 0, error: null };
+
+    try {
+      const inserted = await insertDemandDrafts({
+        airlineId: airline.id,
+        hubIata,
+        drafts,
+      });
+      if (inserted.length > 0) {
+        useGameStore.getState().addDemands(inserted);
+      }
+      return { added: inserted.length, error: null };
+    } catch (error) {
+      return {
+        added: 0,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unable to refresh route opportunities.",
+      };
+    }
+  })().finally(() => {
+    opportunityRefreshes.delete(refreshKey);
+  });
+
+  opportunityRefreshes.set(refreshKey, refresh);
+  return refresh;
+}
 
 // ─────────────────────────────────────────────────────────────────
 // BUY HUB
@@ -40,14 +202,14 @@ export function useBuyHub() {
   return useCallback(
     async (
       airport: Airport,
-      preGenerated?: Demand[],
+      _preGenerated?: Demand[],
     ): Promise<{ error: string | null }> => {
       const {
         airline,
         airports,
-        demands,
         hubs,
         aiAirlines,
+        ownedPlanes,
         addHub,
         addDemands,
         spendCash,
@@ -94,7 +256,24 @@ export function useBuyHub() {
         }
       }
 
+      const newDemands = demandDraftsForHub({
+        hub: airport,
+        airports,
+        ownedPlanes,
+        gameDay: airline.day,
+        hubLevel: 1,
+      });
+      if (newDemands.length === 0) {
+        return {
+          error:
+            "No reachable destinations are available from this airport with your current fleet.",
+        };
+      }
+
       const tempHubId = `temp-${Date.now()}`;
+      const previousLedger = store().ledger;
+      let createdHubId: string | null = null;
+      let createdDemandIds: string[] = [];
       spendCash(cost);
       addHub({
         id: tempHubId,
@@ -109,23 +288,11 @@ export function useBuyHub() {
           id: `led-${Date.now()}`,
           day: airline.day,
           type: "purchase",
-          label: `Hub — ${airport.iata}`,
+          label: `Hub: ${airport.iata}`,
           amount: -cost,
           route_id: null,
         },
       ]);
-
-      const existingDests = demands.map((d) => d.dest.iata);
-      const newDemands =
-        preGenerated && preGenerated.length > 0
-          ? preGenerated
-          : generateDemands(
-              airport,
-              airports,
-              maxRoutesForTier(1),
-              existingDests,
-              airline.demand_score,
-            );
 
       try {
         const { data: hubData, error: hubErr } = await supabase
@@ -142,60 +309,47 @@ export function useBuyHub() {
           .single();
 
         if (hubErr) throw new Error(hubErr.message);
+        createdHubId = hubData.id;
 
         const { updateHub } = store();
         updateHub(tempHubId, { id: hubData.id });
 
-        if (newDemands.length > 0) {
-          const demandRows = newDemands.map((d) => ({
-            airline_id: airline.id,
-            hub_iata: airport.iata,
-            origin_iata: d.origin.iata,
-            dest_iata: d.dest.iata,
-            dist_nm: d.dist_nm,
-            haul: d.haul,
-            status: "pending",
-            popularity: d.popularity,
-            base_pax_day: d.base_pax_day,
-            pax_ceiling: d.pax_ceiling,
-          }));
+        const insertedDemands = await insertDemandDrafts({
+          airlineId: airline.id,
+          hubIata: airport.iata,
+          drafts: newDemands,
+        });
+        createdDemandIds = insertedDemands.map((demand) => demand.id);
+        addDemands(insertedDemands);
 
-          const { data: demandData, error: demandErr } = await supabase
-            .from("demands")
-            .insert(demandRows)
-            .select();
-
-          if (demandErr) throw new Error(demandErr.message);
-
-          const airportMap = new Map(airports.map((a) => [a.iata, a]));
-          const fullDemands: Demand[] = (demandData ?? []).map((row: any) => ({
-            id: row.id,
-            airline_id: row.airline_id,
-            hub_iata: row.hub_iata,
-            origin: airportMap.get(row.origin_iata)!,
-            dest: airportMap.get(row.dest_iata)!,
-            dist_nm: row.dist_nm,
-            haul: row.haul as Demand["haul"],
-            status: row.status as Demand["status"],
-            delivered_pax_today: 0,
-            popularity: row.popularity,
-            base_pax_day: row.base_pax_day,
-            pax_ceiling: row.pax_ceiling ?? row.base_pax_day * 10,
-          }));
-
-          addDemands(fullDemands);
-        }
-
-        await supabase
+        const { error: cashError } = await supabase
           .from("airlines")
           .update({ cash: store().airline?.cash })
           .eq("id", airline.id);
+        if (cashError) throw new Error(cashError.message);
 
         return { error: null };
       } catch (err) {
-        const { setHubs, earnCash } = store();
-        setHubs(store().hubs.filter((h) => h.id !== tempHubId));
-        earnCash(cost);
+        if (createdDemandIds.length > 0) {
+          await supabase.from("demands").delete().in("id", createdDemandIds);
+        }
+        if (createdHubId) {
+          await supabase.from("hubs").delete().eq("id", createdHubId);
+        }
+
+        const { setHubs, setDemands, setLedger } = store();
+        setHubs(
+          store().hubs.filter(
+            (h) => h.id !== tempHubId && h.id !== createdHubId,
+          ),
+        );
+        if (createdDemandIds.length > 0) {
+          setDemands(
+            store().demands.filter((d) => !createdDemandIds.includes(d.id)),
+          );
+        }
+        setLedger(previousLedger);
+        spendCash(-cost);
         return {
           error:
             err instanceof Error
@@ -204,7 +358,7 @@ export function useBuyHub() {
         };
       }
     },
-    [],
+    [store],
   );
 }
 
@@ -248,52 +402,62 @@ export function useSellHub() {
       const hubRoutes = routes.filter((r) => r.hub_iata === hub.airport.iata);
       const routeIds = hubRoutes.map((r) => r.id);
 
-      earnCash(refund);
-      setHubs(hubs.filter((h) => h.id !== hubId));
-      setDemands(demands.filter((d) => !demandIds.includes(d.id)));
-      setRoutes(routes.filter((r) => !routeIds.includes(r.id)));
-
       const assignedPlaneIds = new Set(hubRoutes.map((r) => r.plane.id));
-      setOwnedPlanes(
-        store().ownedPlanes.map((p) =>
-          assignedPlaneIds.has(p.id) ? { ...p, route_id: null } : p,
-        ),
-      );
-
-      addLedgerEntries([
-        {
-          id: `led-sell-hub-${Date.now()}`,
-          day: airline.day,
-          type: "revenue",
-          label: `Sold hub — ${hub.airport.iata}`,
-          amount: refund,
-          route_id: null,
-        },
-      ]);
 
       try {
         if (routeIds.length > 0) {
-          await supabase
+          const { error: routeError } = await supabase
             .from("routes")
             .update({ active: false })
             .in("id", routeIds);
+          if (routeError) throw new Error(routeError.message);
 
-          await supabase
+          const { error: planeError } = await supabase
             .from("owned_planes")
             .update({ route_id: null })
             .in("id", [...assignedPlaneIds]);
+          if (planeError) throw new Error(planeError.message);
         }
 
         if (demandIds.length > 0) {
-          await supabase.from("demands").delete().in("id", demandIds);
+          const { error: demandError } = await supabase
+            .from("demands")
+            .delete()
+            .in("id", demandIds);
+          if (demandError) throw new Error(demandError.message);
         }
 
-        await supabase.from("hubs").delete().eq("id", hubId);
+        const { error: hubError } = await supabase
+          .from("hubs")
+          .delete()
+          .eq("id", hubId);
+        if (hubError) throw new Error(hubError.message);
 
-        await supabase
+        const { error: cashError } = await supabase
           .from("airlines")
-          .update({ cash: store().airline?.cash })
+          .update({ cash: airline.cash + refund })
           .eq("id", airline.id);
+        if (cashError) throw new Error(cashError.message);
+
+        earnCash(refund);
+        setHubs(hubs.filter((h) => h.id !== hubId));
+        setDemands(demands.filter((d) => !demandIds.includes(d.id)));
+        setRoutes(routes.filter((r) => !routeIds.includes(r.id)));
+        setOwnedPlanes(
+          store().ownedPlanes.map((p) =>
+            assignedPlaneIds.has(p.id) ? { ...p, route_id: null } : p,
+          ),
+        );
+        addLedgerEntries([
+          {
+            id: `led-sell-hub-${Date.now()}`,
+            day: airline.day,
+            type: "revenue",
+            label: `Sold hub: ${hub.airport.iata}`,
+            amount: refund,
+            route_id: null,
+          },
+        ]);
 
         return { error: null, refund };
       } catch (err) {
@@ -306,7 +470,7 @@ export function useSellHub() {
         };
       }
     },
-    [],
+    [store],
   );
 }
 
@@ -329,14 +493,7 @@ export function useUpgradeHub() {
 
   return useCallback(
     async (hubId: string): Promise<{ error: string | null }> => {
-      const {
-        airline,
-        hubs,
-        updateHub,
-        spendCash,
-        earnCash,
-        addLedgerEntries,
-      } = store();
+      const { airline, hubs, updateHub, spendCash, addLedgerEntries } = store();
 
       if (!airline)
         return { error: "Something went wrong. Try restarting the app." };
@@ -375,6 +532,7 @@ export function useUpgradeHub() {
 
       const nextTier = (currentTier + 1) as HubTier;
       const nextFloor = HUB_TIER_CONFIG[nextTier]?.trustFloor ?? 0;
+      const previousLedger = store().ledger;
 
       // Optimistic update
       spendCash(cost);
@@ -388,7 +546,7 @@ export function useUpgradeHub() {
           id: `led-upgrade-hub-${Date.now()}`,
           day: airline.day,
           type: "purchase",
-          label: `Hub upgrade — ${hub.airport.iata} T${currentTier}→T${nextTier}`,
+          label: `Hub upgrade: ${hub.airport.iata} T${currentTier} to T${nextTier}`,
           amount: -cost,
           route_id: null,
         },
@@ -406,13 +564,24 @@ export function useUpgradeHub() {
 
         if (dbErr) throw new Error(dbErr.message);
 
-        await supabase
+        const { error: cashError } = await supabase
           .from("airlines")
           .update({ cash: store().airline?.cash })
           .eq("id", airline.id);
+        if (cashError) throw new Error(cashError.message);
 
         return { error: null };
       } catch (err) {
+        await supabase
+          .from("hubs")
+          .update({
+            tier: currentTier,
+            trust_floor: hub.trust_floor,
+            trust: hub.trust,
+            hub_pax: hub.hub_pax,
+          })
+          .eq("id", hubId);
+
         // Rollback
         updateHub(hubId, {
           tier: currentTier as HubTier,
@@ -420,7 +589,8 @@ export function useUpgradeHub() {
           hub_pax: hub.hub_pax,
           trust: hub.trust,
         });
-        earnCash(cost);
+        store().setLedger(previousLedger);
+        spendCash(-cost);
         return {
           error:
             err instanceof Error
@@ -429,7 +599,7 @@ export function useUpgradeHub() {
         };
       }
     },
-    [],
+    [store],
   );
 }
 
@@ -468,103 +638,25 @@ export function useUpdateHubNickname() {
 
       return { error: null };
     },
-    [],
+    [store],
   );
 }
 
 // ─────────────────────────────────────────────────────────────────
-// REFRESH DEMANDS — adds a new demand at an owned hub ($50K)
+// LEGACY MANUAL REFRESH
+// Route opportunities now refresh with the game day and never cost cash.
 // ─────────────────────────────────────────────────────────────────
 
 export function useRefreshDemands() {
   return useCallback(
     async (hubIata: string): Promise<{ error: string | null }> => {
-      const {
-        airline,
-        airports,
-        demands,
-        hubs,
-        addDemands,
-        spendCash,
-        addLedgerEntries,
-      } = useGameStore.getState();
-
-      if (!airline) return { error: "No airline" };
-
+      const { airline, hubs } = useGameStore.getState();
+      if (!airline) return { error: "No airline found" };
       const hub = hubs.find((h) => h.airport.iata === hubIata);
       if (!hub) return { error: "Hub not found" };
-
-      const REFRESH_COST = 50_000;
-      if (airline.cash < REFRESH_COST) {
-        return { error: `Need $50K to unlock a new route demand` };
-      }
-
-      const existingDests = demands
-        .filter((d) => d.hub_iata === hubIata)
-        .map((d) => d.dest.iata);
-
-      const newDemands = generateDemands(
-        hub.airport,
-        airports,
-        1,
-        existingDests,
-        airline.demand_score,
-      );
-
-      if (newDemands.length === 0) {
-        return { error: "No new destinations available right now" };
-      }
-
-      spendCash(REFRESH_COST);
-      addLedgerEntries([
-        {
-          id: `led-refresh-${Date.now()}`,
-          day: airline.day,
-          type: "purchase",
-          label: `New route demand — ${hubIata}`,
-          amount: -REFRESH_COST,
-          route_id: null,
-        },
-      ]);
-
-      try {
-        const d = newDemands[0];
-        const { data, error } = await supabase
-          .from("demands")
-          .insert({
-            airline_id: airline.id,
-            hub_iata: hubIata,
-            origin_iata: d.origin.iata,
-            dest_iata: d.dest.iata,
-            dist_nm: d.dist_nm,
-            haul: d.haul,
-            base_pax_day: d.base_pax_day,
-            pax_ceiling: d.pax_ceiling,
-            status: "pending",
-          })
-          .select()
-          .single();
-
-        if (error) throw new Error(error.message);
-
-        if (data) {
-          addDemands([
-            {
-              ...d,
-              id: data.id,
-              airline_id: airline.id,
-              hub_iata: hubIata,
-              delivered_pax_today: 0,
-            },
-          ]);
-        }
-
-        return { error: null };
-      } catch (err) {
-        return {
-          error: err instanceof Error ? err.message : "Failed to add demand",
-        };
-      }
+      return {
+        error: "Route opportunities update at the start of the next game day.",
+      };
     },
     [],
   );
@@ -649,17 +741,23 @@ export function useCreateRoute() {
         } catch {}
       }
 
-      if (!viaIata && demand.dist_nm > plane.plane_model.range_nm) {
+      const routeLegs = viaIata
+        ? [leg1DistNm, leg2DistNm]
+        : [Math.round(demand.dist_nm)];
+      if (routeLegs.some((leg) => leg === null)) {
+        return { error: "Unable to calculate this route. Try again." };
+      }
+
+      const longestLeg = Math.max(...(routeLegs as number[]));
+      if (longestLeg > plane.plane_model.range_nm) {
         return {
-          error:
-            `${plane.plane_model.nickname} can't reach ${demand.dest.iata}. ` +
-            `Range: ${plane.plane_model.range_nm}nm, Distance: ${demand.dist_nm}nm`,
+          error: `${plane.plane_model.nickname} cannot operate this route. Its range is ${plane.plane_model.range_nm.toLocaleString()} nm, but the longest leg is ${longestLeg.toLocaleString()} nm.`,
         };
       }
 
-      const planeBusy = store().routes.some(
-        (r) => r.active && r.plane.id === plane.id,
-      );
+      const planeBusy =
+        Boolean(plane.route_id) ||
+        store().routes.some((r) => r.active && r.plane.id === plane.id);
 
       if (planeBusy) {
         return { error: `${plane.plane_model.nickname} is already assigned` };
@@ -753,7 +851,7 @@ export function useCreateRoute() {
         };
       }
     },
-    [],
+    [store],
   );
 }
 
@@ -765,85 +863,144 @@ export function useSaveAirlineDay() {
   const store = useGameStore.getState;
 
   return useCallback(async () => {
-    const { airline, hubs, demands, presence } = store();
+    const initial = store();
+    const initialAirline = initial.airline;
+    if (!initialAirline) return;
+
+    // Rebuild each persistent market from its stable OD baseline for the new
+    // day. Previous load factor, route popularity, and missed passengers must
+    // never compound into tomorrow's traveler count.
+    initial.demands.forEach((demand) => {
+      const todayDemand = simulatePaxDay(
+        demand.origin,
+        demand.dest,
+        demand.dist_nm,
+        0,
+        initialAirline.day,
+      );
+      initial.updateDemand(demand.id, {
+        base_pax_day: todayDemand,
+        pax_ceiling: todayDemand,
+        delivered_pax_today: 0,
+        ai_stolen_pax: 0,
+      });
+    });
+
+    // Hub upgrades and dismissed choices may leave open opportunity slots.
+    // Refill them now, regardless of whether yesterday's passengers were met.
+    const refreshResults = await Promise.all(
+      initial.hubs.map((hub) => ensureHubOpportunitySlots(hub.airport.iata)),
+    );
+    const refreshError = refreshResults.find((result) => result.error)?.error;
+    if (refreshError) {
+      console.warn("[useSaveAirlineDay] opportunity refresh:", refreshError);
+    }
+
+    const {
+      airline,
+      hubs,
+      demands,
+      presence,
+      earnedAchievements,
+      missionsCompleted,
+    } = store();
     if (!airline) return;
 
-    const { earnedAchievements, missionsCompleted } = store();
+    try {
+      const { error: airlineError } = await supabase
+        .from("airlines")
+        .update({
+          cash: airline.cash,
+          loan: airline.loan,
+          loan_rate: airline.loan_rate,
+          day: airline.day,
+          demand_score: airline.demand_score,
+          reputation: airline.reputation,
+          achievements: earnedAchievements,
+          missions_completed: missionsCompleted,
+        })
+        .eq("id", airline.id);
+      if (airlineError) throw new Error(airlineError.message);
 
-    console.log("hubs", hubs);
-
-    await supabase
-      .from("airlines")
-      .update({
-        cash: airline.cash,
-        loan: airline.loan,
-        loan_rate: airline.loan_rate,
-        day: airline.day,
-        demand_score: airline.demand_score,
-        reputation: airline.reputation,
-        achievements: earnedAchievements,
-        missions_completed: missionsCompleted,
-      })
-      .eq("id", airline.id);
-
-    const hubUpdates = hubs
-      .filter((h) => !h.id.startsWith("temp-"))
-      .map((h) =>
-        supabase
-          .from("hubs")
-          .update({
-            trust: Math.round(h.trust * 10) / 10,
-            hub_pax: h.hub_pax ?? 0,
-            trust_floor: h.trust_floor ?? 0,
-            nickname: h.nickname ?? null,
-          })
-          .eq("id", h.id),
+      const hubResults = await Promise.all(
+        hubs
+          .filter((hub) => !hub.id.startsWith("temp-"))
+          .map((hub) =>
+            supabase
+              .from("hubs")
+              .update({
+                trust: Math.round(hub.trust * 10) / 10,
+                hub_pax: hub.hub_pax ?? 0,
+                trust_floor: hub.trust_floor ?? 0,
+                nickname: hub.nickname ?? null,
+              })
+              .eq("id", hub.id),
+          ),
       );
+      const hubError = hubResults.find((result) => result.error)?.error;
+      if (hubError) throw new Error(hubError.message);
 
-    await Promise.all(hubUpdates);
-
-    await Promise.all(
-      demands.map((d) =>
-        supabase
-          .from("demands")
-          .update({
-            popularity: d.popularity,
-            delivered_pax_today: d.delivered_pax_today,
-            base_pax_day: d.base_pax_day,
-          })
-          .eq("id", d.id),
-      ),
-    );
-
-    // Sync presence — upsert all rows
-    if (presence.length > 0) {
-      console.log("presence", presence);
-      await supabase.from("airport_presence").upsert(
-        presence
-          .filter((p) => !p.id.startsWith("presence-")) // skip optimistic-only rows
-          .map((p) => ({
-            id: p.id,
-            airline_id: airline.id,
-            airport_iata: p.airport_iata,
-            total_pax_delivered: p.total_pax_delivered,
-          })),
-        { onConflict: "airline_id,airport_iata" },
+      const demandResults = await Promise.all(
+        demands
+          .filter(
+            (demand) =>
+              !demand.id.startsWith("temp-") &&
+              !demand.id.startsWith("custom-demand-"),
+          )
+          .map((demand) =>
+            supabase
+              .from("demands")
+              .update({
+                popularity: demand.popularity,
+                status: demand.status,
+                delivered_pax_today: demand.delivered_pax_today,
+                ai_stolen_pax: demand.ai_stolen_pax ?? 0,
+                base_pax_day: demand.base_pax_day,
+                pax_ceiling: demand.pax_ceiling,
+              })
+              .eq("id", demand.id),
+          ),
       );
+      const demandError = demandResults.find((result) => result.error)?.error;
+      if (demandError) throw new Error(demandError.message);
 
-      // Also upsert optimistic rows (new destinations hit this day)
-      const newRows = presence.filter((p) => p.id.startsWith("presence-"));
-      if (newRows.length > 0) {
-        await supabase.from("airport_presence").upsert(
-          newRows.map((p) => ({
+      const savedPresence = presence.filter(
+        (row) => !row.id.startsWith("presence-"),
+      );
+      if (savedPresence.length > 0) {
+        const { error } = await supabase.from("airport_presence").upsert(
+          savedPresence.map((row) => ({
+            id: row.id,
             airline_id: airline.id,
-            airport_iata: p.airport_iata,
-            total_pax_delivered: p.total_pax_delivered,
+            airport_iata: row.airport_iata,
+            total_pax_delivered: row.total_pax_delivered,
           })),
           { onConflict: "airline_id,airport_iata" },
         );
+        if (error) throw new Error(error.message);
       }
+
+      const newPresence = presence.filter((row) =>
+        row.id.startsWith("presence-"),
+      );
+      if (newPresence.length > 0) {
+        const { error } = await supabase.from("airport_presence").upsert(
+          newPresence.map((row) => ({
+            airline_id: airline.id,
+            airport_iata: row.airport_iata,
+            total_pax_delivered: row.total_pax_delivered,
+          })),
+          { onConflict: "airline_id,airport_iata" },
+        );
+        if (error) throw new Error(error.message);
+      }
+    } catch (error) {
+      console.warn(
+        "[useSaveAirlineDay] save failed:",
+        error instanceof Error ? error.message : error,
+      );
     }
-  }, []);
+  }, [store]);
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -884,81 +1041,12 @@ export function useLoadPresence() {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// SPAWN DAILY NEW DEMAND
+// REFILL MISSING OPPORTUNITY SLOTS FOR THE NEW DAY
 // ─────────────────────────────────────────────────────────────────
 
 export function useSpawnDailyDemand() {
-  const store = useGameStore.getState;
-
   return useCallback(async (hubIata: string) => {
-    const { airline, airports, demands, hubs, addDemands } = store();
-    if (!airline) return;
-
-    const hub = hubs.find((h) => h.airport.iata === hubIata);
-    if (!hub) return;
-
-    const hubDemands = demands.filter((d) => d.hub_iata === hubIata);
-
-    // Enforce tier slot cap — never spawn beyond what the tier allows
-    const tierCap = maxRoutesForTier(hub.tier);
-    if (hubDemands.length >= tierCap) return;
-
-    // Block spawn if any demand still has undelivered passengers today
-    const hasUnserved = hubDemands.some(
-      (d) => (d.delivered_pax_today ?? 0) < (d.base_pax_day ?? 1),
-    );
-    if (hasUnserved) return;
-
-    const existingDests = hubDemands.map((d) => d.dest.iata);
-    const newDemand = generateOneDemand(
-      hub.airport,
-      airports,
-      existingDests,
-      airline.demand_score,
-      airline.day ?? 1,
-    );
-
-    if (!newDemand) return;
-
-    try {
-      const { data, error } = await supabase
-        .from("demands")
-        .insert({
-          airline_id: airline.id,
-          hub_iata: hubIata,
-          origin_iata: newDemand.origin.iata,
-          dest_iata: newDemand.dest.iata,
-          dist_nm: newDemand.dist_nm,
-          haul: newDemand.haul,
-          base_pax_day: newDemand.base_pax_day,
-          pax_ceiling: newDemand.pax_ceiling,
-          status: "pending",
-        })
-        .select()
-        .single();
-
-      if (error || !data) return;
-
-      const airportMap = new Map(airports.map((a) => [a.iata, a]));
-      addDemands([
-        {
-          id: data.id,
-          airline_id: data.airline_id,
-          hub_iata: data.hub_iata,
-          origin: airportMap.get(data.origin_iata)!,
-          dest: airportMap.get(data.dest_iata)!,
-          dist_nm: data.dist_nm,
-          haul: data.haul,
-          status: "pending",
-          delivered_pax_today: data.delivered_pax_today,
-          base_pax_day: data.base_pax_day ?? 0,
-          pax_ceiling: data.pax_ceiling ?? (data.base_pax_day ?? 0) * 10,
-          popularity: data.popularity,
-        },
-      ]);
-    } catch {
-      // Silent fail — will retry next day
-    }
+    await ensureHubOpportunitySlots(hubIata);
   }, []);
 }
 
@@ -989,6 +1077,7 @@ export function useMaintenancePlane() {
         return { error: `Need ${fmtCash(cost)} for maintenance` };
       }
 
+      const previousLedger = store().ledger;
       // Optimistic update
       updateOwnedPlane(planeId, { condition: 100, days_active: 0 });
       spendCash(cost);
@@ -997,35 +1086,46 @@ export function useMaintenancePlane() {
           id: `maint-${planeId}-${Date.now()}`,
           day: airline.day,
           type: "purchase" as const,
-          label: `Maintenance — ${plane.plane_model.nickname}`,
+          label: `Maintenance: ${plane.plane_model.nickname}`,
           amount: -cost,
           route_id: null,
         },
       ]);
 
       try {
-        await supabase
+        const { error: planeError } = await supabase
           .from("owned_planes")
           .update({ condition: 100, days_active: 0 })
           .eq("id", planeId);
+        if (planeError) throw new Error(planeError.message);
 
-        await supabase
+        const { error: cashError } = await supabase
           .from("airlines")
           .update({ cash: store().airline?.cash })
           .eq("id", airline.id);
+        if (cashError) throw new Error(cashError.message);
 
         return { error: null };
-      } catch (err) {
+      } catch {
+        await supabase
+          .from("owned_planes")
+          .update({
+            condition: plane.condition ?? 100,
+            days_active: plane.days_active ?? 0,
+          })
+          .eq("id", planeId);
+
         // Rollback
         updateOwnedPlane(planeId, {
           condition: plane.condition,
           days_active: plane.days_active,
         });
+        store().setLedger(previousLedger);
         spendCash(-cost);
-        return { error: "Maintenance failed — please try again" };
+        return { error: "Maintenance failed. Please try again." };
       }
     },
-    [],
+    [store],
   );
 }
 
@@ -1061,40 +1161,54 @@ export function useSellPlane() {
 
       const salePrice = Math.round(plane.plane_model.price * 0.4);
 
-      // Optimistic update
-      setOwnedPlanes(ownedPlanes.filter((p) => p.id !== planeId));
-      setSelectedPlaneGroup(
-        selectedPlaneGroup?.planes.filter((p) => p.id !== planeId)!,
-      );
-      earnCash(salePrice);
-      addLedgerEntries([
-        {
-          id: `sold-plane-${Date.now()}`,
-          day: airline.day,
-          type: "revenue" as const,
-          label: `Sold ${plane.plane_model.nickname}`,
-          amount: salePrice,
-          route_id: null,
-        },
-      ]);
-
       try {
-        await supabase.from("owned_planes").delete().eq("id", planeId);
-
-        await supabase
+        const { error: cashError } = await supabase
           .from("airlines")
-          .update({ cash: store().airline?.cash })
+          .update({ cash: airline.cash + salePrice })
           .eq("id", airline.id);
+        if (cashError) throw new Error(cashError.message);
+
+        const { error: planeError } = await supabase
+          .from("owned_planes")
+          .delete()
+          .eq("id", planeId);
+        if (planeError) {
+          await supabase
+            .from("airlines")
+            .update({ cash: airline.cash })
+            .eq("id", airline.id);
+          throw new Error(planeError.message);
+        }
+
+        setOwnedPlanes(ownedPlanes.filter((p) => p.id !== planeId));
+        if (selectedPlaneGroup) {
+          setSelectedPlaneGroup(
+            selectedPlaneGroup.planes.filter((p) => p.id !== planeId),
+          );
+        }
+        earnCash(salePrice);
+        addLedgerEntries([
+          {
+            id: `sold-plane-${Date.now()}`,
+            day: airline.day,
+            type: "revenue" as const,
+            label: `Sold ${plane.plane_model.nickname}`,
+            amount: salePrice,
+            route_id: null,
+          },
+        ]);
 
         return { error: null };
-      } catch {
-        // Rollback
-        setOwnedPlanes([...store().ownedPlanes, plane]);
-        earnCash(-salePrice);
-        return { error: "Sale failed — please try again" };
+      } catch (err) {
+        return {
+          error:
+            err instanceof Error
+              ? err.message
+              : "Sale failed. Please try again.",
+        };
       }
     },
-    [],
+    [store],
   );
 }
 
@@ -1116,13 +1230,16 @@ export function useBuyPlane() {
         const remaining =
           planeModel.unlock_demands - (airline.demand_score ?? 0);
         return {
-          error: `Serve ${remaining} more demand${
+          error: `Open ${remaining} more route${
             remaining > 1 ? "s" : ""
           } to unlock this aircraft`,
         };
       }
 
       const tempId = `temp-plane-${Date.now()}`;
+      const previousLedger = store().ledger;
+      const previouslyBoughtPlaneToday = store().boughtPlaneToday;
+      let createdPlaneId: string | null = null;
       spendCash(planeModel.price);
       addOwnedPlane({
         id: tempId,
@@ -1157,6 +1274,7 @@ export function useBuyPlane() {
           .single();
 
         if (error) throw new Error(error.message);
+        createdPlaneId = data.id;
 
         store().setOwnedPlanes(
           store().ownedPlanes.map((p) =>
@@ -1171,24 +1289,32 @@ export function useBuyPlane() {
           ),
         );
 
-        await supabase
+        const { error: cashError } = await supabase
           .from("airlines")
           .update({ cash: store().airline?.cash })
           .eq("id", airline.id);
+        if (cashError) throw new Error(cashError.message);
 
         return { error: null };
       } catch (err) {
+        if (createdPlaneId) {
+          await supabase.from("owned_planes").delete().eq("id", createdPlaneId);
+        }
         store().setOwnedPlanes(
-          store().ownedPlanes.filter((p) => p.id !== tempId),
+          store().ownedPlanes.filter(
+            (p) => p.id !== tempId && p.id !== createdPlaneId,
+          ),
         );
-        store().earnCash(planeModel.price);
+        store().setLedger(previousLedger);
+        store().setBoughtPlaneToday(previouslyBoughtPlaneToday);
+        store().spendCash(-planeModel.price);
         return {
           error:
             err instanceof Error ? err.message : "Failed to purchase aircraft",
         };
       }
     },
-    [],
+    [store],
   );
 }
 
@@ -1265,7 +1391,7 @@ export function useDeactivateRoute() {
         };
       }
     },
-    [],
+    [store],
   );
 }
 
@@ -1310,7 +1436,7 @@ export function useLoanActions() {
         };
       }
     },
-    [],
+    [store],
   );
 
   const repay = useCallback(
@@ -1346,7 +1472,7 @@ export function useLoanActions() {
         };
       }
     },
-    [],
+    [store],
   );
 
   return { take, repay };
@@ -1373,7 +1499,7 @@ export function useCreateCustomRoute() {
       dest: Airport,
       via: Airport | null,
       plane: OwnedPlane,
-      paxDay: number,
+      _paxDay: number,
       distNm: number,
       haul: string,
       totalDist: number,
@@ -1400,9 +1526,9 @@ export function useCreateCustomRoute() {
         };
       }
 
-      const planeBusy = store().routes.some(
-        (r) => r.active && r.plane.id === plane.id,
-      );
+      const planeBusy =
+        Boolean(plane.route_id) ||
+        store().routes.some((r) => r.active && r.plane.id === plane.id);
 
       if (planeBusy) {
         return { error: `${plane.plane_model.nickname} is already assigned` };
@@ -1453,6 +1579,18 @@ export function useCreateCustomRoute() {
         } catch {}
       }
 
+      const routeLegs = via ? [leg1DistNmC, leg2DistNmC] : [Math.round(distNm)];
+      if (routeLegs.some((leg) => leg === null)) {
+        return { error: "Unable to calculate this route. Try again." };
+      }
+
+      const longestLeg = Math.max(...(routeLegs as number[]));
+      if (longestLeg > plane.plane_model.range_nm) {
+        return {
+          error: `${plane.plane_model.nickname} cannot operate this route. Its range is ${plane.plane_model.range_nm.toLocaleString()} nm, but the longest leg is ${longestLeg.toLocaleString()} nm.`,
+        };
+      }
+
       const tempRouteId = `custom-route-${Date.now()}-${plane.id}`;
       const tempDemandId = `custom-demand-${Date.now()}`;
 
@@ -1479,7 +1617,13 @@ export function useCreateCustomRoute() {
           price_strategy: "standard",
         });
       } else {
-        const paxCeiling = computePaxCeiling(origin, dest, distNm);
+        const todayDemand = simulatePaxDay(
+          origin,
+          dest,
+          distNm,
+          0,
+          airline.day,
+        );
         const syntheticDemand: Demand = {
           id: tempDemandId,
           airline_id: airline.id,
@@ -1488,14 +1632,12 @@ export function useCreateCustomRoute() {
           dest,
           dist_nm: distNm,
           haul: haul as Demand["haul"],
-          base_pax_day: Math.min(
-            paxCeiling,
-            simulatePaxDay(origin, dest, distNm, airline.demand_score ?? 0),
-          ),
+          base_pax_day: todayDemand,
           status: "pending",
           delivered_pax_today: 0,
+          ai_stolen_pax: 0,
           popularity: 0,
-          pax_ceiling: paxCeiling,
+          pax_ceiling: todayDemand,
         };
 
         addDemands([syntheticDemand]);
@@ -1528,7 +1670,7 @@ export function useCreateCustomRoute() {
             .update({ status: "pending" })
             .eq("id", existingDemand.id);
         } else {
-          const paxCeiling = computePaxCeiling(origin, dest, distNm);
+          const todayDemand = demandToUse.base_pax_day;
           const { data: demandData, error: demandErr } = await supabase
             .from("demands")
             .insert({
@@ -1538,13 +1680,12 @@ export function useCreateCustomRoute() {
               dest_iata: dest.iata,
               dist_nm: distNm,
               haul,
-              base_pax_day: Math.min(
-                paxCeiling,
-                simulatePaxDay(origin, dest, distNm, airline.demand_score ?? 0),
-              ),
-              pax_ceiling: paxCeiling,
+              base_pax_day: todayDemand,
+              pax_ceiling: todayDemand,
               status: "pending",
               source: "custom",
+              delivered_pax_today: 0,
+              ai_stolen_pax: 0,
             })
             .select()
             .single();
@@ -1646,7 +1787,7 @@ export function useCreateCustomRoute() {
         };
       }
     },
-    [],
+    [store],
   );
 }
 

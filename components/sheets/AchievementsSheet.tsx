@@ -1,13 +1,12 @@
 /**
- * The airline's milestone record, grouped into easy-to-scan categories.
+ * The airline's permanent milestone and service record.
  */
 
+import { AirlineBrandMark } from "@/components/airline-identity";
 import {
   Colors,
   MIN_TOUCH,
-  Palette,
   Radius,
-  Shadow,
   Spacing,
   Typography,
 } from "@/constants/theme";
@@ -18,68 +17,29 @@ import {
   type Achievement,
   type AchievementCategory,
 } from "@/lib/achievements";
+import { DEFAULT_AIRLINE_LOGO_ID, getAirlinePalette } from "@/lib/airlineBrand";
 import { useAirline, useEarnedAchievements, useGameStore } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
 import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import { useMemo } from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
+type IconName = keyof typeof Ionicons.glyphMap;
+
 interface CategoryMeta {
   label: string;
-  icon: string;
-  color: string;
-  surface: string;
+  icon: IconName;
 }
 
 const CATEGORY_META: Record<AchievementCategory, CategoryMeta> = {
-  pioneer: {
-    label: "Getting Started",
-    icon: "rocket-outline",
-    color: Colors.sky,
-    surface: Palette.blueSoft,
-  },
-  passenger: {
-    label: "Passengers",
-    icon: "people-outline",
-    color: Colors.green,
-    surface: Palette.greenSoft,
-  },
-  network: {
-    label: "Routes & Network",
-    icon: "git-network-outline",
-    color: Colors.skyDark,
-    surface: Palette.blueSoft,
-  },
-  fleet: {
-    label: "Fleet",
-    icon: "airplane-outline",
-    color: Colors.amber,
-    surface: Palette.orangeSoft,
-  },
-  operations: {
-    label: "Operations",
-    icon: "flash-outline",
-    color: Colors.orange,
-    surface: Palette.orangeSoft,
-  },
-  financial: {
-    label: "Finances",
-    icon: "cash-outline",
-    color: Colors.green,
-    surface: Palette.greenSoft,
-  },
-  missions: {
-    label: "Missions",
-    icon: "checkbox-outline",
-    color: Colors.purple,
-    surface: Palette.violetSoft,
-  },
-  prestige: {
-    label: "Prestige",
-    icon: "trophy-outline",
-    color: Colors.purple,
-    surface: Palette.violetSoft,
-  },
+  pioneer: { label: "Getting started", icon: "rocket-outline" },
+  passenger: { label: "Passengers", icon: "people-outline" },
+  network: { label: "Routes and network", icon: "git-network-outline" },
+  fleet: { label: "Fleet", icon: "airplane-outline" },
+  operations: { label: "Operations", icon: "flash-outline" },
+  financial: { label: "Finance", icon: "cash-outline" },
+  missions: { label: "Missions", icon: "checkbox-outline" },
+  prestige: { label: "Prestige", icon: "trophy-outline" },
 };
 
 const CATEGORY_ORDER: AchievementCategory[] = [
@@ -93,28 +53,40 @@ const CATEGORY_ORDER: AchievementCategory[] = [
   "prestige",
 ];
 
-function ProgressBar({
+function ProgressLine({
   progress,
-  color,
-  height = 7,
+  label,
 }: {
   progress: number;
-  color: string;
-  height?: number;
+  label: string;
 }) {
   const percentage = Math.round(Math.max(0, Math.min(1, progress)) * 100);
 
   return (
-    <View style={[progressStyles.track, { height }]}>
+    <View style={styles.progressRow}>
       <View
-        style={[
-          progressStyles.fill,
-          {
-            width: `${percentage}%` as `${number}%`,
-            backgroundColor: color,
-          },
-        ]}
-      />
+        accessibilityLabel={`${label}: ${percentage}% complete`}
+        accessibilityRole="progressbar"
+        accessibilityValue={{ min: 0, max: 100, now: percentage }}
+        style={styles.progressTrack}
+      >
+        <View
+          style={[
+            styles.progressFill,
+            { width: `${percentage}%` as `${number}%` },
+          ]}
+        />
+      </View>
+      <Text style={styles.progressValue}>{percentage}%</Text>
+    </View>
+  );
+}
+
+function SectionHeader({ title, detail }: { title: string; detail?: string }) {
+  return (
+    <View style={styles.sectionHeader}>
+      <Text style={styles.sectionTitle}>{title}</Text>
+      {detail ? <Text style={styles.sectionDetail}>{detail}</Text> : null}
     </View>
   );
 }
@@ -122,31 +94,30 @@ function ProgressBar({
 function RecentAchievement({
   achievement,
   day,
+  last,
 }: {
   achievement: Achievement;
   day: number;
+  last: boolean;
 }) {
   const meta = CATEGORY_META[achievement.category];
 
   return (
-    <View style={recentStyles.row}>
-      <View style={[recentStyles.icon, { backgroundColor: meta.surface }]}>
-        <Ionicons name={achievement.icon as any} size={17} color={meta.color} />
+    <View style={[styles.recentRow, last && styles.lastRow]}>
+      <View style={styles.listIcon}>
+        <Ionicons
+          name={achievement.icon as IconName}
+          size={19}
+          color={Colors.green}
+        />
       </View>
-
-      <View style={recentStyles.copy}>
-        <Text style={recentStyles.title} numberOfLines={1}>
-          {achievement.title}
+      <View style={styles.recentCopy}>
+        <Text style={styles.recentTitle}>{achievement.title}</Text>
+        <Text style={styles.recentMeta}>
+          {meta.label} · Unlocked on day {day}
         </Text>
-        <Text style={recentStyles.meta}>
-          Day {day} · {meta.label}
-        </Text>
       </View>
-
-      <View style={recentStyles.points}>
-        <Text style={recentStyles.pointsValue}>+{achievement.points}</Text>
-        <Text style={recentStyles.pointsLabel}>PTS</Text>
-      </View>
+      <Text style={styles.recentPoints}>+{achievement.points} pts</Text>
     </View>
   );
 }
@@ -154,98 +125,62 @@ function RecentAchievement({
 function AchievementRow({
   achievement,
   dayEarned,
-  meta,
+  last,
 }: {
   achievement: Achievement;
   dayEarned?: number;
-  meta: CategoryMeta;
+  last: boolean;
 }) {
-  const isEarned = dayEarned !== undefined;
-  const isHidden = achievement.hidden && !isEarned;
-  const title = isHidden ? "Classified milestone" : achievement.title;
-  const description = isHidden
-    ? "Keep flying to reveal this achievement."
-    : isEarned
+  const earned = dayEarned !== undefined;
+  const hidden = achievement.hidden && !earned;
+  const title = hidden ? "Classified milestone" : achievement.title;
+  const description = hidden
+    ? "Continue operating to reveal this milestone."
+    : earned
       ? achievement.flavor
       : achievement.desc;
+  const stateColor = earned ? Colors.green : Colors.muted;
 
   return (
-    <View
-      style={[
-        achievementStyles.row,
-        isEarned
-          ? {
-              borderColor: meta.color + "3D",
-              backgroundColor: Colors.panel,
-            }
-          : achievementStyles.lockedRow,
-      ]}
-    >
-      <View
-        style={[
-          achievementStyles.icon,
-          { backgroundColor: isEarned ? meta.surface : Colors.inset },
-        ]}
-      >
+    <View style={[styles.achievementRow, last && styles.lastRow]}>
+      <View style={styles.listIcon}>
         <Ionicons
-          name={(isHidden ? "help-outline" : achievement.icon) as any}
+          name={(hidden ? "help-outline" : achievement.icon) as IconName}
           size={19}
-          color={isEarned ? meta.color : Colors.dim}
+          color={stateColor}
         />
       </View>
-
-      <View style={achievementStyles.body}>
-        <View style={achievementStyles.titleRow}>
+      <View style={styles.achievementCopy}>
+        <View style={styles.achievementTitleRow}>
           <Text
-            style={[
-              achievementStyles.title,
-              !isEarned && achievementStyles.lockedText,
-            ]}
             numberOfLines={1}
+            style={[styles.achievementTitle, !earned && styles.lockedText]}
           >
             {title}
           </Text>
-
-          <View
+          <Text
             style={[
-              achievementStyles.points,
-              { backgroundColor: isEarned ? meta.surface : Colors.inset },
+              styles.achievementPoints,
+              { color: earned ? Colors.text : Colors.muted },
             ]}
           >
-            <Text
-              style={[
-                achievementStyles.pointsText,
-                { color: isEarned ? meta.color : Colors.dim },
-              ]}
-            >
-              {achievement.points} PTS
-            </Text>
-          </View>
+            {achievement.points} pts
+          </Text>
         </View>
-
         <Text
-          style={[
-            achievementStyles.description,
-            !isEarned && achievementStyles.lockedText,
-          ]}
           numberOfLines={2}
+          style={[styles.achievementDescription, !earned && styles.lockedText]}
         >
           {description}
         </Text>
-
-        <View style={achievementStyles.stateRow}>
+        <View style={styles.achievementState}>
           <Ionicons
-            name={isEarned ? "checkmark-circle" : "lock-closed-outline"}
-            size={13}
-            color={isEarned ? Colors.green : Colors.dim}
+            name={earned ? "checkmark-circle" : "lock-closed-outline"}
+            size={14}
+            color={stateColor}
           />
-          <Text
-            style={[
-              achievementStyles.stateText,
-              isEarned && { color: Colors.green },
-            ]}
-          >
-            {isEarned ? `Unlocked on day ${dayEarned}` : "Not unlocked"}
+          <Text style={[styles.achievementStateText, { color: stateColor }]}>
+            {earned ? `Unlocked on day ${dayEarned}` : "Locked"}
           </Text>
         </View>
       </View>
@@ -268,30 +203,24 @@ function CategorySection({
   const progress = unlockedCount / Math.max(1, achievements.length);
 
   return (
-    <View style={categoryStyles.section}>
-      <View style={categoryStyles.header}>
-        <View style={[categoryStyles.icon, { backgroundColor: meta.surface }]}>
-          <Ionicons name={meta.icon as any} size={17} color={meta.color} />
+    <View style={styles.categorySection}>
+      <View style={styles.categoryHeader}>
+        <View style={styles.categoryTitleRow}>
+          <Ionicons name={meta.icon} size={19} color={Colors.skyDark} />
+          <Text style={styles.categoryTitle}>{meta.label}</Text>
         </View>
-
-        <View style={categoryStyles.headingCopy}>
-          <View style={categoryStyles.titleRow}>
-            <Text style={categoryStyles.title}>{meta.label}</Text>
-            <Text style={categoryStyles.count}>
-              {unlockedCount}/{achievements.length}
-            </Text>
-          </View>
-          <ProgressBar progress={progress} color={meta.color} height={5} />
-        </View>
+        <Text style={styles.categoryCount}>
+          {unlockedCount} / {achievements.length}
+        </Text>
       </View>
-
-      <View style={categoryStyles.list}>
-        {achievements.map((achievement) => (
+      <ProgressLine progress={progress} label={meta.label} />
+      <View style={styles.achievementList}>
+        {achievements.map((achievement, index) => (
           <AchievementRow
             key={achievement.id}
             achievement={achievement}
             dayEarned={earned[achievement.id]}
-            meta={meta}
+            last={index === achievements.length - 1}
           />
         ))}
       </View>
@@ -305,7 +234,13 @@ export default function AchievementsSheet() {
   const closeSheet = useGameStore((state) => state.closeSheet);
   const tabBarHeight = useTabBarHeight();
 
-  const color = airline?.color ?? Colors.sky;
+  const defaultPalette = getAirlinePalette("aviation-blue");
+  const airlineName = airline?.name ?? "Your airline";
+  const airlineCode = airline?.airline_code ?? "AIR";
+  const airlineLogoId = airline?.logo_id ?? DEFAULT_AIRLINE_LOGO_ID;
+  const airlinePrimaryColor = airline?.color ?? defaultPalette.primary;
+  const airlineSecondaryColor =
+    airline?.secondary_color ?? defaultPalette.secondary;
 
   const earnedPoints = useMemo(
     () =>
@@ -324,8 +259,7 @@ export default function AchievementsSheet() {
     [earned],
   );
 
-  const overallProgress = earnedPoints / Math.max(1, TOTAL_POINTS);
-  const progressPercentage = Math.round(overallProgress * 100);
+  const overallProgress = earnedCount / Math.max(1, ACHIEVEMENTS.length);
 
   const groupedAchievements = useMemo(
     () =>
@@ -352,9 +286,13 @@ export default function AchievementsSheet() {
   const recentAchievements = useMemo(
     () =>
       ACHIEVEMENTS.filter((achievement) => earned[achievement.id] !== undefined)
-        .sort(
-          (first, second) => (earned[second.id] ?? 0) - (earned[first.id] ?? 0),
-        )
+        .sort((first, second) => {
+          const dayDifference =
+            (earned[second.id] ?? 0) - (earned[first.id] ?? 0);
+          return dayDifference !== 0
+            ? dayDifference
+            : second.points - first.points;
+        })
         .slice(0, 3),
     [earned],
   );
@@ -369,26 +307,24 @@ export default function AchievementsSheet() {
       showsVerticalScrollIndicator={false}
     >
       <View style={styles.header}>
-        <View
-          style={[
-            styles.headerMark,
-            { borderColor: color, backgroundColor: color + "14" },
-          ]}
-        >
-          <Ionicons name="trophy-outline" size={21} color={color} />
-        </View>
-
+        <AirlineBrandMark
+          accessibilityLabel={`${airlineName} identity`}
+          logoId={airlineLogoId}
+          primary={airlinePrimaryColor}
+          secondary={airlineSecondaryColor}
+          size={42}
+          variant="leaderboard"
+        />
         <View style={styles.headerCopy}>
-          <Text style={styles.kicker}>PILOT RECORD</Text>
           <Text style={styles.screenTitle}>Achievements</Text>
-          <Text style={styles.subtitle}>
-            Milestones from your airline journey
+          <Text numberOfLines={1} style={styles.subtitle}>
+            {airlineName} · {airlineCode} · Service record
           </Text>
         </View>
-
         <TouchableOpacity
           accessibilityLabel="Close achievements"
           accessibilityRole="button"
+          activeOpacity={0.7}
           onPress={closeSheet}
           style={styles.closeButton}
         >
@@ -396,69 +332,65 @@ export default function AchievementsSheet() {
         </TouchableOpacity>
       </View>
 
-      <View style={[styles.summaryCard, { borderLeftColor: color }]}>
-        <View style={styles.summaryTop}>
-          <View style={styles.progressCopy}>
-            <Text style={styles.summaryLabel}>TOTAL COMPLETION</Text>
-            <Text style={[styles.progressValue, { color }]}>
-              {progressPercentage}%
-            </Text>
-            <Text style={styles.pointsLine}>
-              {earnedPoints.toLocaleString()} of {TOTAL_POINTS.toLocaleString()}{" "}
-              points
-            </Text>
-          </View>
-
-          <View style={styles.unlockedBox}>
-            <Text style={styles.unlockedValue}>{earnedCount}</Text>
-            <Text style={styles.unlockedLabel}>OF {ACHIEVEMENTS.length}</Text>
-            <Text style={styles.unlockedCaption}>UNLOCKED</Text>
-          </View>
+      <View style={styles.summary}>
+        <View style={styles.summaryMetric}>
+          <Text style={styles.summaryValue}>
+            {Math.round(overallProgress * 100)}%
+          </Text>
+          <Text style={styles.summaryLabel}>Completion</Text>
         </View>
-
-        <ProgressBar progress={overallProgress} color={color} height={9} />
-
-        <View style={styles.summaryFooter}>
-          <Ionicons
-            name="information-circle-outline"
-            size={14}
-            color={Colors.dim}
-          />
-          <Text style={styles.summaryNote}>
-            Achievements unlock automatically as your airline grows.
+        <View style={styles.summaryDivider} />
+        <View style={styles.summaryMetric}>
+          <Text style={styles.summaryValue}>
+            {earnedCount} / {ACHIEVEMENTS.length}
+          </Text>
+          <Text style={styles.summaryLabel}>Unlocked</Text>
+        </View>
+        <View style={styles.summaryDivider} />
+        <View style={styles.summaryMetric}>
+          <Text style={styles.summaryValue}>
+            {earnedPoints.toLocaleString()}
+          </Text>
+          <Text style={styles.summaryLabel}>
+            Points of {TOTAL_POINTS.toLocaleString()}
           </Text>
         </View>
       </View>
 
-      {recentAchievements.length > 0 && (
-        <View style={styles.section}>
-          <View style={styles.sectionHeading}>
-            <Text style={styles.sectionLabel}>RECENTLY UNLOCKED</Text>
-            <Ionicons name="sparkles-outline" size={15} color={Colors.amber} />
-          </View>
+      <View style={styles.overallProgress}>
+        <ProgressLine progress={overallProgress} label="Achievement record" />
+        <Text style={styles.overallHelp}>
+          Milestones unlock automatically as your airline operates and grows.
+        </Text>
+      </View>
 
+      {recentAchievements.length > 0 ? (
+        <View style={styles.section}>
+          <SectionHeader
+            title="Recently unlocked"
+            detail={`${recentAchievements.length} shown`}
+          />
           <View style={styles.recentList}>
-            {recentAchievements.map((achievement) => (
+            {recentAchievements.map((achievement, index) => (
               <RecentAchievement
                 key={achievement.id}
                 achievement={achievement}
                 day={earned[achievement.id]}
+                last={index === recentAchievements.length - 1}
               />
             ))}
           </View>
         </View>
-      )}
+      ) : null}
 
-      <View style={styles.recordHeading}>
-        <View>
-          <Text style={styles.sectionLabel}>COMPLETE RECORD</Text>
-          <Text style={styles.sectionHint}>
-            Unlocked milestones appear first in each category
-          </Text>
-        </View>
-        <View style={styles.recordCount}>
-          <Text style={styles.recordCountText}>{ACHIEVEMENTS.length}</Text>
-        </View>
+      <View style={styles.section}>
+        <SectionHeader
+          title="Complete record"
+          detail={`${ACHIEVEMENTS.length} milestones`}
+        />
+        <Text style={styles.recordHelp}>
+          Unlocked milestones appear first within each category.
+        </Text>
       </View>
 
       {groupedAchievements.map(({ category, achievements, meta }) => (
@@ -473,355 +405,280 @@ export default function AchievementsSheet() {
   );
 }
 
-const progressStyles = StyleSheet.create({
-  track: {
-    width: "100%",
-    backgroundColor: Colors.inset,
-    borderRadius: Radius.full,
-    overflow: "hidden",
-  },
-  fill: {
-    height: "100%",
-    borderRadius: Radius.full,
-  },
-});
-
-const recentStyles = StyleSheet.create({
-  row: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.md,
-    backgroundColor: Colors.panel,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    padding: Spacing.md,
-  },
-  icon: {
-    width: 40,
-    height: 40,
-    borderRadius: Radius.md,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  copy: {
-    flex: 1,
-    minWidth: 0,
-  },
-  title: {
-    color: Colors.text,
-    fontSize: 14,
-    lineHeight: 18,
-    fontWeight: Typography.weight.bold,
-  },
-  meta: {
-    color: Colors.muted,
-    fontSize: 10,
-    lineHeight: 14,
-    marginTop: Spacing.xxs,
-  },
-  points: {
-    alignItems: "flex-end",
-  },
-  pointsValue: {
-    color: Colors.green,
-    fontFamily: Typography.mono,
-    fontSize: 13,
-    fontWeight: Typography.weight.bold,
-  },
-  pointsLabel: {
-    color: Colors.dim,
-    fontSize: 7,
-    fontWeight: Typography.weight.bold,
-    letterSpacing: 0.8,
-  },
-});
-
-const achievementStyles = StyleSheet.create({
-  row: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: Spacing.md,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    padding: Spacing.md,
-  },
-  lockedRow: {
-    backgroundColor: Palette.cloud,
-    borderColor: Colors.border,
-  },
-  icon: {
-    width: 42,
-    height: 42,
-    borderRadius: Radius.md,
-    alignItems: "center",
-    justifyContent: "center",
-    flexShrink: 0,
-  },
-  body: {
-    flex: 1,
-    minWidth: 0,
-    gap: Spacing.xs,
-  },
-  titleRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.sm,
-  },
-  title: {
-    flex: 1,
-    color: Colors.text,
-    fontSize: 14,
-    lineHeight: 18,
-    fontWeight: Typography.weight.bold,
-  },
-  lockedText: {
-    color: Colors.muted,
-  },
-  points: {
-    borderRadius: Radius.full,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-  },
-  pointsText: {
-    fontFamily: Typography.mono,
-    fontSize: 8,
-    fontWeight: Typography.weight.bold,
-  },
-  description: {
-    color: Colors.muted,
-    fontSize: Typography.size.caption,
-    lineHeight: Typography.lineHeight.caption,
-  },
-  stateRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.xs,
-    marginTop: Spacing.xxs,
-  },
-  stateText: {
-    color: Colors.dim,
-    fontSize: 9,
-    lineHeight: 12,
-    fontWeight: Typography.weight.medium,
-  },
-});
-
-const categoryStyles = StyleSheet.create({
-  section: {
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.xl,
-  },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.md,
-    marginBottom: Spacing.sm,
-  },
-  icon: {
-    width: 38,
-    height: 38,
-    borderRadius: Radius.md,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  headingCopy: {
-    flex: 1,
-    gap: 6,
-  },
-  titleRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: Spacing.md,
-  },
-  title: {
-    color: Colors.text,
-    fontSize: Typography.size.label,
-    fontWeight: Typography.weight.bold,
-  },
-  count: {
-    color: Colors.muted,
-    fontFamily: Typography.mono,
-    fontSize: 10,
-    fontWeight: Typography.weight.bold,
-  },
-  list: {
-    gap: Spacing.sm,
-  },
-});
-
 const styles = StyleSheet.create({
   root: {
     flex: 1,
+    backgroundColor: Colors.surface,
   },
   content: {
-    paddingBottom: Spacing.xxl,
+    backgroundColor: Colors.surface,
   },
   header: {
+    minHeight: 68,
     flexDirection: "row",
     alignItems: "center",
     gap: Spacing.md,
     paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.sm,
-    paddingBottom: Spacing.lg,
-  },
-  headerMark: {
-    width: 44,
-    height: 44,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    alignItems: "center",
-    justifyContent: "center",
+    paddingVertical: Spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
   },
   headerCopy: {
     flex: 1,
-  },
-  kicker: {
-    color: Colors.skyDark,
-    fontSize: 9,
-    fontWeight: Typography.weight.bold,
-    letterSpacing: 1.7,
+    minWidth: 0,
   },
   screenTitle: {
     color: Colors.text,
-    fontFamily: Typography.display,
-    fontSize: 29,
-    lineHeight: 31,
-    letterSpacing: 0.5,
+    fontSize: Typography.size.title,
+    lineHeight: Typography.lineHeight.title,
+    fontWeight: Typography.weight.bold,
   },
   subtitle: {
+    marginTop: Spacing.xxs,
     color: Colors.muted,
-    fontSize: Typography.size.caption,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
   },
   closeButton: {
     width: MIN_TOUCH,
     height: MIN_TOUCH,
-    borderRadius: Radius.full,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.panel,
     alignItems: "center",
     justifyContent: "center",
+    borderRadius: Radius.md,
   },
-  summaryCard: {
+  summary: {
+    minHeight: 92,
     marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.xl,
-    backgroundColor: Colors.panel,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderLeftWidth: 5,
-    padding: Spacing.lg,
-    gap: Spacing.md,
-    ...Shadow.card,
+    flexDirection: "row",
+    alignItems: "center",
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSection,
   },
-  summaryTop: {
+  summaryMetric: {
+    flex: 1,
+    minWidth: 0,
+    alignItems: "center",
+    paddingHorizontal: Spacing.xs,
+  },
+  summaryDivider: {
+    width: StyleSheet.hairlineWidth,
+    height: 42,
+    backgroundColor: Colors.border,
+  },
+  summaryValue: {
+    color: Colors.text,
+    fontFamily: Typography.mono,
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: Typography.weight.bold,
+    textAlign: "center",
+  },
+  summaryLabel: {
+    marginTop: Spacing.xxs,
+    color: Colors.muted,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
+    textAlign: "center",
+  },
+  overallProgress: {
+    marginHorizontal: Spacing.lg,
+    paddingVertical: Spacing.lg,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSection,
+  },
+  overallHelp: {
+    marginTop: Spacing.sm,
+    color: Colors.muted,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.body,
+  },
+  progressRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
+  progressTrack: {
+    flex: 1,
+    height: 3,
+    overflow: "hidden",
+    backgroundColor: Colors.inset,
+  },
+  progressFill: {
+    height: 3,
+    backgroundColor: Colors.sky,
+  },
+  progressValue: {
+    width: 42,
+    color: Colors.skyDark,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
+    textAlign: "right",
+  },
+  section: {
+    marginTop: Spacing.xl,
+    paddingHorizontal: Spacing.lg,
+  },
+  sectionHeader: {
+    minHeight: 38,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: Spacing.lg,
+    gap: Spacing.md,
   },
-  progressCopy: {
-    flex: 1,
+  sectionTitle: {
+    color: Colors.text,
+    fontSize: 18,
+    lineHeight: 24,
+    fontWeight: Typography.weight.bold,
   },
-  summaryLabel: {
+  sectionDetail: {
+    flexShrink: 1,
     color: Colors.muted,
-    fontSize: 9,
-    fontWeight: Typography.weight.bold,
-    letterSpacing: 1.4,
-  },
-  progressValue: {
     fontFamily: Typography.mono,
-    fontSize: 32,
-    lineHeight: 38,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+    textAlign: "right",
+  },
+  recentList: {
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSection,
+  },
+  recentRow: {
+    minHeight: 66,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+  },
+  lastRow: {
+    borderBottomWidth: 0,
+  },
+  listIcon: {
+    width: 28,
+    minHeight: 28,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  recentCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  recentTitle: {
+    color: Colors.text,
+    fontSize: Typography.size.body,
+    lineHeight: Typography.lineHeight.body,
     fontWeight: Typography.weight.bold,
   },
-  pointsLine: {
+  recentMeta: {
+    marginTop: Spacing.xxs,
     color: Colors.muted,
     fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
   },
-  unlockedBox: {
-    minWidth: 82,
-    alignItems: "center",
-    backgroundColor: Palette.greenSoft,
-    borderRadius: Radius.md,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
-  },
-  unlockedValue: {
+  recentPoints: {
+    flexShrink: 0,
     color: Colors.green,
     fontFamily: Typography.mono,
-    fontSize: 22,
-    lineHeight: 27,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
     fontWeight: Typography.weight.bold,
   },
-  unlockedLabel: {
-    color: Colors.green,
-    fontSize: 8,
-    fontWeight: Typography.weight.bold,
-  },
-  unlockedCaption: {
+  recordHelp: {
     color: Colors.muted,
-    fontSize: 7,
-    letterSpacing: 0.7,
-    marginTop: 2,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.body,
   },
-  summaryFooter: {
+  categorySection: {
+    marginTop: Spacing.xl,
+    marginHorizontal: Spacing.lg,
+  },
+  categoryHeader: {
+    minHeight: 34,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: Spacing.md,
+  },
+  categoryTitleRow: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
+  categoryTitle: {
+    color: Colors.text,
+    fontSize: Typography.size.body,
+    lineHeight: Typography.lineHeight.body,
+    fontWeight: Typography.weight.bold,
+  },
+  categoryCount: {
+    flexShrink: 0,
+    color: Colors.muted,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+  },
+  achievementList: {
+    marginTop: Spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSection,
+  },
+  achievementRow: {
+    minHeight: 88,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: Spacing.md,
+    paddingVertical: Spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+  },
+  achievementCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  achievementTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
+  achievementTitle: {
+    flex: 1,
+    minWidth: 0,
+    color: Colors.text,
+    fontSize: Typography.size.body,
+    lineHeight: Typography.lineHeight.body,
+    fontWeight: Typography.weight.bold,
+  },
+  achievementPoints: {
+    flexShrink: 0,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+  },
+  achievementDescription: {
+    marginTop: Spacing.xxs,
+    color: Colors.muted,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.body,
+  },
+  lockedText: {
+    color: Colors.muted,
+  },
+  achievementState: {
+    marginTop: Spacing.xs,
     flexDirection: "row",
     alignItems: "center",
     gap: Spacing.xs,
   },
-  summaryNote: {
-    flex: 1,
-    color: Colors.dim,
-    fontSize: 10,
-    lineHeight: 14,
-  },
-  section: {
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.xl,
-  },
-  sectionHeading: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: Spacing.sm,
-  },
-  sectionLabel: {
-    color: Colors.muted,
-    fontSize: 9,
-    fontWeight: Typography.weight.bold,
-    letterSpacing: 1.7,
-  },
-  sectionHint: {
-    color: Colors.dim,
-    fontSize: 10,
-    marginTop: Spacing.xs,
-  },
-  recentList: {
-    gap: Spacing.sm,
-  },
-  recordHeading: {
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.lg,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: Spacing.md,
-  },
-  recordCount: {
-    minWidth: 34,
-    height: 34,
-    borderRadius: Radius.full,
-    backgroundColor: Palette.blueSoft,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  recordCountText: {
-    color: Colors.skyDark,
-    fontFamily: Typography.mono,
-    fontSize: 10,
-    fontWeight: Typography.weight.bold,
+  achievementStateText: {
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
+    fontWeight: Typography.weight.medium,
   },
 });

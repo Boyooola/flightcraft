@@ -1,13 +1,18 @@
 /**
- * Local AI rival standings with a gateway to Google Play competition.
+ * Local airline standings and the Google Play global ranking gateway.
+ *
+ * Every local airline uses the same comparison: cash minus outstanding loans.
+ * The screen intentionally avoids synthetic scores and decorative podium UI.
  */
 
 import {
+  AirlineBrandMark,
+  type AirlineLogoId,
+} from "@/components/airline-identity";
+import {
   Colors,
   MIN_TOUCH,
-  Palette,
   Radius,
-  Shadow,
   Spacing,
   Typography,
 } from "@/constants/theme";
@@ -17,8 +22,16 @@ import {
   usePlayGames,
 } from "@/hooks/usePlayGames";
 import { useTabBarHeight } from "@/hooks/useSheetLayout";
+import { DEFAULT_AIRLINE_LOGO_ID, getAirlinePalette } from "@/lib/airlineBrand";
 import { fmtCash } from "@/lib/revenue";
-import { useAIAirlines, useAirline, useGameStore } from "@/store";
+import {
+  useAIAirlines,
+  useAirline,
+  useGameStore,
+  useHubs,
+  useRoutes,
+  useTodayCash,
+} from "@/store";
 import { Ionicons } from "@expo/vector-icons";
 import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import { useMemo } from "react";
@@ -30,151 +43,165 @@ import {
   View,
 } from "react-native";
 
-interface RivalRow {
+interface Standing {
   id: string;
   name: string;
-  color: string;
+  code: string;
+  logoId: AirlineLogoId;
+  primaryColor: string;
+  secondaryColor: string;
+  isPlayer: boolean;
+  description: string;
   netWorth: number;
-  reputation: number;
-  demandScore: number;
-  score: number;
+  dailyResult: number;
+  routeCount: number;
+  hubCount: number;
 }
 
-function shortScore(score: number) {
-  if (score >= 1_000_000) return `${(score / 1_000_000).toFixed(1)}M`;
-  if (score >= 1_000) return `${Math.round(score / 1_000)}K`;
-  return score.toLocaleString();
+function signedCash(value: number) {
+  return value > 0 ? `+${fmtCash(value)}` : fmtCash(value);
 }
 
-function rankTheme(rank: number) {
-  if (rank === 1) {
-    return { color: Colors.amber, surface: Palette.orangeSoft };
-  }
-
-  if (rank === 2) {
-    return { color: Colors.muted, surface: Colors.inset };
-  }
-
-  if (rank === 3) {
-    return { color: "#A65F32", surface: "#F3E3D7" };
-  }
-
-  return { color: Colors.muted, surface: Palette.cloud };
+function plural(value: number, singular: string) {
+  return `${value} ${singular}${value === 1 ? "" : "s"}`;
 }
 
-function RankBadge({ rank }: { rank: number }) {
-  const theme = rankTheme(rank);
+function StandingRow({ standing, rank }: { standing: Standing; rank: number }) {
+  const dailyColor =
+    standing.dailyResult > 0
+      ? Colors.green
+      : standing.dailyResult < 0
+        ? Colors.red
+        : Colors.muted;
 
   return (
-    <View style={[rankStyles.badge, { backgroundColor: theme.surface }]}>
-      {rank <= 3 ? (
-        <Ionicons name="medal-outline" size={13} color={theme.color} />
-      ) : (
-        <Text style={rankStyles.hash}>#</Text>
-      )}
-      <Text style={[rankStyles.value, { color: theme.color }]}>{rank}</Text>
+    <View
+      accessibilityLabel={`${rank}. ${standing.name}, ${standing.code}. Net worth ${fmtCash(standing.netWorth)}. Daily result ${signedCash(standing.dailyResult)}.`}
+      style={[styles.standingRow, standing.isPlayer && styles.playerRow]}
+    >
+      <Text style={[styles.rank, standing.isPlayer && styles.playerRank]}>
+        {rank}
+      </Text>
+
+      <AirlineBrandMark
+        accessibilityLabel=""
+        logoId={standing.logoId}
+        primary={standing.primaryColor}
+        secondary={standing.secondaryColor}
+        size={38}
+        variant="leaderboard"
+      />
+
+      <View style={styles.airlineDetails}>
+        <Text numberOfLines={1} style={styles.airlineName}>
+          {standing.name}
+        </Text>
+        <Text numberOfLines={2} style={styles.airlineMeta}>
+          {standing.code} · {standing.description} ·{" "}
+          {plural(standing.routeCount, "route")} ·{" "}
+          {plural(standing.hubCount, "hub")}
+        </Text>
+      </View>
+
+      <View style={styles.financeValues}>
+        <Text style={styles.netWorth}>{fmtCash(standing.netWorth)}</Text>
+        <Text style={[styles.dailyResult, { color: dailyColor }]}>
+          {signedCash(standing.dailyResult)} today
+        </Text>
+      </View>
     </View>
   );
 }
 
-function PlayGamesCard() {
+function GlobalRankings() {
   const { status, isSignedIn, signIn, player } = usePlayGames();
   const isConnecting = status === "signing-in";
   const failed = status === "failed";
 
-  return (
-    <View style={playStyles.card}>
-      <View style={playStyles.header}>
-        <View style={playStyles.icon}>
-          <Ionicons
-            name="game-controller-outline"
-            size={22}
-            color={Colors.sky}
-          />
-        </View>
+  const statusText = isSignedIn
+    ? `Connected as ${player?.displayName ?? "Pilot"}`
+    : isConnecting
+      ? "Connecting your pilot profile..."
+      : failed
+        ? "Unable to connect. Check your connection and try again."
+        : "Connect to compare your net worth with other players.";
 
-        <View style={playStyles.headerCopy}>
-          <Text style={playStyles.eyebrow}>ONLINE COMPETITION</Text>
-          <Text style={playStyles.title}>Google Play Games</Text>
-          <Text style={[playStyles.subtitle, failed && { color: Colors.red }]}>
-            {isSignedIn
-              ? `Connected as ${player?.displayName ?? "Pilot"}`
-              : isConnecting
-                ? "Connecting your pilot profile…"
-                : failed
-                  ? "Could not connect. You can try again."
-                  : "Connect to compare net worth with real players."}
+  return (
+    <View style={styles.globalSection}>
+      <View style={styles.sectionTitleRow}>
+        <View style={styles.sectionTitleCopy}>
+          <Text style={styles.sectionTitle}>Global rankings</Text>
+          <Text style={[styles.sectionDescription, failed && styles.errorText]}>
+            {statusText}
           </Text>
         </View>
-
-        <View
-          style={[
-            playStyles.connectionDot,
-            {
-              backgroundColor: isSignedIn
-                ? Colors.green
-                : failed
-                  ? Colors.red
-                  : Colors.dim,
-            },
-          ]}
+        <Ionicons
+          accessibilityElementsHidden
+          importantForAccessibility="no"
+          name="game-controller-outline"
+          size={21}
+          color={isSignedIn ? Colors.green : failed ? Colors.red : Colors.muted}
         />
       </View>
 
       {isSignedIn ? (
-        <View style={playStyles.actions}>
+        <View style={styles.actionRow}>
           <TouchableOpacity
-            accessibilityLabel="Open global airline rankings"
+            accessibilityLabel="View global airline rankings"
             accessibilityRole="button"
-            style={playStyles.primaryButton}
-            activeOpacity={0.85}
+            activeOpacity={0.7}
             onPress={showLeaderboard}
+            style={styles.primaryButton}
           >
             <Ionicons
               name="earth-outline"
-              size={17}
+              size={18}
               color={Colors.textOnColor}
             />
-            <Text style={playStyles.primaryButtonText}>Global rankings</Text>
+            <Text style={styles.primaryButtonText}>View rankings</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            accessibilityLabel="Open Google Play achievements"
+            accessibilityLabel="View Google Play achievements"
             accessibilityRole="button"
-            style={playStyles.secondaryButton}
-            activeOpacity={0.85}
+            activeOpacity={0.7}
             onPress={showAchievements}
+            style={styles.secondaryButton}
           >
-            <Ionicons name="ribbon-outline" size={17} color={Colors.skyDark} />
-            <Text style={playStyles.secondaryButtonText}>Achievements</Text>
+            <Ionicons name="ribbon-outline" size={18} color={Colors.skyDark} />
+            <Text style={styles.secondaryButtonText}>Achievements</Text>
           </TouchableOpacity>
         </View>
       ) : (
         <TouchableOpacity
           accessibilityLabel={
-            failed ? "Retry Play Games sign in" : "Sign in to Play Games"
+            failed
+              ? "Retry Google Play Games connection"
+              : "Connect Google Play Games"
           }
           accessibilityRole="button"
-          style={[
-            playStyles.signInButton,
-            isConnecting && playStyles.disabledButton,
-          ]}
-          activeOpacity={0.85}
-          onPress={signIn}
+          accessibilityState={{ busy: isConnecting, disabled: isConnecting }}
+          activeOpacity={0.7}
           disabled={isConnecting}
+          onPress={signIn}
+          style={[
+            styles.primaryButton,
+            styles.connectButton,
+            isConnecting && styles.disabledButton,
+          ]}
         >
           {isConnecting ? (
             <ActivityIndicator size="small" color={Colors.textOnColor} />
           ) : (
             <Ionicons
               name="logo-google-playstore"
-              size={17}
+              size={18}
               color={Colors.textOnColor}
             />
           )}
-          <Text style={playStyles.signInText}>
+          <Text style={styles.primaryButtonText}>
             {isConnecting
-              ? "Connecting…"
+              ? "Connecting..."
               : failed
                 ? "Try again"
                 : "Connect Play Games"}
@@ -185,78 +212,65 @@ function PlayGamesCard() {
   );
 }
 
-function RivalCard({ row, rank }: { row: RivalRow; rank: number }) {
-  const isPodium = rank <= 3;
-
-  return (
-    <View style={[rivalStyles.card, isPodium && rivalStyles.podiumCard]}>
-      <RankBadge rank={rank} />
-
-      <View
-        style={[
-          rivalStyles.airlineMark,
-          { backgroundColor: row.color || Colors.sky },
-        ]}
-      >
-        <Ionicons name="airplane" size={14} color={Colors.textOnColor} />
-      </View>
-
-      <View style={rivalStyles.body}>
-        <View style={rivalStyles.nameRow}>
-          <Text numberOfLines={1} style={rivalStyles.name}>
-            {row.name}
-          </Text>
-          <View style={rivalStyles.aiBadge}>
-            <Text style={rivalStyles.aiText}>AI RIVAL</Text>
-          </View>
-        </View>
-
-        <Text numberOfLines={1} style={rivalStyles.meta}>
-          {fmtCash(row.netWorth)} net worth · {row.demandScore} demand ·{" "}
-          {row.reputation}% rep
-        </Text>
-      </View>
-
-      <View style={rivalStyles.scoreBox}>
-        <Text
-          style={[
-            rivalStyles.score,
-            { color: isPodium ? rankTheme(rank).color : Colors.text },
-          ]}
-        >
-          {shortScore(row.score)}
-        </Text>
-        <Text style={rivalStyles.scoreLabel}>LEAGUE SCORE</Text>
-      </View>
-    </View>
-  );
-}
-
 export default function LeaderboardSheet() {
   const closeSheet = useGameStore((state) => state.closeSheet);
   const tabBarHeight = useTabBarHeight();
   const airline = useAirline();
   const aiAirlines = useAIAirlines();
+  const routes = useRoutes();
+  const hubs = useHubs();
+  const todayCash = useTodayCash();
 
-  const color = airline?.color ?? Colors.sky;
+  const standings = useMemo<Standing[]>(() => {
+    const defaultPalette = getAirlinePalette("aviation-blue");
+    const player: Standing = {
+      id: airline?.id ?? "player",
+      name: airline?.name ?? "Your airline",
+      code: airline?.airline_code ?? "AIR",
+      logoId: airline?.logo_id ?? DEFAULT_AIRLINE_LOGO_ID,
+      primaryColor: airline?.color ?? defaultPalette.primary,
+      secondaryColor: airline?.secondary_color ?? defaultPalette.secondary,
+      isPlayer: true,
+      description: "Your airline",
+      netWorth: (airline?.cash ?? 0) - (airline?.loan ?? 0),
+      dailyResult: todayCash,
+      routeCount: routes.filter((route) => route.active).length,
+      hubCount: hubs.length,
+    };
 
-  const rivals = useMemo<RivalRow[]>(
-    () =>
-      [...aiAirlines]
-        .sort((first, second) => second.score - first.score)
-        .map((rival) => ({
-          id: rival.id,
-          name: rival.name,
-          color: rival.color,
-          netWorth: rival.netWorth,
-          reputation: rival.reputation,
-          demandScore: rival.demandScore,
-          score: rival.score,
-        })),
-    [aiAirlines],
-  );
+    const rivals: Standing[] = aiAirlines.map((rival) => ({
+      id: rival.id,
+      name: rival.name,
+      code: rival.code,
+      logoId: rival.logoId,
+      primaryColor: rival.color,
+      secondaryColor: rival.secondaryColor,
+      isPlayer: false,
+      description: `${rival.difficulty[0].toUpperCase()}${rival.difficulty.slice(1)} rival`,
+      netWorth: rival.cash - rival.loan,
+      dailyResult: rival.dailyProfit,
+      routeCount: rival.routeCount,
+      hubCount: rival.hubIatas.length,
+    }));
 
-  const topRival = rivals[0];
+    return [player, ...rivals].sort((first, second) => {
+      const worthDifference = second.netWorth - first.netWorth;
+      if (worthDifference !== 0) return worthDifference;
+      return second.dailyResult - first.dailyResult;
+    });
+  }, [aiAirlines, airline, hubs.length, routes, todayCash]);
+
+  const playerIndex = standings.findIndex((standing) => standing.isPlayer);
+  const playerRank = playerIndex + 1;
+  const leader = standings[0];
+  const player = standings[playerIndex];
+  const leaderGap = leader && player ? leader.netWorth - player.netWorth : 0;
+  const positionDetail =
+    playerRank === 1
+      ? "Leading the local market"
+      : leader
+        ? `${fmtCash(leaderGap)} behind ${leader.name}`
+        : "No local competition configured";
 
   return (
     <BottomSheetScrollView
@@ -268,24 +282,15 @@ export default function LeaderboardSheet() {
       showsVerticalScrollIndicator={false}
     >
       <View style={styles.header}>
-        <View
-          style={[
-            styles.headerMark,
-            { borderColor: color, backgroundColor: color + "14" },
-          ]}
-        >
-          <Ionicons name="podium-outline" size={21} color={color} />
-        </View>
-
         <View style={styles.headerCopy}>
-          <Text style={styles.kicker}>COMPETITION</Text>
           <Text style={styles.screenTitle}>Rankings</Text>
-          <Text style={styles.subtitle}>Local rivals and global players</Text>
+          <Text style={styles.subtitle}>Airline performance</Text>
         </View>
 
         <TouchableOpacity
           accessibilityLabel="Close rankings"
           accessibilityRole="button"
+          activeOpacity={0.7}
           onPress={closeSheet}
           style={styles.closeButton}
         >
@@ -293,153 +298,279 @@ export default function LeaderboardSheet() {
         </TouchableOpacity>
       </View>
 
-      <PlayGamesCard />
-
-      <View style={styles.sectionHeading}>
-        <View>
-          <Text style={styles.sectionLabel}>LOCAL AI LEAGUE</Text>
-          <Text style={styles.sectionHint}>
-            Rivals grow as your game advances
-          </Text>
+      <View style={styles.positionSummary}>
+        <View style={styles.positionIdentity}>
+          {player ? (
+            <AirlineBrandMark
+              accessibilityLabel={`${player.name} badge`}
+              logoId={player.logoId}
+              primary={player.primaryColor}
+              secondary={player.secondaryColor}
+              size={42}
+              variant="leaderboard"
+            />
+          ) : null}
+          <View style={styles.positionCopy}>
+            <Text style={styles.summaryLabel}>Local position</Text>
+            <Text numberOfLines={2} style={styles.summaryDetail}>
+              {positionDetail}
+            </Text>
+          </View>
         </View>
-        <View style={styles.rivalCount}>
-          <Text style={styles.rivalCountValue}>{rivals.length}</Text>
-          <Text style={styles.rivalCountLabel}>RIVALS</Text>
-        </View>
+        <Text style={styles.positionValue}>
+          #{playerRank}{" "}
+          <Text style={styles.positionTotal}>of {standings.length}</Text>
+        </Text>
       </View>
 
-      {topRival && (
-        <View style={[styles.leaderCard, { borderLeftColor: topRival.color }]}>
-          <View style={styles.leaderCrown}>
-            <Ionicons name="trophy" size={21} color={Colors.amber} />
-          </View>
-
-          <View style={styles.leaderCopy}>
-            <Text style={styles.leaderLabel}>CURRENT LEAGUE LEADER</Text>
-            <Text style={styles.leaderName} numberOfLines={1}>
-              {topRival.name}
+      <View style={styles.localSection}>
+        <View style={styles.sectionTitleRow}>
+          <View style={styles.sectionTitleCopy}>
+            <Text style={styles.sectionTitle}>Local standings</Text>
+            <Text style={styles.sectionDescription}>
+              Ranked by cash minus outstanding loans
             </Text>
-            <Text style={styles.leaderMeta}>
-              {fmtCash(topRival.netWorth)} net worth · {topRival.reputation}%
-              reputation
-            </Text>
-          </View>
-
-          <View style={styles.leaderScoreBox}>
-            <Text style={styles.leaderScore}>{shortScore(topRival.score)}</Text>
-            <Text style={styles.leaderScoreLabel}>SCORE</Text>
           </View>
         </View>
-      )}
 
-      <View style={styles.rankingsSection}>
-        {rivals.length === 0 ? (
-          <View style={styles.emptyState}>
-            <View style={styles.emptyIcon}>
-              <Ionicons name="people-outline" size={24} color={Colors.sky} />
-            </View>
-            <Text style={styles.emptyTitle}>No local rivals</Text>
-            <Text style={styles.emptyText}>
-              AI airlines can be added when creating a new game.
-            </Text>
-          </View>
-        ) : (
-          <View style={styles.rivalList}>
-            {rivals.map((rival, index) => (
-              <RivalCard key={rival.id} row={rival} rank={index + 1} />
-            ))}
-          </View>
+        <View style={styles.columnHeader}>
+          <Text style={styles.airlineColumnLabel}>Airline</Text>
+          <Text style={styles.valueColumnLabel}>Net worth</Text>
+        </View>
+
+        <View style={styles.standingsList}>
+          {standings.map((standing, index) => (
+            <StandingRow
+              key={standing.id}
+              standing={standing}
+              rank={index + 1}
+            />
+          ))}
+        </View>
+
+        {aiAirlines.length === 0 && (
+          <Text style={styles.noRivalsText}>
+            No AI rivals are active in this game. Your airline is still shown so
+            the financial measure remains clear.
+          </Text>
         )}
-
-        <View style={styles.infoNote}>
-          <Ionicons
-            name="information-circle-outline"
-            size={15}
-            color={Colors.dim}
-          />
-          <Text style={styles.infoText}>
-            Local league scores track simulated rivals. Real-player rankings use
-            your submitted net worth in Google Play Games.
-          </Text>
-        </View>
       </View>
+
+      <GlobalRankings />
     </BottomSheetScrollView>
   );
 }
 
-const rankStyles = StyleSheet.create({
-  badge: {
-    width: 42,
-    height: 32,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 2,
-    borderRadius: Radius.full,
+const styles = StyleSheet.create({
+  root: {
+    flex: 1,
   },
-  hash: {
-    color: Colors.dim,
-    fontSize: 10,
-    fontWeight: Typography.weight.bold,
-  },
-  value: {
-    fontFamily: Typography.mono,
-    fontSize: 11,
-    fontWeight: Typography.weight.bold,
-  },
-});
-
-const playStyles = StyleSheet.create({
-  card: {
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.xl,
-    backgroundColor: Colors.panel,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    padding: Spacing.lg,
-    ...Shadow.card,
+  content: {
+    paddingBottom: Spacing.xxl,
   },
   header: {
+    minHeight: 64,
     flexDirection: "row",
     alignItems: "center",
-    gap: Spacing.md,
-  },
-  icon: {
-    width: 44,
-    height: 44,
-    borderRadius: Radius.md,
-    backgroundColor: Palette.blueSoft,
-    alignItems: "center",
-    justifyContent: "center",
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.sm,
+    paddingBottom: Spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
   },
   headerCopy: {
     flex: 1,
   },
-  eyebrow: {
-    color: Colors.skyDark,
-    fontSize: 8,
-    fontWeight: Typography.weight.bold,
-    letterSpacing: 1.2,
-  },
-  title: {
+  screenTitle: {
     color: Colors.text,
-    fontSize: 16,
-    lineHeight: 20,
+    fontSize: Typography.size.title,
+    lineHeight: Typography.lineHeight.title,
     fontWeight: Typography.weight.bold,
   },
   subtitle: {
     color: Colors.muted,
     fontSize: Typography.size.caption,
     lineHeight: Typography.lineHeight.caption,
+  },
+  closeButton: {
+    width: MIN_TOUCH,
+    height: MIN_TOUCH,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: Radius.md,
+  },
+  positionSummary: {
+    minHeight: 84,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: Spacing.lg,
+    marginHorizontal: Spacing.lg,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSection,
+  },
+  positionIdentity: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.md,
+  },
+  positionCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  summaryLabel: {
+    color: Colors.text,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+    fontWeight: Typography.weight.semibold,
+  },
+  summaryDetail: {
+    color: Colors.muted,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
     marginTop: Spacing.xxs,
   },
-  connectionDot: {
-    width: 10,
-    height: 10,
-    borderRadius: Radius.full,
+  positionValue: {
+    color: Colors.skyDark,
+    fontFamily: Typography.mono,
+    fontSize: 20,
+    lineHeight: 26,
+    fontWeight: Typography.weight.bold,
   },
-  actions: {
+  positionTotal: {
+    color: Colors.muted,
+    fontSize: 11,
+    fontWeight: Typography.weight.regular,
+  },
+  localSection: {
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.xl,
+  },
+  sectionTitleRow: {
+    minHeight: MIN_TOUCH,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.md,
+  },
+  sectionTitleCopy: {
+    flex: 1,
+  },
+  sectionTitle: {
+    color: Colors.text,
+    fontSize: 16,
+    lineHeight: 21,
+    fontWeight: Typography.weight.bold,
+  },
+  sectionDescription: {
+    color: Colors.muted,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
+    marginTop: Spacing.xxs,
+  },
+  errorText: {
+    color: Colors.red,
+  },
+  columnHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingTop: Spacing.md,
+    paddingBottom: Spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSection,
+  },
+  airlineColumnLabel: {
+    flex: 1,
+    color: Colors.muted,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
+    fontWeight: Typography.weight.semibold,
+    paddingLeft: 72,
+  },
+  valueColumnLabel: {
+    color: Colors.muted,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
+    fontWeight: Typography.weight.semibold,
+    textAlign: "right",
+  },
+  standingsList: {
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSection,
+  },
+  standingRow: {
+    minHeight: 72,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.xs,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+  },
+  playerRow: {
+    backgroundColor: Colors.skyDim,
+  },
+  rank: {
+    width: 24,
+    color: Colors.muted,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+    textAlign: "center",
+  },
+  playerRank: {
+    color: Colors.skyDark,
+    fontWeight: Typography.weight.bold,
+  },
+  airlineDetails: {
+    flex: 1,
+    minWidth: 0,
+  },
+  airlineName: {
+    color: Colors.text,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: Typography.weight.semibold,
+  },
+  airlineMeta: {
+    color: Colors.muted,
+    fontSize: 10,
+    lineHeight: 14,
+    marginTop: Spacing.xxs,
+  },
+  financeValues: {
+    minWidth: 84,
+    alignItems: "flex-end",
+  },
+  netWorth: {
+    color: Colors.text,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+    fontWeight: Typography.weight.bold,
+  },
+  dailyResult: {
+    fontFamily: Typography.mono,
+    fontSize: 9,
+    lineHeight: 14,
+    marginTop: Spacing.xxs,
+  },
+  noRivalsText: {
+    color: Colors.muted,
+    fontSize: Typography.size.caption,
+    lineHeight: 17,
+    paddingTop: Spacing.md,
+  },
+  globalSection: {
+    marginTop: Spacing.xxl,
+    marginHorizontal: Spacing.lg,
+    paddingTop: Spacing.lg,
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
+  },
+  actionRow: {
     flexDirection: "row",
     gap: Spacing.sm,
     marginTop: Spacing.md,
@@ -453,12 +584,13 @@ const playStyles = StyleSheet.create({
     gap: Spacing.sm,
     backgroundColor: Colors.sky,
     borderRadius: Radius.md,
-    paddingHorizontal: Spacing.sm,
+    paddingHorizontal: Spacing.md,
   },
   primaryButtonText: {
     color: Colors.textOnColor,
-    fontSize: 11,
-    fontWeight: Typography.weight.bold,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+    fontWeight: Typography.weight.semibold,
   },
   secondaryButton: {
     minHeight: MIN_TOUCH,
@@ -467,309 +599,23 @@ const playStyles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: Spacing.sm,
-    backgroundColor: Palette.blueSoft,
-    borderRadius: Radius.md,
+    backgroundColor: Colors.surface,
     borderWidth: 1,
-    borderColor: "rgba(23,105,170,0.20)",
-    paddingHorizontal: Spacing.sm,
-  },
-  secondaryButtonText: {
-    color: Colors.skyDark,
-    fontSize: 11,
-    fontWeight: Typography.weight.bold,
-  },
-  signInButton: {
-    minHeight: MIN_TOUCH,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: Spacing.sm,
-    marginTop: Spacing.md,
-    backgroundColor: Colors.sky,
+    borderColor: Colors.borderSection,
     borderRadius: Radius.md,
     paddingHorizontal: Spacing.md,
   },
+  secondaryButtonText: {
+    color: Colors.skyDark,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+    fontWeight: Typography.weight.semibold,
+  },
+  connectButton: {
+    flex: 0,
+    marginTop: Spacing.md,
+  },
   disabledButton: {
     opacity: 0.6,
-  },
-  signInText: {
-    color: Colors.textOnColor,
-    fontSize: Typography.size.label,
-    fontWeight: Typography.weight.bold,
-  },
-});
-
-const rivalStyles = StyleSheet.create({
-  card: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.sm,
-    backgroundColor: Colors.panel,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    padding: Spacing.md,
-  },
-  podiumCard: {
-    backgroundColor: Palette.paper,
-    borderColor: Colors.borderSection,
-  },
-  airlineMark: {
-    width: 34,
-    height: 34,
-    borderRadius: Radius.md,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  body: {
-    flex: 1,
-    minWidth: 0,
-  },
-  nameRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.xs,
-  },
-  name: {
-    flex: 1,
-    color: Colors.text,
-    fontSize: 13,
-    lineHeight: 17,
-    fontWeight: Typography.weight.bold,
-  },
-  aiBadge: {
-    backgroundColor: Colors.inset,
-    borderRadius: Radius.full,
-    paddingHorizontal: 6,
-    paddingVertical: 3,
-  },
-  aiText: {
-    color: Colors.muted,
-    fontSize: 7,
-    fontWeight: Typography.weight.bold,
-    letterSpacing: 0.5,
-  },
-  meta: {
-    color: Colors.muted,
-    fontSize: 9,
-    lineHeight: 13,
-    marginTop: Spacing.xxs,
-  },
-  scoreBox: {
-    alignItems: "flex-end",
-  },
-  score: {
-    fontFamily: Typography.mono,
-    fontSize: 14,
-    lineHeight: 18,
-    fontWeight: Typography.weight.bold,
-  },
-  scoreLabel: {
-    color: Colors.dim,
-    fontSize: 6,
-    fontWeight: Typography.weight.bold,
-    letterSpacing: 0.5,
-  },
-});
-
-const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-  },
-  content: {
-    paddingBottom: Spacing.xxl,
-  },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.md,
-    paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.sm,
-    paddingBottom: Spacing.lg,
-  },
-  headerMark: {
-    width: 44,
-    height: 44,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  headerCopy: {
-    flex: 1,
-  },
-  kicker: {
-    color: Colors.skyDark,
-    fontSize: 9,
-    fontWeight: Typography.weight.bold,
-    letterSpacing: 1.7,
-  },
-  screenTitle: {
-    color: Colors.text,
-    fontFamily: Typography.display,
-    fontSize: 29,
-    lineHeight: 31,
-    letterSpacing: 0.5,
-  },
-  subtitle: {
-    color: Colors.muted,
-    fontSize: Typography.size.caption,
-  },
-  closeButton: {
-    width: MIN_TOUCH,
-    height: MIN_TOUCH,
-    borderRadius: Radius.full,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.panel,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  sectionHeading: {
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.sm,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: Spacing.md,
-  },
-  sectionLabel: {
-    color: Colors.muted,
-    fontSize: 9,
-    fontWeight: Typography.weight.bold,
-    letterSpacing: 1.7,
-  },
-  sectionHint: {
-    color: Colors.dim,
-    fontSize: 10,
-    marginTop: Spacing.xs,
-  },
-  rivalCount: {
-    alignItems: "flex-end",
-  },
-  rivalCountValue: {
-    color: Colors.skyDark,
-    fontFamily: Typography.mono,
-    fontSize: 18,
-    lineHeight: 21,
-    fontWeight: Typography.weight.bold,
-  },
-  rivalCountLabel: {
-    color: Colors.dim,
-    fontSize: 7,
-    fontWeight: Typography.weight.bold,
-    letterSpacing: 0.7,
-  },
-  leaderCard: {
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.md,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.md,
-    backgroundColor: Colors.panel,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderLeftWidth: 5,
-    padding: Spacing.md,
-    ...Shadow.card,
-  },
-  leaderCrown: {
-    width: 42,
-    height: 42,
-    borderRadius: Radius.md,
-    backgroundColor: Palette.orangeSoft,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  leaderCopy: {
-    flex: 1,
-    minWidth: 0,
-  },
-  leaderLabel: {
-    color: Colors.amber,
-    fontSize: 8,
-    fontWeight: Typography.weight.bold,
-    letterSpacing: 1,
-  },
-  leaderName: {
-    color: Colors.text,
-    fontSize: 16,
-    lineHeight: 20,
-    fontWeight: Typography.weight.bold,
-  },
-  leaderMeta: {
-    color: Colors.muted,
-    fontSize: 9,
-    lineHeight: 13,
-    marginTop: Spacing.xxs,
-  },
-  leaderScoreBox: {
-    alignItems: "flex-end",
-  },
-  leaderScore: {
-    color: Colors.amber,
-    fontFamily: Typography.mono,
-    fontSize: 17,
-    fontWeight: Typography.weight.bold,
-  },
-  leaderScoreLabel: {
-    color: Colors.dim,
-    fontSize: 7,
-    fontWeight: Typography.weight.bold,
-    letterSpacing: 0.7,
-  },
-  rankingsSection: {
-    paddingHorizontal: Spacing.lg,
-  },
-  rivalList: {
-    gap: Spacing.sm,
-  },
-  emptyState: {
-    alignItems: "center",
-    backgroundColor: Colors.panel,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderStyle: "dashed",
-    paddingHorizontal: Spacing.xl,
-    paddingVertical: Spacing.xxl,
-  },
-  emptyIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: Radius.full,
-    backgroundColor: Palette.blueSoft,
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: Spacing.sm,
-  },
-  emptyTitle: {
-    color: Colors.text,
-    fontSize: 16,
-    fontWeight: Typography.weight.bold,
-  },
-  emptyText: {
-    maxWidth: 280,
-    color: Colors.muted,
-    fontSize: Typography.size.caption,
-    lineHeight: Typography.lineHeight.caption,
-    textAlign: "center",
-    marginTop: Spacing.xs,
-  },
-  infoNote: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: Spacing.sm,
-    marginTop: Spacing.lg,
-    paddingTop: Spacing.md,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Colors.border,
-  },
-  infoText: {
-    flex: 1,
-    color: Colors.dim,
-    fontSize: 10,
-    lineHeight: 15,
   },
 });

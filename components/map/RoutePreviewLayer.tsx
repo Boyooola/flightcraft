@@ -1,329 +1,225 @@
-/**
- * Live flight-plan preview shown while the player selects route waypoints.
- */
+/** Route path shown only while the player is planning a new service. */
 
-import { Colors, Palette } from "@/constants/theme";
+import { Colors } from "@/constants/theme";
+import type { Airport } from "@/store";
 import { useGameStore } from "@/store";
 import MapboxGL from "@rnmapbox/maps";
+import { useMemo } from "react";
 
-const ARC_STEPS = 40;
+type Coordinate = [number, number];
 
-function buildArc(
-  lng1: number,
-  lat1: number,
-  lng2: number,
-  lat2: number,
-  steps = ARC_STEPS,
-): [number, number][] {
-  const points: [number, number][] = [];
+type PreviewProperties = {
+  routeType: "direct" | "one_stop";
+  stopIata: string;
+};
+
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+function degreesToRadians(value: number): number {
+  return (value * Math.PI) / 180;
+}
+
+function radiansToDegrees(value: number): number {
+  return (value * 180) / Math.PI;
+}
+
+function validCoordinate(airport: Airport): boolean {
+  return (
+    Number.isFinite(airport.lng) &&
+    Number.isFinite(airport.lat) &&
+    airport.lng >= -180 &&
+    airport.lng <= 180 &&
+    airport.lat >= -90 &&
+    airport.lat <= 90
+  );
+}
+
+function shortestLongitudeDelta(from: number, to: number): number {
+  return ((((to - from) % 360) + 540) % 360) - 180;
+}
+
+function linearArc(
+  from: Coordinate,
+  to: Coordinate,
+  steps: number,
+): Coordinate[] {
+  const longitudeDelta = shortestLongitudeDelta(from[0], to[0]);
+
+  return Array.from({ length: steps + 1 }, (_, index) => {
+    const progress = index / steps;
+    return [
+      from[0] + longitudeDelta * progress,
+      from[1] + (to[1] - from[1]) * progress,
+    ];
+  });
+}
+
+function greatCircleArc(from: Coordinate, to: Coordinate): Coordinate[] {
+  const fromLongitude = degreesToRadians(from[0]);
+  const fromLatitude = degreesToRadians(from[1]);
+  const toLongitude = degreesToRadians(to[0]);
+  const toLatitude = degreesToRadians(to[1]);
+  const fromVector = [
+    Math.cos(fromLatitude) * Math.cos(fromLongitude),
+    Math.cos(fromLatitude) * Math.sin(fromLongitude),
+    Math.sin(fromLatitude),
+  ];
+  const toVector = [
+    Math.cos(toLatitude) * Math.cos(toLongitude),
+    Math.cos(toLatitude) * Math.sin(toLongitude),
+    Math.sin(toLatitude),
+  ];
+  const dot = clamp(
+    fromVector[0] * toVector[0] +
+      fromVector[1] * toVector[1] +
+      fromVector[2] * toVector[2],
+    -1,
+    1,
+  );
+  const angle = Math.acos(dot);
+  const steps = Math.max(
+    12,
+    Math.min(72, Math.ceil(radiansToDegrees(angle) / 3)),
+  );
+  const sineAngle = Math.sin(angle);
+
+  if (angle < 0.000001 || Math.abs(sineAngle) < 0.000001) {
+    return linearArc(from, to, steps);
+  }
+
+  const points: Coordinate[] = [];
+  let previousLongitude = from[0];
 
   for (let index = 0; index <= steps; index++) {
     const progress = index / steps;
-    const longitude = lng1 + (lng2 - lng1) * progress;
-    const latitude = lat1 + (lat2 - lat1) * progress;
-    const span = Math.abs(lng2 - lng1);
-    const curve = Math.sin(progress * Math.PI) * span * 0.12;
+    const fromWeight = Math.sin((1 - progress) * angle) / sineAngle;
+    const toWeight = Math.sin(progress * angle) / sineAngle;
+    const x = fromWeight * fromVector[0] + toWeight * toVector[0];
+    const y = fromWeight * fromVector[1] + toWeight * toVector[1];
+    const z = fromWeight * fromVector[2] + toWeight * toVector[2];
+    const magnitude = Math.sqrt(x * x + y * y + z * z) || 1;
+    let longitude = radiansToDegrees(Math.atan2(y, x));
+    const latitude = radiansToDegrees(Math.asin(clamp(z / magnitude, -1, 1)));
 
-    points.push([longitude, latitude + curve]);
+    while (longitude - previousLongitude > 180) longitude -= 360;
+    while (longitude - previousLongitude < -180) longitude += 360;
+
+    points.push([longitude, latitude]);
+    previousLongitude = longitude;
   }
 
   return points;
 }
 
-function bearing(
-  [lng1, lat1]: [number, number],
-  [lng2, lat2]: [number, number],
-) {
-  const longitudeDelta = ((lng2 - lng1) * Math.PI) / 180;
-  const latitude1 = (lat1 * Math.PI) / 180;
-  const latitude2 = (lat2 * Math.PI) / 180;
-  const y = Math.sin(longitudeDelta) * Math.cos(latitude2);
-  const x =
-    Math.cos(latitude1) * Math.sin(latitude2) -
-    Math.sin(latitude1) *
-      Math.cos(latitude2) *
-      Math.cos(longitudeDelta);
-
-  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+/**
+ * The creation store keeps [origin, destination, optional stop] because the
+ * destination is selected before a stop can be added from the map.
+ */
+function operationalOrder(waypoints: Airport[]): Airport[] {
+  if (waypoints.length !== 3) return waypoints;
+  const [origin, destination, stop] = waypoints;
+  return [origin, stop, destination];
 }
 
-export default function RoutePreviewLayer({
-  airlineColor,
-}: {
-  airlineColor: string;
-}) {
-  const routeCreationMode = useGameStore((state) => state.routeCreationMode);
-  const waypoints = useGameStore((state) => state.creationWaypoints);
-
-  if (!routeCreationMode || waypoints.length === 0) return null;
-
-  const arcFeatures: GeoJSON.Feature[] = [];
-  const directionFeatures: GeoJSON.Feature[] = [];
-
-  for (let index = 0; index < waypoints.length - 1; index++) {
-    const from = waypoints[index];
-    const to = waypoints[index + 1];
-    const points = buildArc(from.lng, from.lat, to.lng, to.lat);
-    const middleIndex = Math.floor(points.length / 2);
-    const middle = points[middleIndex];
-    const next = points[Math.min(middleIndex + 1, points.length - 1)];
-
-    arcFeatures.push({
-      type: "Feature",
-      id: `preview-arc-${index}`,
-      geometry: {
-        type: "LineString",
-        coordinates: points,
-      },
-      properties: {
-        segment: index + 1,
-      },
-    });
-
-    directionFeatures.push({
-      type: "Feature",
-      id: `preview-direction-${index}`,
-      geometry: {
-        type: "Point",
-        coordinates: middle,
-      },
-      properties: {
-        rotation: bearing(middle, next),
-      },
-    });
+function buildPreviewFeature(
+  waypoints: Airport[],
+): GeoJSON.Feature<GeoJSON.LineString, PreviewProperties> | null {
+  if (
+    waypoints.length < 2 ||
+    waypoints.some((item) => !validCoordinate(item))
+  ) {
+    return null;
   }
 
-  const waypointFeatures: GeoJSON.Feature[] = waypoints.map(
-    (waypoint, index) => {
-      const isOrigin = index === 0;
-      const isDestination =
-        waypoints.length > 1 && index === waypoints.length - 1;
-      const isStop = !isOrigin && !isDestination;
-      const role = isOrigin ? "ORIGIN" : isStop ? "STOP" : "DEST";
+  const ordered = operationalOrder(waypoints);
+  const coordinates: Coordinate[] = [];
 
-      return {
-        type: "Feature",
-        id: `preview-waypoint-${index}`,
-        geometry: {
-          type: "Point",
-          coordinates: [waypoint.lng, waypoint.lat],
-        },
-        properties: {
-          index,
-          isOrigin,
-          isStop,
-          isDestination,
-          displayLabel: `${index + 1}  ${role} · ${waypoint.iata}`,
-        },
-      };
+  for (let index = 0; index < ordered.length - 1; index++) {
+    const from = ordered[index];
+    const to = ordered[index + 1];
+    const leg = greatCircleArc([from.lng, from.lat], [to.lng, to.lat]);
+    coordinates.push(...(index === 0 ? leg : leg.slice(1)));
+  }
+
+  if (coordinates.length < 2) return null;
+
+  return {
+    type: "Feature",
+    id: "route-preview",
+    geometry: {
+      type: "LineString",
+      coordinates,
     },
-  );
+    properties: {
+      routeType: ordered.length === 3 ? "one_stop" : "direct",
+      stopIata: ordered.length === 3 ? ordered[1].iata : "",
+    },
+  };
+}
 
-  const arcGeoJSON: GeoJSON.FeatureCollection = {
-    type: "FeatureCollection",
-    features: arcFeatures,
-  };
-  const directionGeoJSON: GeoJSON.FeatureCollection = {
-    type: "FeatureCollection",
-    features: directionFeatures,
-  };
-  const waypointGeoJSON: GeoJSON.FeatureCollection = {
-    type: "FeatureCollection",
-    features: waypointFeatures,
-  };
+export default function RoutePreviewLayer() {
+  const routeCreationMode = useGameStore((state) => state.routeCreationMode);
+  const waypoints = useGameStore((state) => state.creationWaypoints);
+  const previewGeoJSON = useMemo<
+    GeoJSON.FeatureCollection<GeoJSON.LineString, PreviewProperties>
+  >(() => {
+    const feature = routeCreationMode ? buildPreviewFeature(waypoints) : null;
+    return {
+      type: "FeatureCollection",
+      features: feature ? [feature] : [],
+    };
+  }, [routeCreationMode, waypoints]);
 
-  const roleColor: any = [
-    "case",
-    ["get", "isOrigin"],
-    airlineColor,
-    ["get", "isStop"],
-    Colors.purple,
-    Colors.green,
-  ];
-  const roleFill: any = [
-    "case",
-    ["get", "isOrigin"],
-    Colors.surface,
-    ["get", "isStop"],
-    Palette.violetSoft,
-    Palette.greenSoft,
-  ];
+  if (previewGeoJSON.features.length === 0) return null;
 
   return (
-    <>
-      {arcFeatures.length > 0 ? (
-        <>
-          <MapboxGL.ShapeSource id="route-preview-arc" shape={arcGeoJSON}>
-            <MapboxGL.LineLayer
-              id="route-preview-casing"
-              existing={false}
-              style={{
-                lineColor: Colors.surface,
-                lineWidth: [
-                  "interpolate",
-                  ["linear"],
-                  ["zoom"],
-                  1,
-                  5,
-                  6,
-                  7,
-                  10,
-                  9,
-                ],
-                lineOpacity: 0.94,
-                lineCap: "round",
-                lineJoin: "round",
-              }}
-            />
-            <MapboxGL.LineLayer
-              id="route-preview-line"
-              existing={false}
-              style={{
-                lineColor: airlineColor,
-                lineWidth: [
-                  "interpolate",
-                  ["linear"],
-                  ["zoom"],
-                  1,
-                  2,
-                  6,
-                  3,
-                  10,
-                  4,
-                ],
-                lineOpacity: 0.95,
-                lineDasharray: [2, 1.6],
-                lineCap: "round",
-                lineJoin: "round",
-              }}
-            />
-          </MapboxGL.ShapeSource>
+    <MapboxGL.ShapeSource id="route-preview-source" shape={previewGeoJSON}>
+      <MapboxGL.LineLayer
+        id="route-preview-casing"
+        existing={false}
+        style={{
+          lineColor: Colors.surface,
+          lineWidth: [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            1,
+            3,
+            6,
+            4.2,
+            10,
+            5.4,
+          ],
+          lineOpacity: 0.9,
+          lineCap: "round",
+          lineJoin: "round",
+        }}
+      />
 
-          <MapboxGL.ShapeSource
-            id="route-preview-directions"
-            shape={directionGeoJSON}
-          >
-            <MapboxGL.SymbolLayer
-              id="route-preview-direction-arrows"
-              existing={false}
-              style={{
-                textField: "➤",
-                textSize: [
-                  "interpolate",
-                  ["linear"],
-                  ["zoom"],
-                  1,
-                  11,
-                  6,
-                  15,
-                  10,
-                  18,
-                ],
-                textColor: airlineColor,
-                textHaloColor: Colors.surface,
-                textHaloWidth: 2.5,
-                textHaloBlur: 0.5,
-                textRotate: ["get", "rotation"],
-                textRotationAlignment: "map",
-                textAllowOverlap: true,
-                textIgnorePlacement: true,
-              }}
-            />
-          </MapboxGL.ShapeSource>
-        </>
-      ) : null}
-
-      <MapboxGL.ShapeSource
-        id="route-preview-waypoints"
-        shape={waypointGeoJSON}
-      >
-        <MapboxGL.CircleLayer
-          id="route-preview-waypoint-ring"
-          existing={false}
-          style={{
-            circleRadius: [
-              "interpolate",
-              ["linear"],
-              ["zoom"],
-              1,
-              11,
-              6,
-              17,
-              10,
-              25,
-            ],
-            circleColor: "transparent",
-            circleOpacity: 0,
-            circleStrokeColor: roleColor,
-            circleStrokeWidth: 2,
-            circleStrokeOpacity: 0.35,
-            circlePitchAlignment: "map",
-          }}
-        />
-
-        <MapboxGL.CircleLayer
-          id="route-preview-waypoint-disc"
-          existing={false}
-          style={{
-            circleRadius: [
-              "interpolate",
-              ["linear"],
-              ["zoom"],
-              1,
-              5,
-              6,
-              8,
-              10,
-              12,
-            ],
-            circleColor: roleFill,
-            circleOpacity: 1,
-            circleStrokeColor: roleColor,
-            circleStrokeWidth: 3,
-            circleStrokeOpacity: 1,
-            circlePitchAlignment: "map",
-          }}
-        />
-
-        <MapboxGL.CircleLayer
-          id="route-preview-waypoint-core"
-          existing={false}
-          style={{
-            circleRadius: [
-              "interpolate",
-              ["linear"],
-              ["zoom"],
-              1,
-              1.5,
-              6,
-              2.5,
-              10,
-              4,
-            ],
-            circleColor: roleColor,
-            circleOpacity: 1,
-            circlePitchAlignment: "map",
-          }}
-        />
-
-        <MapboxGL.SymbolLayer
-          id="route-preview-waypoint-labels"
-          existing={false}
-          style={{
-            textField: ["get", "displayLabel"],
-            textSize: ["interpolate", ["linear"], ["zoom"], 1, 9, 6, 11, 10, 12],
-            textColor: roleColor,
-            textHaloColor: Colors.surface,
-            textHaloWidth: 3,
-            textHaloBlur: 0.5,
-            textOffset: [0, 1.75],
-            textAnchor: "top",
-            textFont: ["DIN Offc Pro Bold", "Arial Unicode MS Bold"],
-            textAllowOverlap: true,
-            textIgnorePlacement: true,
-          }}
-        />
-      </MapboxGL.ShapeSource>
-    </>
+      <MapboxGL.LineLayer
+        id="route-preview-line"
+        existing={false}
+        style={{
+          lineColor: Colors.skyDark,
+          lineWidth: [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            1,
+            1.2,
+            6,
+            2,
+            10,
+            2.8,
+          ],
+          lineOpacity: 1,
+          lineDasharray: [2.5, 1.5],
+          lineCap: "round",
+          lineJoin: "round",
+        }}
+      />
+    </MapboxGL.ShapeSource>
   );
 }

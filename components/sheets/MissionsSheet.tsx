@@ -1,13 +1,12 @@
 /**
- * A focused dispatch board for daily missions and the weekly challenge.
+ * Daily and weekly objectives presented as a flat dispatch brief.
  */
 
+import { AirlineBrandMark } from "@/components/airline-identity";
 import {
   Colors,
   MIN_TOUCH,
-  Palette,
   Radius,
-  Shadow,
   Spacing,
   Typography,
 } from "@/constants/theme";
@@ -17,6 +16,7 @@ import {
   useWeeklyChallenge,
   useWeeklyProgress,
 } from "@/hooks/useWeeklyChallenge";
+import { DEFAULT_AIRLINE_LOGO_ID, getAirlinePalette } from "@/lib/airlineBrand";
 import type { Mission } from "@/lib/missions";
 import { fmtCash } from "@/lib/revenue";
 import {
@@ -32,9 +32,17 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import { useMemo } from "react";
-import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import {
+  ActivityIndicator,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
 
-const MISSION_ICONS: Record<string, string> = {
+type IconName = keyof typeof Ionicons.glyphMap;
+
+const MISSION_ICONS: Record<Mission["type"], IconName> = {
   route_create: "git-branch-outline",
   pax_carry: "people-outline",
   revenue_earn: "cash-outline",
@@ -62,7 +70,7 @@ function useMissionProgress(mission: Mission): MissionProgress {
 
   return useMemo(() => {
     if (mission.completed) {
-      return { progress: 1, complete: true, detail: "Goal complete" };
+      return { progress: 1, complete: true, detail: "Reward paid" };
     }
 
     const target = mission.target;
@@ -99,7 +107,7 @@ function useMissionProgress(mission: Mission): MissionProgress {
         return {
           progress,
           complete: progress >= 1,
-          detail: `${Math.floor(moved).toLocaleString()} / ${goal.toLocaleString()} pax`,
+          detail: `${Math.floor(moved).toLocaleString()} / ${goal.toLocaleString()} passengers`,
         };
       }
 
@@ -178,7 +186,7 @@ function useMissionProgress(mission: Mission): MissionProgress {
           complete,
           detail: complete
             ? "Crowding cleared"
-            : `${remaining.length} slot${remaining.length === 1 ? "" : "s"} waiting`,
+            : `${remaining.length} ${remaining.length === 1 ? "market" : "markets"} waiting`,
         };
       }
 
@@ -197,7 +205,7 @@ function useMissionProgress(mission: Mission): MissionProgress {
         };
 
       default:
-        return { progress: 0, complete: false, detail: "Goal in progress" };
+        return { progress: 0, complete: false, detail: "In progress" };
     }
   }, [
     airline?.day,
@@ -213,180 +221,169 @@ function useMissionProgress(mission: Mission): MissionProgress {
   ]);
 }
 
-function ProgressBar({ progress, color }: { progress: number; color: string }) {
+function SectionHeader({ title, detail }: { title: string; detail?: string }) {
+  return (
+    <View style={styles.sectionHeader}>
+      <Text style={styles.sectionTitle}>{title}</Text>
+      {detail ? <Text style={styles.sectionDetail}>{detail}</Text> : null}
+    </View>
+  );
+}
+
+function ProgressLine({
+  progress,
+  color,
+  label,
+}: {
+  progress: number;
+  color: string;
+  label: string;
+}) {
   const percentage = Math.round(Math.max(0, Math.min(1, progress)) * 100);
 
   return (
-    <View style={progressStyles.row}>
-      <View style={progressStyles.track}>
+    <View style={styles.progressRow}>
+      <View
+        accessibilityLabel={`${label}: ${percentage}% complete`}
+        accessibilityRole="progressbar"
+        accessibilityValue={{ min: 0, max: 100, now: percentage }}
+        style={styles.progressTrack}
+      >
         <View
           style={[
-            progressStyles.fill,
-            { width: `${percentage}%` as `${number}%`, backgroundColor: color },
+            styles.progressFill,
+            {
+              width: `${percentage}%` as `${number}%`,
+              backgroundColor: color,
+            },
           ]}
         />
       </View>
-      <Text style={[progressStyles.value, { color }]}>{percentage}%</Text>
+      <Text style={[styles.progressValue, { color }]}>{percentage}%</Text>
     </View>
   );
 }
 
-function MissionCard({ mission, color }: { mission: Mission; color: string }) {
+function MissionRow({ mission, last }: { mission: Mission; last: boolean }) {
   const { progress, complete, detail } = useMissionProgress(mission);
-  const isPaid = mission.completed;
-  const isReady = complete && !isPaid;
-  const accent = complete ? Colors.green : color;
-  const icon = MISSION_ICONS[mission.type] ?? "flag-outline";
+  const paid = mission.completed;
+  const ready = complete && !paid;
+  const stateColor = paid || ready ? Colors.green : Colors.skyDark;
+  const stateIcon: IconName = paid
+    ? "checkmark-circle"
+    : ready
+      ? "time-outline"
+      : "ellipse-outline";
+  const stateLabel = paid
+    ? "Reward paid"
+    : ready
+      ? "Ready for day close"
+      : "In progress";
 
   return (
-    <View style={[missionStyles.card, complete && missionStyles.cardComplete]}>
-      <View style={[missionStyles.rail, { backgroundColor: accent }]} />
-
-      <View style={missionStyles.body}>
-        <View style={missionStyles.heading}>
-          <View
-            style={[
-              missionStyles.icon,
-              {
-                backgroundColor: complete
-                  ? Palette.greenSoft
-                  : Palette.blueSoft,
-              },
-            ]}
-          >
-            <Ionicons name={icon as any} size={18} color={accent} />
-          </View>
-
-          <View style={missionStyles.headingCopy}>
-            <Text style={missionStyles.title} numberOfLines={2}>
-              {mission.title}
-            </Text>
-            <Text style={missionStyles.description}>{mission.desc}</Text>
-          </View>
-
-          <View
-            style={[
-              missionStyles.status,
-              complete
-                ? missionStyles.statusComplete
-                : missionStyles.statusActive,
-            ]}
-          >
-            <Text
-              style={[
-                missionStyles.statusText,
-                { color: complete ? Colors.green : Colors.skyDark },
-              ]}
-            >
-              {isPaid ? "PAID" : isReady ? "READY" : "ACTIVE"}
-            </Text>
-          </View>
+    <View style={[styles.missionRow, last && styles.lastRow]}>
+      <View style={styles.missionHeading}>
+        <View style={styles.missionIcon}>
+          <Ionicons
+            name={MISSION_ICONS[mission.type]}
+            size={20}
+            color={stateColor}
+          />
         </View>
-
-        <ProgressBar progress={progress} color={accent} />
-
-        <View style={missionStyles.detailRow}>
-          <Text style={missionStyles.detail}>{detail}</Text>
-          <View style={missionStyles.reward}>
-            <Ionicons name="cash-outline" size={13} color={Colors.green} />
-            <Text style={missionStyles.rewardText}>
-              {fmtCash(mission.reward)}
-            </Text>
-          </View>
+        <View style={styles.missionCopy}>
+          <Text style={styles.missionTitle}>{mission.title}</Text>
+          <Text style={styles.missionDescription}>{mission.desc}</Text>
         </View>
-
-        {isReady && (
-          <View style={missionStyles.readyNote}>
-            <Ionicons name="time-outline" size={13} color={Colors.green} />
-            <Text style={missionStyles.readyNoteText}>
-              Goal reached. Reward pays when the next day begins.
-            </Text>
-          </View>
-        )}
       </View>
+
+      <View style={styles.missionStateRow}>
+        <View style={styles.missionState}>
+          <Ionicons name={stateIcon} size={15} color={stateColor} />
+          <Text style={[styles.missionStateText, { color: stateColor }]}>
+            {stateLabel}
+          </Text>
+        </View>
+        <Text style={styles.missionReward}>
+          Reward {fmtCash(mission.reward)}
+        </Text>
+      </View>
+
+      <ProgressLine
+        progress={progress}
+        color={paid || ready ? Colors.green : Colors.sky}
+        label={mission.title}
+      />
+
+      <Text style={styles.missionDetail}>{detail}</Text>
     </View>
   );
 }
 
-function WeeklyChallengeCard({
+function WeeklyObjective({
   challenge,
-  onComplete,
   completing,
+  onComplete,
 }: {
   challenge: WeeklyChallenge;
-  onComplete: () => void;
   completing: boolean;
+  onComplete: () => void;
 }) {
   const progress = useWeeklyProgress(challenge);
   const ready = !challenge.completed && progress >= 1;
-  const accent = challenge.completed ? Colors.green : Colors.amber;
+  const stateColor = challenge.completed || ready ? Colors.green : Colors.sky;
 
   return (
-    <View style={weeklyStyles.card}>
-      <View style={weeklyStyles.topRow}>
-        <View style={weeklyStyles.badge}>
-          <Ionicons name="calendar-outline" size={12} color={Colors.amber} />
-          <Text style={weeklyStyles.badgeText}>WEEKLY ASSIGNMENT</Text>
-        </View>
-
-        <View style={weeklyStyles.reward}>
-          <Text style={weeklyStyles.rewardLabel}>BONUS</Text>
-          <Text style={weeklyStyles.rewardValue}>
-            {fmtCash(challenge.reward)}
-          </Text>
-        </View>
-      </View>
-
-      <View style={weeklyStyles.heading}>
-        <View style={weeklyStyles.icon}>
+    <View style={styles.weeklyObjective}>
+      <View style={styles.weeklyHeading}>
+        <View style={styles.weeklyIcon}>
           <Ionicons
-            name={challenge.icon as any}
-            size={20}
-            color={Colors.amber}
+            name={challenge.icon as IconName}
+            size={21}
+            color={stateColor}
           />
         </View>
-        <View style={weeklyStyles.copy}>
-          <Text style={weeklyStyles.title}>{challenge.title}</Text>
-          <Text style={weeklyStyles.description}>{challenge.desc}</Text>
+        <View style={styles.weeklyCopy}>
+          <Text style={styles.weeklyTitle}>{challenge.title}</Text>
+          <Text style={styles.weeklyDescription}>{challenge.desc}</Text>
         </View>
       </View>
 
-      <ProgressBar progress={progress} color={accent} />
-
-      <View style={weeklyStyles.footer}>
-        <Text
-          style={[
-            weeklyStyles.state,
-            challenge.completed && { color: Colors.green },
-          ]}
-        >
+      <View style={styles.weeklyRewardRow}>
+        <Text style={styles.weeklyState}>
           {challenge.completed
             ? "Bonus claimed"
             : ready
-              ? "Challenge complete"
+              ? "Objective complete"
               : "Progress saves throughout the week"}
         </Text>
-
-        {ready && (
-          <TouchableOpacity
-            accessibilityLabel="Claim weekly mission reward"
-            accessibilityRole="button"
-            style={weeklyStyles.claimButton}
-            onPress={onComplete}
-            disabled={completing}
-            activeOpacity={0.85}
-          >
-            <Ionicons
-              name="gift-outline"
-              size={16}
-              color={Colors.textOnColor}
-            />
-            <Text style={weeklyStyles.claimText}>
-              {completing ? "Claiming…" : "Claim bonus"}
-            </Text>
-          </TouchableOpacity>
-        )}
+        <Text style={styles.weeklyReward}>
+          Bonus {fmtCash(challenge.reward)}
+        </Text>
       </View>
+
+      <ProgressLine
+        progress={progress}
+        color={stateColor}
+        label={challenge.title}
+      />
+
+      {ready ? (
+        <TouchableOpacity
+          accessibilityLabel={`Claim ${fmtCash(challenge.reward)} weekly reward`}
+          accessibilityRole="button"
+          accessibilityState={{ busy: completing, disabled: completing }}
+          activeOpacity={0.7}
+          disabled={completing}
+          onPress={onComplete}
+          style={[styles.claimButton, completing && styles.disabledControl]}
+        >
+          {completing ? (
+            <ActivityIndicator size="small" color={Colors.textOnColor} />
+          ) : (
+            <Text style={styles.claimButtonText}>Claim weekly bonus</Text>
+          )}
+        </TouchableOpacity>
+      ) : null}
     </View>
   );
 }
@@ -396,11 +393,23 @@ export default function MissionsSheet() {
   const airline = useAirline();
   const day = useDay();
   const closeSheet = useGameStore((state) => state.closeSheet);
-  const { challenge, completeWeekly, completing } = useWeeklyChallenge();
+  const {
+    challenge,
+    loading: weeklyLoading,
+    completing,
+    error: weeklyError,
+    completeWeekly,
+  } = useWeeklyChallenge();
   const tabBarHeight = useTabBarHeight();
 
-  const color = airline?.color ?? Colors.sky;
-  const totalCount = missions.length;
+  const defaultPalette = getAirlinePalette("aviation-blue");
+  const airlineName = airline?.name ?? "Your airline";
+  const airlineCode = airline?.airline_code ?? "AIR";
+  const airlineLogoId = airline?.logo_id ?? DEFAULT_AIRLINE_LOGO_ID;
+  const airlinePrimaryColor = airline?.color ?? defaultPalette.primary;
+  const airlineSecondaryColor =
+    airline?.secondary_color ?? defaultPalette.secondary;
+  const paidCount = missions.filter((mission) => mission.completed).length;
 
   return (
     <BottomSheetScrollView
@@ -412,24 +421,24 @@ export default function MissionsSheet() {
       showsVerticalScrollIndicator={false}
     >
       <View style={styles.header}>
-        <View
-          style={[
-            styles.headerMark,
-            { borderColor: color, backgroundColor: color + "14" },
-          ]}
-        >
-          <Ionicons name="flag-outline" size={21} color={color} />
-        </View>
-
+        <AirlineBrandMark
+          accessibilityLabel={`${airlineName} identity`}
+          logoId={airlineLogoId}
+          primary={airlinePrimaryColor}
+          secondary={airlineSecondaryColor}
+          size={42}
+          variant="leaderboard"
+        />
         <View style={styles.headerCopy}>
-          <Text style={styles.kicker}>DISPATCH BOARD</Text>
           <Text style={styles.screenTitle}>Missions</Text>
-          <Text style={styles.subtitle}>Clear goals. Useful rewards.</Text>
+          <Text numberOfLines={1} style={styles.subtitle}>
+            {airlineName} · {airlineCode} · Day {day} dispatch brief
+          </Text>
         </View>
-
         <TouchableOpacity
           accessibilityLabel="Close missions"
           accessibilityRole="button"
+          activeOpacity={0.7}
           onPress={closeSheet}
           style={styles.closeButton}
         >
@@ -437,536 +446,429 @@ export default function MissionsSheet() {
         </TouchableOpacity>
       </View>
 
-      <View style={[styles.dailyBrief, { borderLeftColor: color }]}>
-        <View style={styles.briefCopy}>
-          <Text style={styles.briefLabel}>DAY {day} OPERATIONS</Text>
-          <Text style={styles.briefTitle}>Today’s flight plan</Text>
-          <Text style={styles.briefDescription}>
-            Complete each assignment before advancing the day.
+      <View style={styles.dailySummary}>
+        <View style={styles.dailySummaryCopy}>
+          <Text style={styles.dailySummaryLabel}>Today&apos;s assignments</Text>
+          <Text style={styles.dailySummaryHelp}>
+            Complete objectives before closing the game day.
           </Text>
         </View>
+        <View style={styles.dailySummaryValue}>
+          <Text style={styles.dailySummaryNumber}>
+            {paidCount} / {missions.length}
+          </Text>
+          <Text style={styles.dailySummaryCaption}>paid</Text>
+        </View>
+      </View>
 
-        <View style={styles.scoreBlock}>
-          <Text style={[styles.scoreValue, { color }]}>{totalCount || 3}</Text>
-          <Text style={styles.scoreLabel}>ASSIGNMENTS</Text>
-          <View style={styles.scoreDots}>
-            {Array.from({ length: Math.max(totalCount, 3) }, (_, index) => (
-              <View
-                key={index}
-                style={[
-                  styles.scoreDot,
-                  {
-                    backgroundColor: index < totalCount ? color : Colors.inset,
-                    borderColor:
-                      index < totalCount ? color : Colors.borderSection,
-                  },
-                ]}
+      <View style={styles.section}>
+        <SectionHeader
+          title="Daily assignments"
+          detail={`${missions.length} ${missions.length === 1 ? "objective" : "objectives"}`}
+        />
+        {missions.length > 0 ? (
+          <View style={styles.missionList}>
+            {missions.map((mission, index) => (
+              <MissionRow
+                key={mission.id}
+                mission={mission}
+                last={index === missions.length - 1}
               />
             ))}
           </View>
-        </View>
-      </View>
-
-      {challenge && (
-        <View style={styles.section}>
-          <Text style={styles.sectionLabel}>THIS WEEK</Text>
-          <WeeklyChallengeCard
-            challenge={challenge}
-            onComplete={completeWeekly}
-            completing={completing}
-          />
-        </View>
-      )}
-
-      <View style={styles.sectionHeading}>
-        <View>
-          <Text style={styles.sectionLabel}>TODAY’S ASSIGNMENTS</Text>
-          <Text style={styles.sectionHint}>
-            Rewards pay at the next day change
-          </Text>
-        </View>
-        <View style={styles.countPill}>
-          <Text style={styles.countText}>{totalCount}</Text>
-        </View>
-      </View>
-
-      {missions.length === 0 ? (
-        <View style={styles.emptyState}>
-          <View style={styles.emptyIcon}>
-            <Ionicons name="sunny-outline" size={25} color={Colors.sky} />
+        ) : (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyTitle}>No assignments available</Text>
+            <Text style={styles.emptyText}>
+              New daily assignments will be issued when the next game day
+              begins.
+            </Text>
           </View>
-          <Text style={styles.emptyTitle}>Board cleared</Text>
-          <Text style={styles.emptyText}>
-            New daily assignments will be posted when tomorrow begins.
-          </Text>
-        </View>
-      ) : (
-        <View style={styles.missionList}>
-          {missions.map((mission) => (
-            <MissionCard key={mission.id} mission={mission} color={color} />
-          ))}
-        </View>
-      )}
+        )}
+      </View>
 
-      <View style={styles.infoNote}>
+      <View style={styles.section}>
+        <SectionHeader
+          title="Weekly objective"
+          detail={
+            challenge
+              ? `Week ${challenge.weekNumber}, ${challenge.weekYear}`
+              : undefined
+          }
+        />
+        {weeklyLoading ? (
+          <View style={styles.weeklyStatusRow}>
+            <ActivityIndicator size="small" color={Colors.sky} />
+            <Text style={styles.weeklyStatusText}>
+              Loading weekly objective
+            </Text>
+          </View>
+        ) : weeklyError ? (
+          <View
+            accessibilityLiveRegion="assertive"
+            accessibilityRole="alert"
+            style={styles.weeklyStatusRow}
+          >
+            <Ionicons name="warning-outline" size={18} color={Colors.red} />
+            <Text style={[styles.weeklyStatusText, { color: Colors.red }]}>
+              {weeklyError}
+            </Text>
+          </View>
+        ) : challenge ? (
+          <WeeklyObjective
+            challenge={challenge}
+            completing={completing}
+            onComplete={completeWeekly}
+          />
+        ) : (
+          <View style={styles.weeklyStatusRow}>
+            <Ionicons name="calendar-outline" size={18} color={Colors.muted} />
+            <Text style={styles.weeklyStatusText}>
+              No weekly objective is currently available.
+            </Text>
+          </View>
+        )}
+      </View>
+
+      <View style={styles.guidance}>
         <Ionicons
           name="information-circle-outline"
-          size={15}
-          color={Colors.dim}
+          size={18}
+          color={Colors.muted}
         />
-        <Text style={styles.infoText}>
-          A goal can show as ready before its reward is paid. Advance the day to
-          settle completed daily missions.
+        <Text style={styles.guidanceText}>
+          A daily objective may show as ready before payment. Advance the game
+          day to verify the final result and settle its reward.
         </Text>
       </View>
     </BottomSheetScrollView>
   );
 }
 
-const progressStyles = StyleSheet.create({
-  row: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.sm,
-  },
-  track: {
-    flex: 1,
-    height: 8,
-    backgroundColor: Colors.inset,
-    borderRadius: Radius.full,
-    overflow: "hidden",
-  },
-  fill: {
-    height: "100%",
-    borderRadius: Radius.full,
-  },
-  value: {
-    width: 38,
-    fontFamily: Typography.mono,
-    fontSize: 10,
-    fontWeight: Typography.weight.bold,
-    textAlign: "right",
-  },
-});
-
-const missionStyles = StyleSheet.create({
-  card: {
-    flexDirection: "row",
-    backgroundColor: Colors.panel,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    overflow: "hidden",
-    ...Shadow.card,
-  },
-  cardComplete: {
-    backgroundColor: Palette.paper,
-    borderColor: "rgba(46,139,101,0.28)",
-  },
-  rail: {
-    width: 5,
-  },
-  body: {
-    flex: 1,
-    padding: Spacing.md,
-    gap: Spacing.md,
-  },
-  heading: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: Spacing.sm,
-  },
-  headingCopy: {
-    flex: 1,
-    gap: Spacing.xs,
-  },
-  icon: {
-    width: 38,
-    height: 38,
-    borderRadius: Radius.md,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  title: {
-    color: Colors.text,
-    fontSize: 15,
-    lineHeight: 19,
-    fontWeight: Typography.weight.bold,
-  },
-  description: {
-    color: Colors.muted,
-    fontSize: Typography.size.caption,
-    lineHeight: Typography.lineHeight.caption,
-  },
-  status: {
-    borderRadius: Radius.full,
-    borderWidth: 1,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-  },
-  statusActive: {
-    backgroundColor: Palette.blueSoft,
-    borderColor: "rgba(23,105,170,0.20)",
-  },
-  statusComplete: {
-    backgroundColor: Palette.greenSoft,
-    borderColor: "rgba(46,139,101,0.24)",
-  },
-  statusText: {
-    fontSize: 8,
-    lineHeight: 10,
-    fontWeight: Typography.weight.bold,
-    letterSpacing: 0.8,
-  },
-  detailRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: Spacing.sm,
-  },
-  detail: {
-    flex: 1,
-    color: Colors.muted,
-    fontFamily: Typography.mono,
-    fontSize: 10,
-  },
-  reward: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.xs,
-    backgroundColor: Palette.greenSoft,
-    borderRadius: Radius.full,
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: 5,
-  },
-  rewardText: {
-    color: Colors.green,
-    fontFamily: Typography.mono,
-    fontSize: 10,
-    fontWeight: Typography.weight.bold,
-  },
-  readyNote: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.xs,
-    paddingTop: Spacing.sm,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Colors.border,
-  },
-  readyNoteText: {
-    flex: 1,
-    color: Colors.green,
-    fontSize: 10,
-    lineHeight: 14,
-    fontWeight: Typography.weight.medium,
-  },
-});
-
-const weeklyStyles = StyleSheet.create({
-  card: {
-    backgroundColor: Palette.orangeSoft,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: "rgba(233,138,46,0.30)",
-    padding: Spacing.md,
-    gap: Spacing.md,
-  },
-  topRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    gap: Spacing.md,
-  },
-  badge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.xs,
-    backgroundColor: Colors.panel,
-    borderRadius: Radius.full,
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: 5,
-  },
-  badgeText: {
-    color: Colors.amber,
-    fontSize: 8,
-    fontWeight: Typography.weight.bold,
-    letterSpacing: 1,
-  },
-  reward: {
-    alignItems: "flex-end",
-  },
-  rewardLabel: {
-    color: Colors.muted,
-    fontSize: 8,
-    fontWeight: Typography.weight.bold,
-    letterSpacing: 1,
-  },
-  rewardValue: {
-    color: Colors.green,
-    fontFamily: Typography.mono,
-    fontSize: 14,
-    fontWeight: Typography.weight.bold,
-  },
-  heading: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.md,
-  },
-  icon: {
-    width: 44,
-    height: 44,
-    borderRadius: Radius.md,
-    backgroundColor: Colors.panel,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  copy: {
-    flex: 1,
-    gap: Spacing.xs,
-  },
-  title: {
-    color: Colors.text,
-    fontSize: 16,
-    lineHeight: 20,
-    fontWeight: Typography.weight.bold,
-  },
-  description: {
-    color: Colors.muted,
-    fontSize: Typography.size.caption,
-    lineHeight: Typography.lineHeight.caption,
-  },
-  footer: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: Spacing.md,
-  },
-  state: {
-    flex: 1,
-    color: Colors.muted,
-    fontSize: 10,
-    lineHeight: 14,
-    fontWeight: Typography.weight.medium,
-  },
-  claimButton: {
-    minHeight: MIN_TOUCH,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: Spacing.sm,
-    backgroundColor: Colors.green,
-    borderRadius: Radius.md,
-    paddingHorizontal: Spacing.md,
-  },
-  claimText: {
-    color: Colors.textOnColor,
-    fontSize: Typography.size.label,
-    fontWeight: Typography.weight.bold,
-  },
-});
-
 const styles = StyleSheet.create({
   root: {
     flex: 1,
+    backgroundColor: Colors.surface,
   },
   content: {
-    paddingBottom: Spacing.xxl,
+    backgroundColor: Colors.surface,
   },
   header: {
+    minHeight: 68,
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.sm,
-    paddingBottom: Spacing.lg,
     gap: Spacing.md,
-  },
-  headerMark: {
-    width: 44,
-    height: 44,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    alignItems: "center",
-    justifyContent: "center",
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
   },
   headerCopy: {
     flex: 1,
-  },
-  kicker: {
-    color: Colors.skyDark,
-    fontSize: 9,
-    fontWeight: Typography.weight.bold,
-    letterSpacing: 1.7,
+    minWidth: 0,
   },
   screenTitle: {
     color: Colors.text,
-    fontFamily: Typography.display,
-    fontSize: 29,
-    lineHeight: 31,
-    letterSpacing: 0.5,
+    fontSize: Typography.size.title,
+    lineHeight: Typography.lineHeight.title,
+    fontWeight: Typography.weight.bold,
   },
   subtitle: {
+    marginTop: Spacing.xxs,
     color: Colors.muted,
-    fontSize: Typography.size.caption,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
   },
   closeButton: {
     width: MIN_TOUCH,
     height: MIN_TOUCH,
-    borderRadius: Radius.full,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.panel,
     alignItems: "center",
     justifyContent: "center",
+    borderRadius: Radius.md,
   },
-  dailyBrief: {
+  dailySummary: {
+    minHeight: 78,
     marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.xl,
     flexDirection: "row",
     alignItems: "center",
     gap: Spacing.lg,
-    backgroundColor: Colors.panel,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderLeftWidth: 5,
-    padding: Spacing.lg,
-    ...Shadow.card,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSection,
   },
-  briefCopy: {
+  dailySummaryCopy: {
     flex: 1,
-    gap: Spacing.xs,
+    minWidth: 0,
   },
-  briefLabel: {
-    color: Colors.muted,
-    fontSize: 9,
-    fontWeight: Typography.weight.bold,
-    letterSpacing: 1.4,
-  },
-  briefTitle: {
+  dailySummaryLabel: {
     color: Colors.text,
-    fontSize: 18,
-    lineHeight: 22,
+    fontSize: Typography.size.body,
+    lineHeight: Typography.lineHeight.body,
     fontWeight: Typography.weight.bold,
   },
-  briefDescription: {
+  dailySummaryHelp: {
+    marginTop: Spacing.xxs,
+    color: Colors.muted,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+  },
+  dailySummaryValue: {
+    flexShrink: 0,
+    alignItems: "flex-end",
+  },
+  dailySummaryNumber: {
+    color: Colors.skyDark,
+    fontFamily: Typography.mono,
+    fontSize: 18,
+    lineHeight: 24,
+    fontWeight: Typography.weight.bold,
+  },
+  dailySummaryCaption: {
     color: Colors.muted,
     fontSize: Typography.size.caption,
     lineHeight: Typography.lineHeight.caption,
   },
-  scoreBlock: {
-    alignItems: "flex-end",
-  },
-  scoreValue: {
-    fontFamily: Typography.mono,
-    fontSize: 25,
-    lineHeight: 30,
-    fontWeight: Typography.weight.bold,
-  },
-  scoreLabel: {
-    color: Colors.dim,
-    fontSize: 7,
-    fontWeight: Typography.weight.bold,
-    letterSpacing: 0.8,
-  },
-  scoreDots: {
-    flexDirection: "row",
-    gap: 5,
-    marginTop: Spacing.sm,
-  },
-  scoreDot: {
-    width: 10,
-    height: 10,
-    borderRadius: Radius.full,
-    borderWidth: 1,
-  },
   section: {
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.xl,
-    gap: Spacing.sm,
+    marginTop: Spacing.xl,
+    paddingHorizontal: Spacing.lg,
   },
-  sectionHeading: {
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.sm,
+  sectionHeader: {
+    minHeight: 38,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-  },
-  sectionLabel: {
-    color: Colors.muted,
-    fontSize: 9,
-    fontWeight: Typography.weight.bold,
-    letterSpacing: 1.7,
-  },
-  sectionHint: {
-    color: Colors.dim,
-    fontSize: 10,
-    marginTop: Spacing.xs,
-  },
-  countPill: {
-    minWidth: 28,
-    height: 28,
-    borderRadius: Radius.full,
-    backgroundColor: Palette.blueSoft,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  countText: {
-    color: Colors.skyDark,
-    fontFamily: Typography.mono,
-    fontSize: 11,
-    fontWeight: Typography.weight.bold,
-  },
-  missionList: {
-    paddingHorizontal: Spacing.lg,
     gap: Spacing.md,
   },
-  emptyState: {
-    marginHorizontal: Spacing.lg,
-    alignItems: "center",
-    backgroundColor: Colors.panel,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderStyle: "dashed",
-    paddingHorizontal: Spacing.xl,
-    paddingVertical: Spacing.xxl,
+  sectionTitle: {
+    color: Colors.text,
+    fontSize: 18,
+    lineHeight: 24,
+    fontWeight: Typography.weight.bold,
   },
-  emptyIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: Radius.full,
-    backgroundColor: Palette.blueSoft,
+  sectionDetail: {
+    flexShrink: 1,
+    color: Colors.muted,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+    textAlign: "right",
+  },
+  missionList: {
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSection,
+  },
+  missionRow: {
+    paddingVertical: Spacing.lg,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+  },
+  lastRow: {
+    borderBottomWidth: 0,
+  },
+  missionHeading: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: Spacing.md,
+  },
+  missionIcon: {
+    width: 28,
+    minHeight: 28,
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: Spacing.sm,
+  },
+  missionCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  missionTitle: {
+    color: Colors.text,
+    fontSize: Typography.size.body,
+    lineHeight: Typography.lineHeight.body,
+    fontWeight: Typography.weight.bold,
+  },
+  missionDescription: {
+    marginTop: Spacing.xxs,
+    color: Colors.muted,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.body,
+  },
+  missionStateRow: {
+    marginTop: Spacing.md,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: Spacing.md,
+  },
+  missionState: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.xs,
+  },
+  missionStateText: {
+    flexShrink: 1,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+    fontWeight: Typography.weight.semibold,
+  },
+  missionReward: {
+    flexShrink: 0,
+    color: Colors.green,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+  },
+  progressRow: {
+    marginTop: Spacing.sm,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
+  progressTrack: {
+    flex: 1,
+    height: 3,
+    overflow: "hidden",
+    backgroundColor: Colors.inset,
+  },
+  progressFill: {
+    height: 3,
+  },
+  progressValue: {
+    width: 42,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
+    textAlign: "right",
+  },
+  missionDetail: {
+    marginTop: Spacing.xs,
+    color: Colors.muted,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
+  },
+  emptyState: {
+    paddingVertical: Spacing.xl,
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSection,
   },
   emptyTitle: {
     color: Colors.text,
-    fontSize: 16,
-    fontWeight: Typography.weight.bold,
+    fontSize: Typography.size.body,
+    lineHeight: Typography.lineHeight.body,
+    fontWeight: Typography.weight.semibold,
   },
   emptyText: {
-    maxWidth: 280,
-    color: Colors.muted,
-    fontSize: Typography.size.caption,
-    lineHeight: Typography.lineHeight.caption,
-    textAlign: "center",
     marginTop: Spacing.xs,
+    color: Colors.muted,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.body,
   },
-  infoNote: {
+  weeklyObjective: {
+    paddingVertical: Spacing.lg,
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSection,
+  },
+  weeklyHeading: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: Spacing.md,
+  },
+  weeklyIcon: {
+    width: 28,
+    minHeight: 28,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  weeklyCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  weeklyTitle: {
+    color: Colors.text,
+    fontSize: Typography.size.body,
+    lineHeight: Typography.lineHeight.body,
+    fontWeight: Typography.weight.bold,
+  },
+  weeklyDescription: {
+    marginTop: Spacing.xxs,
+    color: Colors.muted,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.body,
+  },
+  weeklyRewardRow: {
+    marginTop: Spacing.md,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: Spacing.md,
+  },
+  weeklyState: {
+    flex: 1,
+    color: Colors.muted,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+  },
+  weeklyReward: {
+    flexShrink: 0,
+    color: Colors.green,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+  },
+  claimButton: {
+    minHeight: MIN_TOUCH,
+    marginTop: Spacing.md,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: Spacing.lg,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.sky,
+  },
+  claimButtonText: {
+    color: Colors.textOnColor,
+    fontSize: Typography.size.body,
+    lineHeight: Typography.lineHeight.body,
+    fontWeight: Typography.weight.bold,
+  },
+  disabledControl: {
+    opacity: 0.5,
+  },
+  weeklyStatusRow: {
+    minHeight: 58,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSection,
+  },
+  weeklyStatusText: {
+    flex: 1,
+    color: Colors.muted,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.body,
+  },
+  guidance: {
+    marginTop: Spacing.xl,
     marginHorizontal: Spacing.lg,
-    marginTop: Spacing.lg,
     flexDirection: "row",
     alignItems: "flex-start",
     gap: Spacing.sm,
-    paddingTop: Spacing.md,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Colors.border,
+    paddingVertical: Spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
   },
-  infoText: {
+  guidanceText: {
     flex: 1,
-    color: Colors.dim,
-    fontSize: 10,
-    lineHeight: 15,
+    color: Colors.muted,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.body,
   },
 });

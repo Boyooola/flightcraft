@@ -1,16 +1,9 @@
 /**
- * hooks/useDailyEvents.ts
+ * Daily operating conditions, demand waves, and player decisions.
  *
- * WorldWide Rush-style daily events + demand waves + choice events.
- *
- * Fixes applied:
- *   FIX 1 — Gambling salt changed from `day` (deterministic/replayable)
- *            to `Date.now()` (per-session random). Same day no longer
- *            always produces the same gamble outcome.
- *
- *   FIX 2 — `store.updatePlaneCondition` replaced with `store.updateOwnedPlane`
- *            (the actual action in the store). Was throwing at runtime on any
- *            event with a conditionHitAllPlanes consequence.
+ * A daily event is deterministic for a given airline seed and day. A small
+ * device receipt prevents cash awards and demand waves from being applied
+ * again when the game screen remounts or the app is reopened on the same day.
  */
 
 import {
@@ -23,14 +16,17 @@ import {
   applyDemandWave,
   generateDemandWave,
   isDemandWaveDay,
+  type AppliedDemandWave,
   type DemandWaveKind,
 } from "@/lib/demandWaves";
 import { seedHash } from "@/lib/seed";
 import { useGameStore } from "@/store";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useEffect, useRef } from "react";
 
 export interface DailyEvent {
   id: string;
+  day: number;
   type: "positive" | "negative" | "neutral";
   icon: string;
   title: string;
@@ -38,157 +34,216 @@ export interface DailyEvent {
   effect: string;
   revenueMultiplier?: number;
   cashBonus?: number;
-
-  // Demand-wave metadata
   waveKind?: DemandWaveKind;
   waveAddedPax?: number;
   waveAffectedSlots?: number;
   waveAffectedHubs?: string[];
 }
 
-// ─────────────────────────────────────────────────────────────────
-// EVENT POOLS
-// ─────────────────────────────────────────────────────────────────
+interface DailyEventReceipt {
+  version: 1;
+  day: number;
+  event: DailyEvent;
+  activeDemandWave: AppliedDemandWave | null;
+}
 
-const POSITIVE_EVENTS: Omit<DailyEvent, "id">[] = [
+interface ChoiceEventReceipt {
+  version: 1;
+  day: number;
+  eventId: string;
+}
+
+interface BuiltDailyEvent {
+  event: DailyEvent;
+  activeDemandWave: AppliedDemandWave | null;
+}
+
+const DAILY_EVENT_KEY = "@flightcraft/daily-event";
+const CHOICE_EVENT_KEY = "@flightcraft/choice-event";
+
+const POSITIVE_EVENTS: Omit<DailyEvent, "id" | "day">[] = [
   {
     type: "positive",
     icon: "flash-outline",
-    title: "Passenger Rush",
-    desc: "More passengers are trying to move today. Clear slots fast.",
-    effect: "+25% revenue today",
+    title: "Passenger rush",
+    desc: "More travelers are booking flights across the network today.",
+    effect: "Revenue up 25% today",
     revenueMultiplier: 1.25,
   },
   {
     type: "positive",
     icon: "people-circle-outline",
-    title: "Full Terminals",
-    desc: "Demand is high across your hubs. Every route matters.",
-    effect: "+20% revenue today",
+    title: "Full terminals",
+    desc: "Strong bookings are lifting revenue on every active route.",
+    effect: "Revenue up 20% today",
     revenueMultiplier: 1.2,
   },
   {
     type: "positive",
     icon: "sunny-outline",
-    title: "Smooth Skies",
-    desc: "Clear weather keeps planes moving cleanly.",
-    effect: "+15% revenue today",
+    title: "Smooth operations",
+    desc: "Clear conditions are keeping flights on schedule today.",
+    effect: "Revenue up 15% today",
     revenueMultiplier: 1.15,
   },
   {
     type: "positive",
     icon: "cash-outline",
-    title: "Rush Bonus",
-    desc: "Airports are paying extra for fast passenger movement.",
-    effect: "+$25,000 bonus",
+    title: "Airport incentive",
+    desc: "Partner airports have issued a one-time service incentive.",
+    effect: "$25,000 received",
     cashBonus: 25_000,
   },
   {
     type: "positive",
-    icon: "rocket-outline",
-    title: "Fast Flow",
-    desc: "Ground crews move quickly today. Passengers board faster.",
-    effect: "+30% revenue today",
+    icon: "speedometer-outline",
+    title: "Efficient turnaround",
+    desc: "Ground crews are completing turnarounds ahead of schedule.",
+    effect: "Revenue up 30% today",
     revenueMultiplier: 1.3,
   },
   {
     type: "positive",
     icon: "heart-outline",
-    title: "Trust Spike",
-    desc: "Passengers like your recent service. Bookings rise.",
-    effect: "+18% revenue today",
+    title: "Strong bookings",
+    desc: "Recent service quality is translating into better sales today.",
+    effect: "Revenue up 18% today",
     revenueMultiplier: 1.18,
   },
 ];
 
-const NEGATIVE_EVENTS: Omit<DailyEvent, "id">[] = [
+const NEGATIVE_EVENTS: Omit<DailyEvent, "id" | "day">[] = [
   {
     type: "negative",
     icon: "alert-circle-outline",
-    title: "Airport Jam",
-    desc: "Passenger queues are building. Unserved demand hurts more today.",
-    effect: "-15% revenue today",
+    title: "Airport congestion",
+    desc: "Long queues are reducing revenue across active routes today.",
+    effect: "Revenue down 15% today",
     revenueMultiplier: 0.85,
   },
   {
     type: "negative",
     icon: "thunderstorm-outline",
-    title: "Bad Weather",
-    desc: "Storms slow the network. Keep the busiest routes moving.",
-    effect: "-20% revenue today",
+    title: "Severe weather",
+    desc: "Storms are disrupting operations across the network.",
+    effect: "Revenue down 20% today",
     revenueMultiplier: 0.8,
   },
   {
     type: "negative",
     icon: "construct-outline",
-    title: "Gate Delays",
-    desc: "Boarding is slower today. Short routes feel the pressure.",
-    effect: "-12% revenue today",
+    title: "Gate delays",
+    desc: "Equipment issues are slowing departures at several airports.",
+    effect: "Revenue down 12% today",
     revenueMultiplier: 0.88,
   },
   {
     type: "negative",
     icon: "flame-outline",
-    title: "Fuel Spike",
-    desc: "Flying costs more today. Clear high-value demand first.",
-    effect: "-18% revenue today",
+    title: "Fuel price increase",
+    desc: "Higher fuel prices are cutting into today's route earnings.",
+    effect: "Revenue down 18% today",
     revenueMultiplier: 0.82,
   },
   {
     type: "negative",
     icon: "warning-outline",
-    title: "Crowded Hub",
-    desc: "One busy airport is slowing the whole board.",
-    effect: "-$15,000 disruption cost",
+    title: "Terminal disruption",
+    desc: "An unplanned terminal closure has triggered additional costs.",
+    effect: "$15,000 operating cost",
     cashBonus: -15_000,
   },
 ];
 
-const NEUTRAL_EVENTS: Omit<DailyEvent, "id">[] = [
+const NEUTRAL_EVENTS: Omit<DailyEvent, "id" | "day">[] = [
   {
     type: "neutral",
     icon: "map-outline",
-    title: "New Demand Patterns",
-    desc: "Passenger routes are shifting. Watch your open slots.",
+    title: "Travel patterns shifting",
+    desc: "Passenger interest is moving between destinations today.",
     effect: "No immediate impact",
   },
   {
     type: "neutral",
     icon: "business-outline",
-    title: "Airport Expansion",
-    desc: "A hub is preparing for more passengers soon.",
+    title: "Airport expansion",
+    desc: "A regional airport has announced plans to add more gates.",
     effect: "No immediate impact",
   },
   {
     type: "neutral",
     icon: "swap-horizontal-outline",
-    title: "Travel Mix Changed",
-    desc: "Some passengers prefer different destinations today.",
+    title: "Market update",
+    desc: "Passenger preferences are changing across the network.",
     effect: "No immediate impact",
   },
 ];
+
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+function receiptKey(prefix: string, airlineId: string): string {
+  return `${prefix}/${airlineId}`;
+}
+
+function parseDailyReceipt(raw: string | null): DailyEventReceipt | null {
+  if (!raw) return null;
+
+  try {
+    const value = JSON.parse(raw) as Partial<DailyEventReceipt>;
+    if (
+      value.version !== 1 ||
+      !Number.isInteger(value.day) ||
+      !value.event ||
+      value.event.day !== value.day ||
+      typeof value.event.id !== "string"
+    ) {
+      return null;
+    }
+
+    return value as DailyEventReceipt;
+  } catch {
+    return null;
+  }
+}
+
+function parseChoiceReceipt(raw: string | null): ChoiceEventReceipt | null {
+  if (!raw) return null;
+
+  try {
+    const value = JSON.parse(raw) as Partial<ChoiceEventReceipt>;
+    if (
+      value.version !== 1 ||
+      !Number.isInteger(value.day) ||
+      typeof value.eventId !== "string"
+    ) {
+      return null;
+    }
+
+    return value as ChoiceEventReceipt;
+  } catch {
+    return null;
+  }
+}
 
 export function generateDailyEvent(
   day: number,
   gameSeed: string = "DEFAULT",
 ): DailyEvent {
-  const roll = seedHash(gameSeed, "rush-event-roll", day) % 100;
-  const pick = (arr: Omit<DailyEvent, "id">[]) =>
-    arr[seedHash(gameSeed, "rush-event-pick", day) % arr.length];
+  const roll = seedHash(gameSeed, "daily-event-roll", day) % 100;
+  const pick = (events: Omit<DailyEvent, "id" | "day">[]) =>
+    events[seedHash(gameSeed, "daily-event-pick", day) % events.length];
 
-  let base: Omit<DailyEvent, "id">;
+  let base: Omit<DailyEvent, "id" | "day">;
   if (roll < 55) base = pick(POSITIVE_EVENTS);
   else if (roll < 85) base = pick(NEGATIVE_EVENTS);
   else base = pick(NEUTRAL_EVENTS);
 
-  return { ...base, id: `event-day-${day}` };
+  return { ...base, id: `event-day-${day}`, day };
 }
 
-// ─────────────────────────────────────────────────────────────────
-// DEMAND WAVE
-// ─────────────────────────────────────────────────────────────────
-
-function buildDemandWaveEvent(day: number): DailyEvent | null {
+function buildDemandWaveEvent(day: number): BuiltDailyEvent | null {
   const store = useGameStore.getState();
   const gameSeed = store.airline?.seed ?? "DEFAULT";
 
@@ -204,223 +259,304 @@ function buildDemandWaveEvent(day: number): DailyEvent | null {
   if (!applied) {
     const wave = generateDemandWave(day, gameSeed);
     return {
-      id: `wave-empty-${day}`,
-      type: "neutral",
-      icon: wave.icon,
-      title: wave.title,
-      desc: "A demand wave passed through, but there were no open demand slots to boost.",
-      effect: "No open slots affected",
-      revenueMultiplier: wave.revenueMultiplier,
-      waveKind: wave.kind,
-      waveAddedPax: 0,
-      waveAffectedSlots: 0,
-      waveAffectedHubs: [],
+      event: {
+        id: `wave-empty-${day}`,
+        day,
+        type: "neutral",
+        icon: wave.icon,
+        title: wave.title,
+        desc: "Today's demand wave found no open route opportunities.",
+        effect: "No open opportunities affected",
+        waveKind: wave.kind,
+        waveAddedPax: 0,
+        waveAffectedSlots: 0,
+        waveAffectedHubs: [],
+      },
+      activeDemandWave: null,
     };
   }
 
   applied.updates.forEach((update) => {
-    store.updateDemand(update.demandId, { base_pax_day: update.newPaxDay });
+    store.updateDemand(update.demandId, {
+      base_pax_day: update.newPaxDay,
+      pax_ceiling: update.newPaxDay,
+    });
   });
 
   const hubLabel =
     applied.affectedHubs.length > 0
-      ? ` · ${applied.affectedHubs.join(", ")}`
+      ? ` Affected hubs: ${applied.affectedHubs.join(", ")}.`
       : "";
 
   return {
-    id: applied.wave.id,
-    type: "positive",
-    icon: applied.wave.icon,
-    title: applied.wave.title,
-    desc: `${applied.wave.desc}${hubLabel}`,
-    effect: `+${applied.totalAddedPax.toLocaleString()} pax across ${applied.updates.length} slot${applied.updates.length === 1 ? "" : "s"}`,
-    revenueMultiplier: applied.wave.revenueMultiplier,
-    waveKind: applied.wave.kind,
-    waveAddedPax: applied.totalAddedPax,
-    waveAffectedSlots: applied.updates.length,
-    waveAffectedHubs: applied.affectedHubs,
+    event: {
+      id: applied.wave.id,
+      day,
+      type: "positive",
+      icon: applied.wave.icon,
+      title: applied.wave.title,
+      desc: `${applied.wave.desc}${hubLabel}`,
+      effect: `${applied.totalAddedPax.toLocaleString()} additional passengers across ${applied.updates.length} ${applied.updates.length === 1 ? "opportunity" : "opportunities"}`,
+      waveKind: applied.wave.kind,
+      waveAddedPax: applied.totalAddedPax,
+      waveAffectedSlots: applied.updates.length,
+      waveAffectedHubs: applied.affectedHubs,
+    },
+    activeDemandWave: applied,
   };
 }
 
-// ─────────────────────────────────────────────────────────────────
-// CHOICE EVENT RESOLUTION
-// ─────────────────────────────────────────────────────────────────
+function resolvedChoiceWithoutEffects(
+  event: ChoiceEvent,
+  optionId: "a" | "b",
+  day: number,
+): ResolvedChoice {
+  const option = event.options.find((candidate) => candidate.id === optionId);
+  if (!option) throw new Error(`Choice option ${optionId} is unavailable.`);
+
+  const resolved: ResolvedChoice = {
+    eventId: event.id,
+    chosenOptionId: optionId,
+    day,
+    consequence: option.consequence,
+  };
+
+  if (option.consequence.revenueMultiplierDays) {
+    resolved.revenueMultiplierEndsDay =
+      day + option.consequence.revenueMultiplierDays.days;
+    resolved.revenueMultiplier =
+      option.consequence.revenueMultiplierDays.multiplier;
+  }
+
+  return resolved;
+}
 
 export function resolveChoiceEvent(
   event: ChoiceEvent,
   optionId: "a" | "b",
 ): ResolvedChoice {
   const store = useGameStore.getState();
-  const option = event.options.find((o) => o.id === optionId)!;
-  const con = option.consequence;
   const day = store.airline?.day ?? 1;
+  const resolved = resolvedChoiceWithoutEffects(event, optionId, day);
+  const ledgerId = `choice-${event.id}-${day}`;
 
-  // ── Immediate cash delta ─────────────────────────────────────
-  if (con.cashDelta) {
-    store.earnCash(con.cashDelta);
+  // A fast double tap can invoke the handler twice before React rerenders.
+  // Return the first result without applying money, trust, or demand twice.
+  if (
+    store.ledger.some((entry) => entry.id === ledgerId) ||
+    (store.activeChoiceConsequence?.eventId === event.id &&
+      store.activeChoiceConsequence.day === day)
+  ) {
+    return store.activeChoiceConsequence?.eventId === event.id
+      ? store.activeChoiceConsequence
+      : resolved;
   }
 
-  // ── Gambling mechanic ────────────────────────────────────────
-  // FIX 1: Use Date.now() as salt instead of `day`.
-  // `day` is deterministic — same day always gives same roll, so loading
-  // a save or restarting the day always produces the same outcome.
-  // Date.now() makes each resolution genuinely random per session.
-  let gamblingOutcome: number = 0;
-  if (con.cashBonusChance) {
-    const roll = (Date.now() % 10_000) / 10_000; // 0..1 per-session random
-    if (roll < con.cashBonusChance.chance) {
-      gamblingOutcome = con.cashBonusChance.bonus;
-    } else {
-      gamblingOutcome = con.cashBonusChance.failPenalty;
-    }
-    if (gamblingOutcome !== 0) {
-      store.earnCash(gamblingOutcome);
-    }
-  }
+  if (store.pendingChoiceEvent?.id !== event.id) return resolved;
 
-  // ── Trust delta — applied to all hubs ───────────────────────
-  if (con.trustDelta) {
+  const consequence = resolved.consequence;
+  const option = event.options.find((candidate) => candidate.id === optionId)!;
+
+  if (consequence.cashDelta) store.earnCash(consequence.cashDelta);
+
+  if (consequence.trustDelta) {
     store.hubs.forEach((hub) => {
       store.updateHub(hub.id, {
-        trust: Math.max(0, Math.min(100, hub.trust + (con.trustDelta ?? 0))),
+        trust: clamp(hub.trust + consequence.trustDelta!, 0, 100),
       });
     });
   }
 
-  // ── Plane condition hit ──────────────────────────────────────
-  // FIX 2: Use store.updateOwnedPlane (correct action) instead of
-  // store.updatePlaneCondition (didn't exist — would throw at runtime).
-  if (con.conditionHitAllPlanes) {
+  if (consequence.planeConditionDelta) {
     store.ownedPlanes.forEach((plane) => {
-      const newCondition = Math.max(
-        0,
-        Math.min(100, (plane.condition ?? 100) + con.conditionHitAllPlanes!),
-      );
-      store.updateOwnedPlane(plane.id, { condition: newCondition });
-    });
-  }
-
-  // ── Demand boost across all hub demands ─────────────────────
-  if (con.demandBoostHubs) {
-    store.demands.forEach((demand) => {
-      store.updateDemand(demand.id, {
-        base_pax_day: Math.max(
+      store.updateOwnedPlane(plane.id, {
+        condition: clamp(
+          (plane.condition ?? 100) + consequence.planeConditionDelta!,
           0,
-          demand.base_pax_day + (con.demandBoostHubs ?? 0),
+          100,
         ),
       });
     });
   }
 
-  // ── Ledger entry ─────────────────────────────────────────────
-  const totalCash = (con.cashDelta ?? 0) + gamblingOutcome;
+  // Demand changes affect today's open opportunities only. Tomorrow's daily
+  // market generation restores each route to its stable OD baseline.
+  if (consequence.demandDeltaToday) {
+    store.demands
+      .filter((demand) => demand.status === "pending")
+      .forEach((demand) => {
+        const nextDemand = Math.max(
+          0,
+          Math.round(demand.base_pax_day + consequence.demandDeltaToday!),
+        );
+        store.updateDemand(demand.id, {
+          base_pax_day: nextDemand,
+          pax_ceiling: nextDemand,
+        });
+      });
+  }
+
   store.addLedgerEntries([
     {
-      id: `choice-${event.id}-${day}`,
+      id: ledgerId,
       day,
       type: "event",
-      label: `🎯 ${event.title} — ${option.label}`,
-      amount: totalCash,
+      label: `${event.title}: ${option.label}`,
+      amount: consequence.cashDelta ?? 0,
       route_id: null,
     },
   ]);
 
-  // ── Build resolved record ────────────────────────────────────
-  const resolved: ResolvedChoice = {
-    eventId: event.id,
-    chosenOptionId: optionId,
-    day,
-    consequence: con,
-  };
-
-  if (con.revenueMultiplierDays) {
-    resolved.revenueMultiplierEndsDay = day + con.revenueMultiplierDays.days;
-    resolved.revenueMultiplier = con.revenueMultiplierDays.multiplier;
+  const airlineId = store.airline?.id;
+  if (airlineId) {
+    const receipt: ChoiceEventReceipt = {
+      version: 1,
+      day,
+      eventId: event.id,
+    };
+    void AsyncStorage.setItem(
+      receiptKey(CHOICE_EVENT_KEY, airlineId),
+      JSON.stringify(receipt),
+    ).catch((error) => {
+      console.warn("[daily-events] failed to save choice receipt", error);
+    });
   }
 
-  store.setPendingChoiceEvent(null);
   store.setActiveChoiceConsequence(resolved);
-  store.resumeAfterChoice();
+  store.setResolvedChoiceEventIds([
+    ...store.resolvedChoiceEventIds.filter((id) => id !== event.id),
+    event.id,
+  ]);
 
   return resolved;
 }
 
-// ─────────────────────────────────────────────────────────────────
-// MAIN HOOK
-// ─────────────────────────────────────────────────────────────────
+async function wasChoiceResolvedToday(
+  airlineId: string,
+  day: number,
+): Promise<boolean> {
+  try {
+    const raw = await AsyncStorage.getItem(
+      receiptKey(CHOICE_EVENT_KEY, airlineId),
+    );
+    return parseChoiceReceipt(raw)?.day === day;
+  } catch (error) {
+    console.warn("[daily-events] failed to read choice receipt", error);
+    return false;
+  }
+}
 
 export function useDailyEvents() {
-  const lastDay = useRef<number>(-1);
+  const lastDay = useRef(-1);
+  const airlineId = useGameStore((state) => state.airline?.id);
+  const day = useGameStore((state) => state.airline?.day);
+  const phase = useGameStore((state) => state.phase);
+  const loadComplete = useGameStore((state) => state.loadComplete);
 
   useEffect(() => {
-    const unsub = useGameStore.subscribe(
-      (s) => s.airline?.day,
-      (day) => {
-        if (!day || day === lastDay.current) return;
-        lastDay.current = day;
+    if (!airlineId || !day || !loadComplete || phase !== "playing") return;
+    if (day === lastDay.current) return;
 
-        const store = useGameStore.getState();
-        const gameSeed = store.airline?.seed ?? "DEFAULT";
+    const initialStore = useGameStore.getState();
+    if (initialStore.dailyEvent?.day === day) {
+      lastDay.current = day;
+      return;
+    }
 
-        store.setDailyEvent(null);
+    lastDay.current = day;
+    let cancelled = false;
 
-        // ── Passive event ──────────────────────────────────────
-        let event: DailyEvent | null = buildDemandWaveEvent(day);
-        if (!event) {
-          event = generateDailyEvent(day, gameSeed);
-        }
+    const startDay = async () => {
+      const key = receiptKey(DAILY_EVENT_KEY, airlineId);
+      let previousReceipt: DailyEventReceipt | null = null;
 
-        const ledgerEntry: any = {
-          id: event.id,
-          day,
-          type: "event",
-          label: `${
-            event.waveKind
-              ? "🌊"
-              : event.type === "positive"
-                ? "⚡"
-                : event.type === "negative"
-                  ? "🚧"
-                  : "📍"
-          } ${event.title}`,
-          amount: event.cashBonus ?? 0,
-          route_id: null,
+      try {
+        previousReceipt = parseDailyReceipt(await AsyncStorage.getItem(key));
+      } catch (error) {
+        console.warn("[daily-events] failed to read daily receipt", error);
+      }
+
+      if (cancelled) return;
+
+      const store = useGameStore.getState();
+      if (store.airline?.id !== airlineId || store.airline.day !== day) return;
+
+      store.setDailyEvent(null);
+      store.setActiveDemandWave(null);
+
+      if (previousReceipt?.day === day) {
+        store.setDailyEvent(previousReceipt.event);
+        store.setActiveDemandWave(previousReceipt.activeDemandWave);
+      } else {
+        const gameSeed = store.airline.seed || "DEFAULT";
+        const built = buildDemandWaveEvent(day) ?? {
+          event: generateDailyEvent(day, gameSeed),
+          activeDemandWave: null,
         };
 
-        if (event.cashBonus) {
-          store.earnCash(event.cashBonus);
-        }
+        if (built.event.cashBonus) store.earnCash(built.event.cashBonus);
 
-        store.addLedgerEntries([ledgerEntry]);
-        store.setDailyEvent(event);
-
-        // ── Check lingering consequence expiry ─────────────────
-        const active = store.activeChoiceConsequence;
-        if (
-          active?.revenueMultiplierEndsDay &&
-          day >= active.revenueMultiplierEndsDay
-        ) {
-          store.setActiveChoiceConsequence(null);
-        }
-
-        // ── Choice event ───────────────────────────────────────
-        if (isChoiceEventDay(day)) {
-          const previousIds = store.resolvedChoiceEventIds ?? [];
-          const choiceEvent = pickChoiceEvent({
+        store.addLedgerEntries([
+          {
+            id: built.event.id,
             day,
-            gameSeed,
-            hubCount: store.hubs.length,
-            previousEventIds: previousIds,
-          });
+            type: "event",
+            label: built.event.title,
+            amount: built.event.cashBonus ?? 0,
+            route_id: null,
+          },
+        ]);
+        store.setActiveDemandWave(built.activeDemandWave);
+        store.setDailyEvent(built.event);
 
-          if (choiceEvent) {
-            store.pauseForChoice();
-            store.setPendingChoiceEvent(choiceEvent);
-          }
+        const receipt: DailyEventReceipt = {
+          version: 1,
+          day,
+          event: built.event,
+          activeDemandWave: built.activeDemandWave,
+        };
+        try {
+          await AsyncStorage.setItem(key, JSON.stringify(receipt));
+        } catch (error) {
+          console.warn("[daily-events] failed to save daily receipt", error);
         }
-      },
-    );
+      }
 
-    return () => unsub();
-  }, []);
+      if (cancelled) return;
+
+      const current = useGameStore.getState();
+      const active = current.activeChoiceConsequence;
+      if (
+        active?.revenueMultiplierEndsDay !== undefined &&
+        day >= active.revenueMultiplierEndsDay
+      ) {
+        current.setActiveChoiceConsequence(null);
+      }
+
+      if (!isChoiceEventDay(day) || current.pendingChoiceEvent) return;
+      if (await wasChoiceResolvedToday(airlineId, day)) return;
+      if (cancelled) return;
+
+      const latest = useGameStore.getState();
+      if (latest.airline?.id !== airlineId || latest.airline.day !== day)
+        return;
+
+      const choiceEvent = pickChoiceEvent({
+        day,
+        gameSeed: latest.airline.seed || "DEFAULT",
+        hubCount: latest.hubs.length,
+        previousEventIds: latest.resolvedChoiceEventIds,
+      });
+
+      if (choiceEvent) {
+        latest.pauseForChoice();
+        latest.setPendingChoiceEvent(choiceEvent);
+      }
+    };
+
+    void startDay();
+    return () => {
+      cancelled = true;
+    };
+  }, [airlineId, day, loadComplete, phase]);
 }

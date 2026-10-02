@@ -1,39 +1,48 @@
+/**
+ * Route planning and aircraft dispatch.
+ *
+ * One dispatch assigns one aircraft. This keeps persistence atomic and makes
+ * route cost, range, availability, and failure feedback unambiguous.
+ */
+
+import { AirlineBrandMark } from "@/components/airline-identity";
 import {
   Colors,
   MIN_TOUCH,
-  Palette,
   Radius,
-  Shadow,
   Spacing,
   Typography,
 } from "@/constants/theme";
 import { gameSounds } from "@/hooks/useGameSounds";
 import { useHaptics } from "@/hooks/useHaptics";
 import { useTabBarHeight } from "@/hooks/useSheetLayout";
-import { useCreateCustomRoute } from "@/hooks/useSupabaseWrite";
-import { haulClass, simulatePaxDay } from "@/lib/demands";
+import { useCreateCustomRoute, useCreateRoute } from "@/hooks/useSupabaseWrite";
+import { aiServesCorridor, type AIAirline } from "@/lib/AIAirline";
+import { haulClass, maxRoutesForTier, simulatePaxDay } from "@/lib/demands";
 import {
+  playerPassengerPoolForDemand,
+  totalScheduledDailySeats,
   waitingPaxForDemand,
   type PassengerFlowDemand,
 } from "@/lib/passengerFlow";
 import { passengerMixFromDistance } from "@/lib/passengerTypes";
-import { calcRouteRevenue, fmtCash } from "@/lib/revenue";
+import { calcRouteRevenue, dailyFlights, fmtCash } from "@/lib/revenue";
 import { distNm } from "@/lib/routing";
-import type { Airport, Demand, OwnedPlane } from "@/store";
+import type { Airport, OwnedPlane } from "@/store";
 import {
-  useAirline,
+  useAIAirlines,
   useCash,
-  useDayProgress,
   useDemands,
   useGameStore,
   useHubs,
   useOwnedPlanes,
   useRouteCreationWaypoints,
   useRoutes,
+  useSelectedPlane,
 } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
 import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   StyleSheet,
@@ -48,1180 +57,991 @@ const CREATION_FEE: Record<string, number> = {
   long: 300_000,
 };
 
-const FAMILY_COLOR: Record<string, string> = {
-  embraer: Colors.embraer,
-  bombardier: Colors.bombardier,
-  boeing: Colors.boeing,
-  airbus: Colors.airbus,
-};
+interface AircraftOption {
+  plane: OwnedPlane;
+  canServe: boolean;
+  reason: string;
+  estimatedResult: number;
+  dailyPassengers: number;
+}
 
-function RouteChain({
+function SectionHeader({ title, detail }: { title: string; detail?: string }) {
+  return (
+    <View style={styles.sectionHeader}>
+      <Text style={styles.sectionTitle}>{title}</Text>
+      {detail ? <Text style={styles.sectionDetail}>{detail}</Text> : null}
+    </View>
+  );
+}
+
+function friendlyCreationError(message: string): string {
+  const normalized = message.toLowerCase();
+  if (
+    normalized.includes("already assigned") ||
+    normalized.includes("cannot operate") ||
+    normalized.includes("unable to calculate")
+  ) {
+    return message.endsWith(".") ? message : `${message}.`;
+  }
+
+  return "Unable to open the route. Check your connection and try again.";
+}
+
+function DataRow({
+  label,
+  value,
+  valueColor = Colors.text,
+  last = false,
+}: {
+  label: string;
+  value: string;
+  valueColor?: string;
+  last?: boolean;
+}) {
+  return (
+    <View style={[styles.dataRow, last && styles.dataRowLast]}>
+      <Text style={styles.dataLabel}>{label}</Text>
+      <Text numberOfLines={2} style={[styles.dataValue, { color: valueColor }]}>
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+function InlineNotice({
+  kind,
+  title,
+  message,
+}: {
+  kind: "warning" | "error" | "info";
+  title: string;
+  message: string;
+}) {
+  const color =
+    kind === "error"
+      ? Colors.red
+      : kind === "warning"
+        ? Colors.amber
+        : Colors.skyDark;
+  const icon =
+    kind === "error"
+      ? "warning-outline"
+      : kind === "warning"
+        ? "alert-circle-outline"
+        : "information-circle-outline";
+
+  return (
+    <View
+      accessibilityRole={kind === "error" ? "alert" : "text"}
+      style={styles.notice}
+    >
+      <Ionicons name={icon} size={18} color={color} />
+      <View style={styles.noticeCopy}>
+        <Text style={[styles.noticeTitle, { color }]}>{title}</Text>
+        <Text style={styles.noticeMessage}>{message}</Text>
+      </View>
+    </View>
+  );
+}
+
+function CompetitionSection({
+  competitors,
+  originIata,
+  destinationIata,
+}: {
+  competitors: AIAirline[];
+  originIata: string;
+  destinationIata: string;
+}) {
+  if (competitors.length === 0) return null;
+
+  return (
+    <View style={styles.competitionSection}>
+      <SectionHeader
+        title="Competition"
+        detail={`${competitors.length} ${competitors.length === 1 ? "airline" : "airlines"}`}
+      />
+      <View style={styles.competitionList}>
+        {competitors.map((airline) => (
+          <View
+            accessibilityLabel={`${airline.name}, ${airline.code}, serves ${originIata} to ${destinationIata}, ${Math.round(airline.trust)} percent trust.`}
+            key={airline.id}
+            style={styles.competitionRow}
+          >
+            <AirlineBrandMark
+              accessibilityLabel=""
+              logoId={airline.logoId}
+              primary={airline.color}
+              secondary={airline.secondaryColor}
+              size={34}
+              variant="leaderboard"
+            />
+            <View style={styles.competitionIdentity}>
+              <Text numberOfLines={1} style={styles.competitionName}>
+                {airline.name}
+              </Text>
+              <Text style={styles.competitionCode}>
+                {airline.code} · Serves this market
+              </Text>
+            </View>
+            <View style={styles.competitionTrust}>
+              <Text style={styles.competitionTrustValue}>
+                {Math.round(airline.trust)}%
+              </Text>
+              <Text style={styles.competitionTrustLabel}>Trust</Text>
+            </View>
+          </View>
+        ))}
+      </View>
+      <Text style={styles.competitionHelp}>
+        Passengers compare trust, fare, and route directness when choosing an
+        airline.
+      </Text>
+    </View>
+  );
+}
+
+function RoutePath({
   waypoints,
-  color,
   onRemove,
 }: {
   waypoints: Airport[];
-  color: string;
   onRemove: (iata: string) => void;
 }) {
   return (
-    <View style={chain.wrap}>
+    <View style={styles.pathTable}>
       {waypoints.map((airport, index) => {
-        const first = index === 0;
-        const last = index === waypoints.length - 1;
-        const via = !first && !last;
-        const accent = via ? Colors.purple : color;
-        const label = first ? "ORIGIN" : via ? "STOP" : "DEST";
+        const isOrigin = index === 0;
+        const isDestination = index === waypoints.length - 1;
+        const label = isOrigin
+          ? "Origin"
+          : isDestination
+            ? "Destination"
+            : "Stop";
 
         return (
-          <View key={`${airport.iata}-${index}`} style={chain.itemWrap}>
-            {index > 0 && (
-              <View
-                style={[chain.connector, { backgroundColor: color + "44" }]}
-              />
-            )}
-
-            <View style={[chain.item, { borderColor: accent + "33" }]}>
-              <View style={[chain.dot, { backgroundColor: accent }]} />
-
-              <View style={chain.body}>
-                <View style={chain.topRow}>
-                  <Text style={[chain.iata, { color: accent }]}>
-                    {airport.iata}
-                  </Text>
-                  <View
-                    style={[chain.badge, { backgroundColor: accent + "16" }]}
-                  >
-                    <Text style={[chain.badgeText, { color: accent }]}>
-                      {label}
-                    </Text>
-                  </View>
-                </View>
-                <Text style={chain.city} numberOfLines={1}>
-                  {airport.city}
-                  {airport.country ? `, ${airport.country}` : ""}
-                </Text>
-              </View>
-
-              <TouchableOpacity
-                accessibilityLabel={`Remove ${airport.iata} from route`}
-                accessibilityRole="button"
-                onPress={() => onRemove(airport.iata)}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              >
-                <Ionicons name="close-circle" size={18} color={Colors.dim} />
-              </TouchableOpacity>
+          <View key={`${airport.iata}-${index}`} style={styles.pathRow}>
+            <Text style={styles.pathLabel}>{label}</Text>
+            <View style={styles.pathAirport}>
+              <Text style={styles.pathCode}>{airport.iata}</Text>
+              <Text numberOfLines={1} style={styles.pathCity}>
+                {[airport.city, airport.country].filter(Boolean).join(", ")}
+              </Text>
             </View>
+            <TouchableOpacity
+              accessibilityLabel={`Remove ${airport.iata} from route`}
+              accessibilityRole="button"
+              activeOpacity={0.7}
+              onPress={() => onRemove(airport.iata)}
+              style={styles.pathRemove}
+            >
+              <Ionicons name="close" size={18} color={Colors.muted} />
+            </TouchableOpacity>
           </View>
         );
       })}
 
-      {waypoints.length < 3 && (
-        <View style={chain.hint}>
-          <Ionicons name="add-circle-outline" size={13} color={Colors.dim} />
-          <Text style={chain.hintText}>
-            {waypoints.length === 1
-              ? "Tap a destination airport on the map"
-              : "Optional: tap one airport to add a stop"}
+      {waypoints.length < 3 ? (
+        <View style={styles.stopHint}>
+          <Ionicons name="add-circle-outline" size={17} color={Colors.muted} />
+          <Text style={styles.stopHintText}>
+            Need more range? Tap one airport on the map to add a stop.
           </Text>
         </View>
-      )}
+      ) : null}
     </View>
   );
 }
 
-function DemandRushCard({
-  origin,
-  dest,
-  existingDemand,
-  previewDemand,
-  dayProgress,
-  color,
-  totalDist,
-  fee,
-  canAfford,
-}: {
-  origin: Airport;
-  dest: Airport;
-  existingDemand: Demand | null;
-  previewDemand: PassengerFlowDemand;
-  dayProgress: number;
-  color: string;
-  totalDist: number;
-  fee: number;
-  canAfford: boolean;
-}) {
-  const demand = existingDemand ?? previewDemand;
-  const waiting = waitingPaxForDemand(demand, dayProgress);
-  const source = existingDemand ? "LIVE DEMAND" : "NEW MARKET";
-
-  return (
-    <View
-      style={[
-        rush.card,
-        { borderColor: waiting > 0 ? Colors.amber + "44" : color + "33" },
-      ]}
-    >
-      <View style={rush.header}>
-        <View style={[rush.icon, { backgroundColor: color + "18" }]}>
-          <Ionicons name="people-outline" size={18} color={color} />
-        </View>
-
-        <View style={{ flex: 1 }}>
-          <Text style={[rush.label, { color }]}>{source}</Text>
-          <Text style={rush.route} numberOfLines={1}>
-            {origin.iata} → {dest.iata}
-          </Text>
-        </View>
-
-        <View
-          style={[
-            rush.fee,
-            {
-              borderColor: canAfford ? Colors.green + "44" : Colors.red + "44",
-            },
-          ]}
-        >
-          <Text
-            style={[
-              rush.feeValue,
-              { color: canAfford ? Colors.green : Colors.red },
-            ]}
-          >
-            {fmtCash(fee)}
-          </Text>
-          <Text style={rush.feeLabel}>open</Text>
-        </View>
-      </View>
-
-      {/* One-line summary — waiting pax + daily estimate */}
-      <View style={rush.summaryRow}>
-        {waiting > 0 ? (
-          <>
-            <Ionicons name="people-outline" size={12} color={Colors.amber} />
-            <Text style={[rush.summaryTxt, { color: Colors.amber }]}>
-              {waiting.toLocaleString()} waiting now
-            </Text>
-          </>
-        ) : (
-          <>
-            <Ionicons name="sparkles-outline" size={12} color={Colors.dim} />
-            <Text style={rush.summaryTxt}>
-              ~{demand.base_pax_day.toLocaleString()} travelers/day ·{" "}
-              {totalDist.toLocaleString()}nm
-            </Text>
-          </>
-        )}
-      </View>
-    </View>
-  );
-}
-
-const PlaneRow = React.memo(function PlaneRow({
-  plane,
-  canServe,
+function AircraftRow({
+  option,
   selected,
-  reason,
-  waitingNow,
-  paxDay,
-  totalDist,
-  trustPct,
-  color,
+  recommended,
   onSelect,
 }: {
-  plane: OwnedPlane;
-  canServe: boolean;
+  option: AircraftOption;
   selected: boolean;
-  reason: string;
-  waitingNow: number;
-  paxDay: number;
-  totalDist: number;
-  trustPct: number;
-  color: string;
+  recommended: boolean;
   onSelect: () => void;
 }) {
+  const { plane, canServe, reason, estimatedResult, dailyPassengers } = option;
   const model = plane.plane_model;
-  const familyColor = FAMILY_COLOR[model.family] ?? Colors.sky;
-  const boardedNow = Math.min(waitingNow, model.pax_capacity);
-  const previewBoard = Math.min(
-    Math.max(boardedNow, Math.ceil(paxDay * 0.35)),
-    model.pax_capacity,
-  );
-
-  const passMix = passengerMixFromDistance(totalDist);
-  const revenue = canServe
-    ? calcRouteRevenue({
-        distNm: totalDist,
-        speedKts: model.speed_kts,
-        trustPct,
-        boardedPax: previewBoard,
-        seatCapacity: model.pax_capacity,
-        costPerSector: model.cost_per_sector ?? 500,
-        fuelPerNm: model.fuel_per_nm ?? 2,
-        priceStrategy: "standard",
-        priceElasticity: 1,
-        crowdMultiplier: 1,
-        congestionMultiplier: 1,
-        businessPct: passMix.businessPct,
-        leisurePct: passMix.leisurePct,
-      }).net
-    : 0;
+  const resultColor =
+    estimatedResult > 0
+      ? Colors.green
+      : estimatedResult < 0
+        ? Colors.red
+        : Colors.muted;
 
   return (
     <TouchableOpacity
-      accessibilityHint={canServe ? "Select or deselect this aircraft" : reason}
-      accessibilityLabel={`${model.nickname}, ${model.pax_capacity} seats${selected ? ", selected" : ""}`}
-      accessibilityRole="checkbox"
-      accessibilityState={{ checked: selected, disabled: !canServe }}
-      style={[
-        planeStyles.row,
-        selected && {
-          borderColor: color + "66",
-          backgroundColor: color + "0d",
-        },
-        !canServe && { opacity: 0.45 },
-      ]}
-      onPress={canServe ? onSelect : undefined}
+      accessibilityHint={canServe ? "Select this aircraft" : reason}
+      accessibilityLabel={`${model.nickname}, ${model.pax_capacity} seats, ${model.range_nm} nautical mile range${selected ? ", selected" : ""}`}
+      accessibilityRole="radio"
+      accessibilityState={{ selected, disabled: !canServe }}
+      activeOpacity={0.7}
       disabled={!canServe}
-      activeOpacity={0.84}
+      onPress={onSelect}
+      style={[
+        styles.aircraftRow,
+        selected && styles.aircraftRowSelected,
+        !canServe && styles.aircraftRowDisabled,
+      ]}
     >
-      <View
-        style={[
-          planeStyles.stripe,
-          { backgroundColor: canServe ? familyColor : Colors.dim },
-        ]}
+      <Ionicons
+        name={selected ? "radio-button-on" : "radio-button-off"}
+        size={20}
+        color={selected ? Colors.sky : Colors.muted}
       />
-
-      <View style={planeStyles.body}>
-        <View style={planeStyles.top}>
-          <Text
-            style={[planeStyles.name, !canServe && { color: Colors.dim }]}
-            numberOfLines={1}
-          >
+      <View style={styles.aircraftCopy}>
+        <View style={styles.aircraftNameRow}>
+          <Text numberOfLines={1} style={styles.aircraftName}>
             {model.nickname}
           </Text>
-
-          {selected && (
-            <Ionicons name="checkmark-circle" size={17} color={color} />
-          )}
-
-          {!canServe && (
-            <View style={planeStyles.lockPill}>
-              <Text style={planeStyles.lockText}>{reason}</Text>
-            </View>
-          )}
+          {recommended && canServe ? (
+            <Text style={styles.recommendedText}>Recommended</Text>
+          ) : null}
         </View>
-
-        <Text style={planeStyles.specs}>
-          {model.pax_capacity} seats · {model.range_nm.toLocaleString()}nm range
-          · {model.speed_kts}kts
+        <Text style={styles.aircraftSpecs}>
+          {model.pax_capacity} seats · {model.range_nm.toLocaleString()} nm
+          range
         </Text>
-
-        {canServe && revenue > 0 && (
-          <Text style={planeStyles.rewardLine}>
-            Est. {fmtCash(revenue)} first reward
-            {waitingNow > 0
-              ? ` · ${Math.min(waitingNow, model.pax_capacity)} board now`
-              : ""}
+        {canServe ? (
+          <Text style={styles.aircraftBoarding}>
+            About {dailyPassengers.toLocaleString()} passengers per day
           </Text>
+        ) : (
+          <Text style={styles.aircraftUnavailable}>{reason}</Text>
         )}
       </View>
+      {canServe ? (
+        <View style={styles.aircraftResult}>
+          <Text style={[styles.aircraftResultValue, { color: resultColor }]}>
+            {estimatedResult > 0 ? "+" : ""}
+            {fmtCash(estimatedResult)}
+          </Text>
+          <Text style={styles.aircraftResultLabel}>Est. daily</Text>
+        </View>
+      ) : null}
     </TouchableOpacity>
   );
-});
+}
+
+function RoutePrompt({
+  origin,
+  onCancel,
+}: {
+  origin: Airport | null;
+  onCancel: () => void;
+}) {
+  return (
+    <View style={styles.promptRoot}>
+      <View style={styles.promptHeader}>
+        <View>
+          <Text style={styles.promptTitle}>Create route</Text>
+          <Text style={styles.promptSubtitle}>Choose the route on the map</Text>
+        </View>
+        <TouchableOpacity
+          accessibilityLabel="Cancel route creation"
+          accessibilityRole="button"
+          activeOpacity={0.7}
+          onPress={onCancel}
+          style={styles.closeButton}
+        >
+          <Ionicons name="close" size={22} color={Colors.text} />
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.promptSelection}>
+        <View style={styles.promptStep}>
+          <Ionicons
+            name={origin ? "checkmark-circle" : "ellipse-outline"}
+            size={19}
+            color={origin ? Colors.green : Colors.muted}
+          />
+          <View style={styles.promptStepCopy}>
+            <Text style={styles.promptStepLabel}>Origin hub</Text>
+            <Text style={styles.promptStepValue}>
+              {origin
+                ? `${origin.iata} · ${origin.city}`
+                : "Tap one of your hubs"}
+            </Text>
+          </View>
+        </View>
+        <View style={styles.promptStep}>
+          <Ionicons name="ellipse-outline" size={19} color={Colors.muted} />
+          <View style={styles.promptStepCopy}>
+            <Text style={styles.promptStepLabel}>Destination</Text>
+            <Text style={styles.promptStepValue}>
+              {origin ? "Tap a destination airport" : "Select an origin first"}
+            </Text>
+          </View>
+        </View>
+      </View>
+
+      <Text style={styles.promptHelp}>
+        Start at one of your hubs. After choosing a destination, you can add one
+        stop if your aircraft needs it.
+      </Text>
+    </View>
+  );
+}
 
 export default function CreateRouteSheet() {
   const waypoints = useRouteCreationWaypoints();
   const hubs = useHubs();
   const ownedPlanes = useOwnedPlanes();
   const routes = useRoutes();
+  const preferredPlane = useSelectedPlane();
   const demands = useDemands();
-  const dayProgress = useDayProgress();
-  const airline = useAirline();
+  const aiAirlines = useAIAirlines();
   const cash = useCash();
-  const removeWaypoint = useGameStore((s) => s.removeWaypoint);
-  const clearCreation = useGameStore((s) => s.clearRouteCreation);
-  const startCreation = useGameStore((s) => s.startRouteCreation);
+  const removeWaypoint = useGameStore((state) => state.removeWaypoint);
+  const clearCreation = useGameStore((state) => state.clearRouteCreation);
+  const openSheet = useGameStore((state) => state.openSheet);
+  const gameDay = useGameStore((state) => state.airline?.day ?? 1);
   const haptics = useHaptics();
-  const tabBarH = useTabBarHeight();
-  const createCustom = useCreateCustomRoute();
+  const tabBarHeight = useTabBarHeight();
+  const createCustomRoute = useCreateCustomRoute();
+  const createExistingRoute = useCreateRoute();
 
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [selectedPlaneId, setSelectedPlaneId] = useState<string | null>(
+    preferredPlane?.id ?? null,
+  );
+  const [showUnavailable, setShowUnavailable] = useState(false);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [done, setDone] = useState(false);
+  const creationInFlight = useRef(false);
 
-  const color = airline?.color ?? Colors.sky;
+  // Airports are selected as origin, destination, then optional stop. Display
+  // and persist a three-airport route in operational order instead.
   const origin = waypoints[0] ?? null;
-  const dest = waypoints[waypoints.length - 1] ?? null;
-  const via = waypoints.length === 3 ? waypoints[1] : null;
-
-  const legs =
-    origin && dest && origin.iata !== dest.iata
-      ? via
-        ? [distNm(origin, via), distNm(via, dest)]
-        : [distNm(origin, dest)]
-      : [0];
-
-  const totalDist = legs.reduce((sum, leg) => sum + leg, 0);
-
-  const maxLeg = Math.max(...legs);
-  const haul = haulClass(totalDist);
-  const fee = CREATION_FEE[haul] ?? 150_000;
-  const canAfford = cash >= fee;
-
+  const destination = waypoints[1] ?? null;
+  const stop = waypoints[2] ?? null;
+  const orderedWaypoints =
+    origin && destination
+      ? stop
+        ? [origin, stop, destination]
+        : [origin, destination]
+      : waypoints;
   const originHub = origin
     ? hubs.find((hub) => hub.airport.iata === origin.iata)
     : undefined;
-  const originNotOwned = !!origin && !originHub;
+  const originNotOwned = Boolean(origin && !originHub);
 
-  const paxDay = useMemo(() => {
-    if (!origin || !dest || origin.iata === dest.iata) return 0;
-    return simulatePaxDay(origin, dest, totalDist);
-  }, [origin, dest, totalDist]);
+  const legs =
+    origin && destination && origin.iata !== destination.iata
+      ? stop
+        ? [distNm(origin, stop), distNm(stop, destination)]
+        : [distNm(origin, destination)]
+      : [0];
+  const directDistance =
+    origin && destination && origin.iata !== destination.iata
+      ? distNm(origin, destination)
+      : 0;
+  const totalDistance = legs.reduce((total, leg) => total + leg, 0);
+  const longestLeg = Math.max(...legs);
+  const haul = haulClass(totalDistance);
+  const openingFee = CREATION_FEE[haul] ?? 150_000;
+
+  const estimatedDailyDemand = useMemo(() => {
+    if (!origin || !destination || origin.iata === destination.iata) return 0;
+    return simulatePaxDay(origin, destination, directDistance, 0, gameDay);
+  }, [destination, directDistance, gameDay, origin]);
 
   const existingDemand = useMemo(() => {
-    if (!origin || !dest) return null;
+    if (!origin || !destination) return null;
     return (
       demands.find(
-        (d) =>
-          d.hub_iata === origin.iata &&
-          d.origin.iata === origin.iata &&
-          d.dest.iata === dest.iata &&
-          d.status !== "served",
+        (demand) =>
+          demand.hub_iata === origin.iata &&
+          demand.origin.iata === origin.iata &&
+          demand.dest.iata === destination.iata,
       ) ?? null
     );
-  }, [origin, dest, demands]);
+  }, [demands, destination, origin]);
 
-  const previewDemand: PassengerFlowDemand = useMemo(
+  const previewDemand = useMemo<PassengerFlowDemand>(
     () => ({
       id: existingDemand?.id ?? "preview-demand",
       hub_iata: origin?.iata ?? "",
-      base_pax_day: existingDemand?.base_pax_day ?? paxDay,
+      base_pax_day: existingDemand?.base_pax_day ?? estimatedDailyDemand,
       delivered_pax_today: existingDemand?.delivered_pax_today ?? 0,
+      ai_stolen_pax: existingDemand?.ai_stolen_pax ?? 0,
       status: existingDemand?.status ?? "preview",
     }),
-    [existingDemand, origin?.iata, paxDay],
+    [estimatedDailyDemand, existingDemand, origin?.iata],
   );
+  const waitingNow = waitingPaxForDemand(previewDemand);
+  const estimatedPlayerDemand = playerPassengerPoolForDemand(previewDemand);
 
-  const waitingNow = waitingPaxForDemand(previewDemand, dayProgress);
+  const activeDestinations = useMemo(
+    () =>
+      new Set(
+        routes
+          .filter((route) => route.active && route.hub_iata === origin?.iata)
+          .map((route) => route.demand.dest.iata),
+      ),
+    [origin?.iata, routes],
+  );
+  const routeAlreadyActive = destination
+    ? activeDestinations.has(destination.iata)
+    : false;
+  const existingActiveRoutes = useMemo(
+    () =>
+      origin && destination
+        ? routes.filter(
+            (route) =>
+              route.active &&
+              route.hub_iata === origin.iata &&
+              route.demand.dest.iata === destination.iata,
+          )
+        : [],
+    [destination, origin, routes],
+  );
+  const scheduledSeats = totalScheduledDailySeats(existingActiveRoutes);
+  const dailySeatGap = Math.max(0, estimatedPlayerDemand - scheduledSeats);
+  const capacityCovered = routeAlreadyActive && dailySeatGap <= 0;
+  const routeCapacity = originHub ? maxRoutesForTier(originHub.tier) : 0;
+  const routeSlotAvailable =
+    routeAlreadyActive || activeDestinations.size < routeCapacity;
+  const routeFee = existingDemand ? 0 : openingFee;
+  const canAfford = cash >= routeFee;
 
-  const classified = useMemo(() => {
-    if (!origin || !dest) return [];
+  const competitors = useMemo(() => {
+    if (!origin || !destination) return [];
+    return aiAirlines
+      .filter((rival) => aiServesCorridor(rival, origin.iata, destination.iata))
+      .sort((first, second) => second.trust - first.trust);
+  }, [aiAirlines, destination, origin]);
 
-    const busyIds = new Set(
+  const aircraftOptions = useMemo<AircraftOption[]>(() => {
+    if (!origin || !destination) return [];
+
+    const busyPlaneIds = new Set(
       routes.filter((route) => route.active).map((route) => route.plane.id),
     );
+    const passengerMix = passengerMixFromDistance(totalDistance);
 
     return ownedPlanes
       .map((plane) => {
-        const busy = busyIds.has(plane.id);
-        const outOfRange = plane.plane_model.range_nm < maxLeg;
+        const busy = Boolean(plane.route_id) || busyPlaneIds.has(plane.id);
+        const outOfRange = plane.plane_model.range_nm < longestLeg;
         const canServe = !busy && !outOfRange;
         const reason = busy
-          ? "Busy"
+          ? "Already assigned"
           : outOfRange
-            ? `Need ${maxLeg.toLocaleString()}nm`
+            ? `Needs ${Math.ceil(longestLeg).toLocaleString()} nm range`
             : "";
+        const cycles = dailyFlights(totalDistance, plane.plane_model.speed_kts);
+        const dailySeats = plane.plane_model.pax_capacity * cycles;
+        const dailyPassengers = Math.min(dailySeatGap, dailySeats);
+        let passengersRemaining = dailyPassengers;
+        let estimatedResult = 0;
 
-        const boardedNow = Math.min(waitingNow, plane.plane_model.pax_capacity);
-        const previewBoard = Math.min(
-          Math.max(boardedNow, Math.ceil(previewDemand.base_pax_day * 0.35)),
-          plane.plane_model.pax_capacity,
-        );
-
-        const cMix = passengerMixFromDistance(totalDist);
-        // Skip revenue calc for incompatible planes — saves CPU on large fleets
-        const revenue = canServe
-          ? calcRouteRevenue({
-              distNm: totalDist,
+        if (canServe) {
+          for (let cycle = 0; cycle < cycles; cycle += 1) {
+            const boardedThisFlight = Math.min(
+              plane.plane_model.pax_capacity,
+              passengersRemaining,
+            );
+            estimatedResult += calcRouteRevenue({
+              distNm: totalDistance,
               speedKts: plane.plane_model.speed_kts,
               trustPct: originHub?.trust ?? 0,
-              boardedPax: previewBoard,
+              boardedPax: boardedThisFlight,
               seatCapacity: plane.plane_model.pax_capacity,
               costPerSector: plane.plane_model.cost_per_sector ?? 500,
               fuelPerNm: plane.plane_model.fuel_per_nm ?? 2,
               priceStrategy: "standard",
-              priceElasticity: 1,
+              priceElasticity: existingDemand?.price_elasticity ?? 1,
               crowdMultiplier: 1,
               congestionMultiplier: 1,
-              businessPct: cMix.businessPct,
-              leisurePct: cMix.leisurePct,
-            }).net
-          : 0;
+              businessPct: passengerMix.businessPct,
+              leisurePct: passengerMix.leisurePct,
+            }).net;
+            passengersRemaining = Math.max(
+              0,
+              passengersRemaining - boardedThisFlight,
+            );
+          }
+        }
 
-        return { plane, canServe, reason, revenue, boardedNow };
+        return {
+          plane,
+          canServe,
+          reason,
+          estimatedResult,
+          dailyPassengers,
+        };
       })
-      .sort((a, b) => {
-        if (a.canServe !== b.canServe) return a.canServe ? -1 : 1;
-        if (a.boardedNow !== b.boardedNow) return b.boardedNow - a.boardedNow;
-        return b.revenue - a.revenue;
+      .sort((first, second) => {
+        if (first.canServe !== second.canServe) return first.canServe ? -1 : 1;
+        if (first.estimatedResult !== second.estimatedResult) {
+          return second.estimatedResult - first.estimatedResult;
+        }
+        return second.dailyPassengers - first.dailyPassengers;
       });
   }, [
+    destination,
+    existingDemand?.price_elasticity,
+    longestLeg,
     origin,
-    dest,
-    routes,
-    ownedPlanes,
-    maxLeg,
-    waitingNow,
-    previewDemand.base_pax_day,
-    totalDist,
     originHub?.trust,
+    ownedPlanes,
+    dailySeatGap,
+    routes,
+    totalDistance,
   ]);
 
-  const [showIncompatible, setShowIncompatible] = useState(false);
-  const eligibleCount = classified.filter((item) => item.canServe).length;
-  const incompatibleCount = classified.filter((item) => !item.canServe).length;
-  const selectedItems = classified.filter((item) =>
-    selectedIds.includes(item.plane.id),
+  const availableAircraft = aircraftOptions.filter((option) => option.canServe);
+  const unavailableAircraft = aircraftOptions.filter(
+    (option) => !option.canServe,
   );
-  const selectedPlanes = selectedItems.map((item) => item.plane);
-  const selectedCount = selectedPlanes.length;
-  const selectedCapacity = selectedPlanes.reduce(
-    (sum, plane) => sum + plane.plane_model.pax_capacity,
-    0,
+  const recommended = availableAircraft[0] ?? null;
+  const selectedOption =
+    aircraftOptions.find((option) => option.plane.id === selectedPlaneId) ??
+    null;
+  const selectedUnavailable =
+    selectedOption && !selectedOption.canServe ? selectedOption : null;
+  const primaryAircraft = selectedUnavailable
+    ? [selectedUnavailable, ...availableAircraft]
+    : availableAircraft;
+  const otherUnavailableAircraft = unavailableAircraft.filter(
+    (option) => option.plane.id !== selectedUnavailable?.plane.id,
   );
-  const selectedReward = selectedItems.reduce(
-    (sum, item) => sum + item.revenue,
-    0,
-  );
-  const totalFee = fee * Math.max(1, selectedCount);
-  const canAffordSelected = cash >= totalFee;
-
-  const recommended = classified.find((item) => item.canServe) ?? null;
 
   useEffect(() => {
-    setSelectedIds((current) =>
-      current.filter((id) =>
-        classified.some((item) => item.canServe && item.plane.id === id),
-      ),
-    );
-  }, [classified]);
-
-  useEffect(() => {
-    if (selectedIds.length === 0 && recommended?.plane.id) {
-      setSelectedIds([recommended.plane.id]);
+    if (
+      selectedPlaneId &&
+      aircraftOptions.some((option) => option.plane.id === selectedPlaneId)
+    ) {
+      return;
     }
-  }, [recommended?.plane.id, selectedIds.length]);
-
-  const togglePlane = (planeId: string) => {
-    setSelectedIds((current) =>
-      current.includes(planeId)
-        ? current.filter((id) => id !== planeId)
-        : [...current, planeId],
+    const preferredOption = preferredPlane
+      ? aircraftOptions.find((option) => option.plane.id === preferredPlane.id)
+      : null;
+    setSelectedPlaneId(
+      preferredOption?.plane.id ?? recommended?.plane.id ?? null,
     );
-  };
+  }, [aircraftOptions, preferredPlane, recommended?.plane.id, selectedPlaneId]);
 
   const handleRemoveWaypoint = (iata: string) => {
-    const remaining = waypoints.filter((airport) => airport.iata !== iata);
-    if (remaining.length < 1) clearCreation();
-    else removeWaypoint(iata);
+    setError(null);
+    if (waypoints.length <= 1) {
+      clearCreation();
+      return;
+    }
+    removeWaypoint(iata);
   };
 
-  const handleSwapStopDestination = () => {
-    if (waypoints.length !== 3) return;
-
-    const [originAirport, stopAirport, destinationAirport] = waypoints;
-
+  const handleOpenFleet = () => {
     haptics.tap();
-    setSelectedIds([]);
-    setError(null);
-    startCreation([originAirport, destinationAirport, stopAirport]);
+    openSheet("fleet");
   };
 
   const handleCreate = async () => {
-    if (!origin || !dest || selectedPlanes.length === 0 || !canAffordSelected)
-      return;
+    if (creationInFlight.current) return;
 
-    haptics.confirm();
+    if (!origin || !destination) {
+      setError("Select an origin hub and destination on the map.");
+      haptics.warning();
+      return;
+    }
+    if (originNotOwned) {
+      setError(`${origin.iata} is not one of your hubs.`);
+      haptics.warning();
+      return;
+    }
+    if (!routeSlotAvailable) {
+      setError(
+        `${origin.iata} is operating ${activeDestinations.size} of ${routeCapacity} route slots. Upgrade the hub or close a route first.`,
+      );
+      haptics.warning();
+      return;
+    }
+    if (capacityCovered) {
+      setError(
+        "Existing aircraft already cover this market's daily passenger pool.",
+      );
+      haptics.warning();
+      return;
+    }
+    if (!selectedOption || !selectedOption.canServe) {
+      setError(
+        "Select an available aircraft that can operate the longest leg.",
+      );
+      haptics.warning();
+      return;
+    }
+    if (!canAfford) {
+      setError(`You need ${fmtCash(routeFee - cash)} more to open this route.`);
+      haptics.warning();
+      return;
+    }
+
+    creationInFlight.current = true;
     setCreating(true);
     setError(null);
+    haptics.confirm();
 
-    for (const plane of selectedPlanes) {
-      const { error: err } = await createCustom(
-        origin,
-        dest,
-        via,
-        plane,
-        previewDemand.base_pax_day,
-        via ? legs[0] : totalDist,
-        haul,
-        totalDist,
-      );
+    try {
+      const result = existingDemand
+        ? await createExistingRoute(
+            existingDemand,
+            selectedOption.plane,
+            stop?.iata ?? null,
+            null,
+            totalDistance,
+          )
+        : await createCustomRoute(
+            origin,
+            destination,
+            stop,
+            selectedOption.plane,
+            previewDemand.base_pax_day,
+            directDistance,
+            haul,
+            totalDistance,
+          );
 
-      if (err) {
-        setCreating(false);
-        setError(err);
+      if (result.error) {
+        setError(friendlyCreationError(result.error));
         haptics.error();
         return;
       }
-    }
 
-    gameSounds.play("routeCreate");
-
-    setCreating(false);
-    haptics.success();
-    setDone(true);
-
-    try {
-      const { airline: currentAirline } = useGameStore.getState();
-      if (currentAirline) {
-        const { supabase } = await import("@/lib/supabase");
-        await supabase
-          .from("airlines")
-          .update({
-            cash: currentAirline.cash,
-            demand_score: currentAirline.demand_score,
-          })
-          .eq("id", currentAirline.id);
+      if (existingDemand) {
+        clearCreation();
+      } else {
+        gameSounds.play("routeCreate");
       }
-    } catch {}
+      haptics.success();
+    } catch {
+      setError("Unable to open this route. Try again.");
+      haptics.error();
+    } finally {
+      creationInFlight.current = false;
+      setCreating(false);
+    }
   };
 
-  const haulColor =
-    haul === "short"
-      ? Colors.green
-      : haul === "medium"
-        ? Colors.amber
-        : Colors.purple;
-
   if (waypoints.length < 2) {
-    const hasOrigin = waypoints.length === 1;
-
-    return (
-      <View style={s.prompt}>
-        {hasOrigin ? (
-          <View style={s.buildingRoute}>
-            <View style={s.buildingChip}>
-              <Ionicons name="radio-button-on" size={12} color={color} />
-              <Text style={[s.buildingIata, { color }]}>
-                {waypoints[0].iata}
-              </Text>
-              <Text style={s.buildingCity}>{waypoints[0].city}</Text>
-            </View>
-            <View style={s.buildingArrow}>
-              <View
-                style={[s.buildingLine, { backgroundColor: color + "44" }]}
-              />
-              <Ionicons name="ellipse-outline" size={14} color={Colors.dim} />
-            </View>
-            <View style={[s.buildingChip, s.buildingChipEmpty]}>
-              <Ionicons name="people-outline" size={12} color={Colors.dim} />
-              <Text style={s.buildingEmptyText}>Pick destination</Text>
-            </View>
-          </View>
-        ) : (
-          <View style={[s.promptIcon, { backgroundColor: color + "18" }]}>
-            <Ionicons name="flash-outline" size={34} color={color} />
-          </View>
-        )}
-
-        <Text style={s.promptTitle}>
-          {hasOrigin ? "Pick a destination" : "Build a flow route"}
-        </Text>
-        <Text style={s.promptSub}>
-          {hasOrigin
-            ? "Tap an airport to send travelers there."
-            : "Tap one of your hubs on the map to start a new route."}
-        </Text>
-
-        {!hasOrigin && (
-          <View style={s.promptTips}>
-            <View style={s.tipRow}>
-              <Ionicons name="people-outline" size={14} color={color} />
-              <Text style={s.tipText}>
-                Routes move waiting travelers from the origin.
-              </Text>
-            </View>
-            <View style={s.tipRow}>
-              <Ionicons name="cash-outline" size={14} color={color} />
-              <Text style={s.tipText}>
-                Bigger queues mean stronger first rewards.
-              </Text>
-            </View>
-            <View style={s.tipRow}>
-              <Ionicons name="git-branch-outline" size={14} color={color} />
-              <Text style={s.tipText}>
-                Add one stop if your plane needs a connection.
-              </Text>
-            </View>
-          </View>
-        )}
-
-        {hasOrigin && (
-          <TouchableOpacity
-            accessibilityRole="button"
-            style={s.cancelPrompt}
-            onPress={clearCreation}
-          >
-            <Text style={s.cancelPromptText}>Cancel route</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-    );
+    return <RoutePrompt origin={origin} onCancel={clearCreation} />;
   }
 
-  if (done) {
-    return (
-      <View style={s.success}>
-        <View style={s.successIcon}>
-          <Ionicons name="checkmark" size={38} color={Colors.textOnColor} />
-        </View>
-        <Text style={s.successTitle}>Route Open</Text>
-        <Text style={s.successRoute}>
-          {origin?.iata}
-          {via ? ` → ${via.iata}` : ""} → {dest?.iata}
-        </Text>
-        <Text style={s.successSub}>
-          Your plane is heading out now. Watch it move on the map and check back
-          for your first earnings.
-        </Text>
-      </View>
-    );
-  }
+  const haulLabel =
+    haul === "short"
+      ? "Short haul"
+      : haul === "medium"
+        ? "Medium haul"
+        : "Long haul";
+  const requirementsMet =
+    !originNotOwned &&
+    routeSlotAvailable &&
+    !capacityCovered &&
+    Boolean(selectedOption?.canServe) &&
+    canAfford;
+  const actionLabel = capacityCovered
+    ? "Daily capacity already covered"
+    : !routeSlotAvailable
+      ? "Review hub route capacity"
+      : availableAircraft.length === 0
+        ? ownedPlanes.length === 0
+          ? "Buy an aircraft in Fleet"
+          : "No aircraft can operate this route"
+        : !selectedOption
+          ? "Select an aircraft"
+          : !selectedOption.canServe
+            ? selectedOption.reason
+            : !canAfford
+              ? `Need ${fmtCash(routeFee - cash)} more`
+              : routeAlreadyActive
+                ? "Assign aircraft"
+                : existingDemand
+                  ? "Open and assign"
+                  : `Open route for ${fmtCash(routeFee)}`;
 
   return (
     <BottomSheetScrollView
-      style={s.root}
+      style={styles.root}
       contentContainerStyle={[
-        s.content,
-        { paddingBottom: tabBarH + Spacing.xxl },
+        styles.content,
+        { paddingBottom: tabBarHeight + Spacing.xxl },
       ]}
       showsVerticalScrollIndicator={false}
     >
-      <View style={s.header}>
-        <View
-          style={[
-            s.headerMark,
-            { borderColor: color, backgroundColor: color + "14" },
-          ]}
-        >
-          <Ionicons name="git-branch-outline" size={20} color={color} />
+      <View style={styles.header}>
+        <View style={styles.headerCopy}>
+          <Text style={styles.title}>Review route</Text>
+          <Text style={styles.subtitle}>
+            Choose one aircraft to begin service
+          </Text>
         </View>
-        <View style={s.headerCopy}>
-          <Text style={s.headerKicker}>NETWORK PLANNING</Text>
-          <Text style={s.title}>Create Route</Text>
-          <Text style={s.subtitle}>Choose airports and assign aircraft</Text>
-        </View>
-
         <TouchableOpacity
           accessibilityLabel="Cancel route creation"
           accessibilityRole="button"
+          activeOpacity={0.7}
           onPress={clearCreation}
-          style={s.closeButton}
+          style={styles.closeButton}
         >
           <Ionicons name="close" size={22} color={Colors.text} />
         </TouchableOpacity>
       </View>
 
-      <View style={s.section}>
-        <RouteChain
-          waypoints={waypoints}
-          color={color}
-          onRemove={(iata) => {
-            haptics.tap();
-            handleRemoveWaypoint(iata);
-          }}
+      <View style={styles.section}>
+        <SectionHeader title="Route" />
+        <RoutePath
+          onRemove={handleRemoveWaypoint}
+          waypoints={orderedWaypoints}
         />
-
-        {waypoints.length === 3 && (
-          <TouchableOpacity
-            accessibilityLabel="Swap stop and destination"
-            accessibilityRole="button"
-            style={s.swapBtn}
-            onPress={handleSwapStopDestination}
-            activeOpacity={0.84}
-          >
-            <Ionicons
-              name="swap-vertical-outline"
-              size={16}
-              color={Colors.purple}
-            />
-            <Text style={s.swapText}>Swap stop & destination</Text>
-          </TouchableOpacity>
-        )}
       </View>
 
-      <View style={s.summaryBar}>
-        <View style={s.summaryItem}>
-          <Text style={s.summaryLabel}>Distance</Text>
-          <Text style={s.summaryValue}>{totalDist.toLocaleString()}nm</Text>
+      {originNotOwned && origin ? (
+        <View style={styles.noticeContainer}>
+          <InlineNotice
+            kind="warning"
+            title="Select one of your hubs"
+            message={`${origin.iata} is not owned. Remove it, then choose an airport you operate as the origin.`}
+          />
         </View>
-        <View style={s.summaryDivider} />
-        <View style={s.summaryItem}>
-          <Text style={s.summaryLabel}>Type</Text>
-          <Text style={[s.summaryValue, { color: haulColor }]}>
-            {haul === "short"
-              ? "Short hop"
-              : haul === "medium"
-                ? "Mid-range"
-                : "Long haul"}
-          </Text>
-        </View>
-        <View style={s.summaryDivider} />
-        <View style={s.summaryItem}>
-          <Text style={s.summaryLabel}>Available</Text>
-          <Text
-            style={[
-              s.summaryValue,
-              { color: eligibleCount > 0 ? Colors.green : Colors.red },
-            ]}
-          >
-            {eligibleCount}
-          </Text>
-        </View>
-      </View>
+      ) : null}
 
-      {originNotOwned && origin && (
-        <View style={s.warningBox}>
-          <Ionicons name="alert-circle" size={15} color={Colors.amber} />
-          <View style={{ flex: 1 }}>
-            <Text style={s.warningTitle}>Start from your hub</Text>
-            <Text style={s.warningText}>
-              {origin.iata} is not owned. Remove it above, then tap one of your
-              hubs.
-            </Text>
-          </View>
-        </View>
-      )}
-
-      {!originNotOwned && origin && dest && (
+      {!originNotOwned && origin && destination ? (
         <>
-          <View style={s.section}>
-            <DemandRushCard
-              origin={origin}
-              dest={dest}
-              existingDemand={existingDemand}
-              previewDemand={previewDemand}
-              dayProgress={dayProgress}
-              color={color}
-              totalDist={totalDist}
-              fee={fee}
-              canAfford={canAfford}
+          <View style={styles.section}>
+            <SectionHeader
+              title="Service summary"
+              detail={routeAlreadyActive ? "Route operating" : haulLabel}
             />
+            <View style={styles.dataTable}>
+              <DataRow
+                label="Route distance"
+                value={`${Math.round(totalDistance).toLocaleString()} nm`}
+              />
+              {stop ? (
+                <DataRow
+                  label="Aircraft must fly"
+                  value={`${Math.round(longestLeg).toLocaleString()} nm`}
+                />
+              ) : null}
+              <DataRow
+                label="Passengers per day"
+                value={previewDemand.base_pax_day.toLocaleString()}
+              />
+              <DataRow
+                label="Ready to travel"
+                value={waitingNow.toLocaleString()}
+                valueColor={waitingNow > 100 ? Colors.amber : Colors.text}
+              />
+              <DataRow
+                label="Your hub trust"
+                value={`${Math.round(originHub?.trust ?? 0)}%`}
+              />
+              <DataRow
+                label={
+                  routeAlreadyActive ? "Additional aircraft fee" : "Open route"
+                }
+                value={routeFee > 0 ? fmtCash(routeFee) : "No fee"}
+                last
+              />
+            </View>
+            {stop ? (
+              <Text style={styles.helperText}>
+                Range is checked against the longest leg. Passengers still
+                travel from {origin.iata} to {destination.iata}.
+              </Text>
+            ) : null}
           </View>
 
-          {/* O&D Info — connecting routes only */}
-          {via && legs.length === 2 && origin && dest && (
-            <View style={s.odBox}>
-              <View style={s.odHeader}>
-                <Ionicons
-                  name="git-branch-outline"
-                  size={13}
-                  color={Colors.sky}
-                />
-                <Text style={s.odTitle}>Connecting Route</Text>
-              </View>
-              <View style={s.odLegs}>
-                <View style={s.odLeg}>
-                  <Text style={s.odLegIata}>
-                    {origin.iata} → {via.iata}
-                  </Text>
-                  <Text style={s.odLegDist}>
-                    {Math.round(legs[0]).toLocaleString()}nm
-                  </Text>
-                </View>
-                <Ionicons name="arrow-forward" size={12} color={Colors.dim} />
-                <View style={s.odLeg}>
-                  <Text style={s.odLegIata}>
-                    {via.iata} → {dest.iata}
-                  </Text>
-                  <Text style={s.odLegDist}>
-                    {Math.round(legs[1]).toLocaleString()}nm
-                  </Text>
-                </View>
-              </View>
-              <Text style={s.odHint}>
-                ✈ Passengers continuing to {dest?.iata} pay more — booking the
-                full journey
-              </Text>
-              {paxDay > 0 && paxDay < 20 && (
-                <View style={s.odWarn}>
-                  <Ionicons
-                    name="information-circle-outline"
-                    size={11}
-                    color={Colors.amber}
-                  />
-                  <Text style={s.odWarnTxt}>
-                    Not many travellers are heading this way yet. Consider a
-                    busier corridor for your first connecting route.
-                  </Text>
-                </View>
-              )}
+          <CompetitionSection
+            competitors={competitors}
+            destinationIata={destination.iata}
+            originIata={origin.iata}
+          />
+
+          {!routeSlotAvailable ? (
+            <View style={styles.noticeContainer}>
+              <InlineNotice
+                kind="warning"
+                title="Hub route capacity reached"
+                message={`${origin.iata} is operating ${activeDestinations.size} of ${routeCapacity} route slots. Upgrade the hub or close another route first.`}
+              />
             </View>
-          )}
+          ) : null}
 
-          <View style={s.divider} />
-
-          <View style={s.section}>
-            <View style={s.sectionHeader}>
-              <Text style={s.eyebrow}>SELECT PLANE</Text>
-              {eligibleCount > 0 && (
-                <Text style={[s.eligible, { color: Colors.green }]}>
-                  {eligibleCount} available
-                </Text>
-              )}
+          {capacityCovered ? (
+            <View style={styles.noticeContainer}>
+              <InlineNotice
+                kind="info"
+                title="Daily capacity covered"
+                message={`Existing aircraft schedule ${scheduledSeats.toLocaleString()} seats for a passenger pool of ${estimatedPlayerDemand.toLocaleString()}. No additional aircraft is needed.`}
+              />
             </View>
+          ) : null}
 
-            {selectedCount > 0 && (
-              <View style={[s.selectedSummary, { borderColor: color + "44" }]}>
-                <View style={s.selectedSummaryTop}>
-                  <Text style={s.selectedSummaryTitle}>
-                    {selectedCount} plane{selectedCount !== 1 ? "s" : ""}{" "}
-                    selected
-                  </Text>
-                  <Text style={[s.selectedSummaryValue, { color }]}>
-                    {selectedCapacity.toLocaleString()} seats
-                  </Text>
-                </View>
-                <Text style={s.selectedSummarySub}>
-                  Est. first reward {fmtCash(selectedReward)} · Setup cost{" "}
-                  {fmtCash(totalFee)}
-                </Text>
-              </View>
-            )}
+          <View style={styles.aircraftSection}>
+            <SectionHeader
+              title="Aircraft"
+              detail={`${availableAircraft.length} available`}
+            />
 
             {ownedPlanes.length === 0 ? (
-              <View style={s.emptyPlanes}>
-                <Ionicons
-                  name="airplane-outline"
-                  size={34}
-                  color={Colors.dim}
-                />
-                <Text style={s.emptyTitle}>No planes yet</Text>
-                <Text style={s.emptySub}>
-                  Buy a starter plane from Fleet first.
+              <View style={styles.emptyState}>
+                <Text style={styles.emptyTitle}>No aircraft owned</Text>
+                <Text style={styles.emptyText}>
+                  Go to Fleet and buy an aircraft before opening this route.
                 </Text>
+                <TouchableOpacity
+                  accessibilityLabel="Open fleet"
+                  accessibilityRole="button"
+                  activeOpacity={0.7}
+                  onPress={handleOpenFleet}
+                  style={styles.emptyAction}
+                >
+                  <Text style={styles.emptyActionText}>Open Fleet</Text>
+                  <Ionicons
+                    name="arrow-forward"
+                    size={16}
+                    color={Colors.skyDark}
+                  />
+                </TouchableOpacity>
+              </View>
+            ) : primaryAircraft.length === 0 ? (
+              <View style={styles.emptyState}>
+                <Text style={styles.emptyTitle}>No aircraft available</Text>
+                <Text style={styles.emptyText}>
+                  Every aircraft is assigned or lacks the range for this route.
+                </Text>
+                <TouchableOpacity
+                  accessibilityLabel="Open fleet"
+                  accessibilityRole="button"
+                  activeOpacity={0.7}
+                  onPress={handleOpenFleet}
+                  style={styles.emptyAction}
+                >
+                  <Text style={styles.emptyActionText}>Open Fleet</Text>
+                  <Ionicons
+                    name="arrow-forward"
+                    size={16}
+                    color={Colors.skyDark}
+                  />
+                </TouchableOpacity>
               </View>
             ) : (
+              <View accessibilityRole="radiogroup" style={styles.aircraftList}>
+                {primaryAircraft.map((option) => (
+                  <AircraftRow
+                    key={option.plane.id}
+                    onSelect={() => {
+                      haptics.tap();
+                      setSelectedPlaneId(option.plane.id);
+                      setError(null);
+                    }}
+                    option={option}
+                    recommended={
+                      option.canServe &&
+                      option.plane.id === recommended?.plane.id
+                    }
+                    selected={option.plane.id === selectedPlaneId}
+                  />
+                ))}
+              </View>
+            )}
+
+            {otherUnavailableAircraft.length > 0 ? (
               <>
-                {/* Available planes only — shown by default */}
-                {classified
-                  .filter((item) => item.canServe)
-                  .map(({ plane, canServe, reason }) => (
-                    <PlaneRow
-                      key={plane.id}
-                      plane={plane}
-                      canServe={canServe}
-                      selected={selectedIds.includes(plane.id)}
-                      reason={reason}
-                      waitingNow={waitingNow}
-                      paxDay={previewDemand.base_pax_day}
-                      totalDist={totalDist}
-                      trustPct={originHub?.trust ?? 0}
-                      color={color}
-                      onSelect={() => {
-                        haptics.tap();
-                        togglePlane(plane.id);
-                      }}
-                    />
-                  ))}
+                <TouchableOpacity
+                  accessibilityLabel={`${showUnavailable ? "Hide" : "Show"} unavailable aircraft`}
+                  accessibilityRole="button"
+                  activeOpacity={0.7}
+                  onPress={() => setShowUnavailable((current) => !current)}
+                  style={styles.unavailableToggle}
+                >
+                  <Text style={styles.unavailableToggleText}>
+                    {showUnavailable ? "Hide" : "Show"} unavailable aircraft (
+                    {otherUnavailableAircraft.length})
+                  </Text>
+                  <Ionicons
+                    name={showUnavailable ? "chevron-up" : "chevron-down"}
+                    size={17}
+                    color={Colors.muted}
+                  />
+                </TouchableOpacity>
 
-                {/* Show/hide incompatible planes */}
-                {incompatibleCount > 0 && (
-                  <TouchableOpacity
-                    accessibilityRole="button"
-                    style={s.incompatibleToggle}
-                    onPress={() => setShowIncompatible((v) => !v)}
-                    activeOpacity={0.7}
-                  >
-                    <Ionicons
-                      name={showIncompatible ? "chevron-up" : "chevron-down"}
-                      size={12}
-                      color={Colors.dim}
-                    />
-                    <Text style={s.incompatibleToggleTxt}>
-                      {showIncompatible ? "Hide" : "Show"} {incompatibleCount}{" "}
-                      incompatible plane{incompatibleCount !== 1 ? "s" : ""}
-                    </Text>
-                  </TouchableOpacity>
-                )}
-
-                {/* Incompatible planes — collapsed by default */}
-                {showIncompatible &&
-                  classified
-                    .filter((item) => !item.canServe)
-                    .map(({ plane, canServe, reason }) => (
-                      <PlaneRow
-                        key={plane.id}
-                        plane={plane}
-                        canServe={canServe}
-                        selected={selectedIds.includes(plane.id)}
-                        reason={reason}
-                        waitingNow={waitingNow}
-                        paxDay={previewDemand.base_pax_day}
-                        totalDist={totalDist}
-                        trustPct={originHub?.trust ?? 0}
-                        color={color}
-                        onSelect={() => {
-                          haptics.tap();
-                          togglePlane(plane.id);
-                        }}
+                {showUnavailable ? (
+                  <View style={styles.aircraftList}>
+                    {otherUnavailableAircraft.map((option) => (
+                      <AircraftRow
+                        key={option.plane.id}
+                        onSelect={() => undefined}
+                        option={option}
+                        recommended={false}
+                        selected={false}
                       />
                     ))}
+                  </View>
+                ) : null}
               </>
-            )}
+            ) : null}
           </View>
 
-          {error && (
-            <View style={s.errorBox}>
-              <Ionicons name="warning-outline" size={13} color={Colors.red} />
-              <Text style={s.errorText}>{error}</Text>
+          {error ? (
+            <View style={styles.noticeContainer}>
+              <InlineNotice
+                kind="error"
+                title="Unable to open route"
+                message={error}
+              />
             </View>
-          )}
+          ) : null}
 
-          <View style={s.section}>
+          <View style={styles.confirmSection}>
             <TouchableOpacity
-              accessibilityLabel={
-                selectedCount === 0
-                  ? "Select one or more idle aircraft"
-                  : !canAffordSelected
-                    ? `Need ${fmtCash(totalFee - cash)} more to create route`
-                    : `Create route with ${selectedCount} aircraft for ${fmtCash(totalFee)}`
-              }
+              accessibilityLabel={actionLabel}
               accessibilityRole="button"
-              style={[
-                s.confirm,
-                {
-                  backgroundColor:
-                    selectedCount > 0 && canAffordSelected
-                      ? Colors.sky
-                      : Colors.dim,
-                },
-                (selectedCount === 0 || !canAffordSelected || creating) && {
-                  opacity: 0.5,
-                },
-              ]}
+              accessibilityState={{
+                disabled: creating || !requirementsMet,
+                busy: creating,
+              }}
+              activeOpacity={0.7}
+              disabled={creating || !requirementsMet}
               onPress={handleCreate}
-              disabled={selectedCount === 0 || !canAffordSelected || creating}
-              activeOpacity={0.86}
+              style={[
+                styles.confirmButton,
+                !requirementsMet && styles.confirmButtonDisabled,
+              ]}
             >
               {creating ? (
-                <ActivityIndicator color={Colors.textOnColor} size="small" />
+                <ActivityIndicator size="small" color={Colors.textOnColor} />
               ) : (
                 <>
                   <Ionicons
-                    name="flash-outline"
-                    size={17}
-                    color={Colors.textOnColor}
+                    name="git-branch-outline"
+                    size={18}
+                    color={
+                      requirementsMet ? Colors.textOnColor : Colors.skyDark
+                    }
                   />
-                  <Text style={s.confirmText}>
-                    {selectedCount === 0
-                      ? "Select one or more idle planes"
-                      : !canAffordSelected
-                        ? `Need ${fmtCash(totalFee - cash)} more`
-                        : existingDemand
-                          ? `Assign ${selectedCount} Plane${selectedCount !== 1 ? "s" : ""} · ${fmtCash(totalFee)}`
-                          : `Open Route with ${selectedCount} Plane${selectedCount !== 1 ? "s" : ""} · ${fmtCash(totalFee)}`}
+                  <Text
+                    style={[
+                      styles.confirmButtonText,
+                      !requirementsMet && styles.confirmButtonTextDisabled,
+                    ]}
+                  >
+                    {actionLabel}
                   </Text>
                 </>
               )}
             </TouchableOpacity>
-
-            {!canAffordSelected && selectedCount > 0 && (
-              <Text style={s.shortfall}>
-                {fmtCash(cash)} cash · {fmtCash(totalFee)} needed
-              </Text>
-            )}
           </View>
         </>
-      )}
+      ) : null}
     </BottomSheetScrollView>
   );
 }
 
-const chain = StyleSheet.create({
-  wrap: {
-    gap: Spacing.xs,
-  },
-  itemWrap: {
-    position: "relative",
-  },
-  connector: {
-    width: 2,
-    height: 10,
-    marginLeft: 15,
-    marginBottom: -2,
-  },
-  item: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.sm,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    backgroundColor: Colors.panel,
-    padding: Spacing.sm,
-    ...Shadow.card,
-  },
-  dot: {
-    width: 11,
-    height: 11,
-    borderRadius: 999,
-  },
-  body: {
-    flex: 1,
-    minWidth: 0,
-  },
-  topRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-  },
-  iata: {
-    fontFamily: Typography.mono,
-    fontSize: 16,
-    fontWeight: "700",
-  },
-  badge: {
-    borderRadius: Radius.full,
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-  },
-  badgeText: {
-    fontFamily: Typography.mono,
-    fontSize: 7,
-    fontWeight: "700",
-    letterSpacing: 1,
-  },
-  city: {
-    fontSize: 10,
-    color: Colors.muted,
-    marginTop: 1,
-  },
-  hint: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    paddingTop: Spacing.xs,
-  },
-  hintText: {
-    fontSize: 10,
-    color: Colors.muted,
-  },
-});
-
-const rush = StyleSheet.create({
-  card: {
-    borderRadius: Radius.xl,
-    borderWidth: 1,
-    backgroundColor: Colors.panel,
-    padding: Spacing.md,
-    gap: Spacing.md,
-    ...Shadow.card,
-  },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.sm,
-  },
-  icon: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  label: {
-    fontFamily: Typography.mono,
-    fontSize: 8,
-    letterSpacing: 2,
-    fontWeight: "700",
-  },
-  route: {
-    fontFamily: Typography.mono,
-    fontSize: 14,
-    color: Colors.text,
-    fontWeight: "700",
-    marginTop: 1,
-  },
-  fee: {
-    alignItems: "flex-end",
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    backgroundColor: Colors.bg,
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-  },
-  feeValue: {
-    fontFamily: Typography.mono,
-    fontSize: 12,
-    fontWeight: "700",
-  },
-  feeLabel: {
-    fontSize: 8,
-    color: Colors.muted,
-  },
-  summaryRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    paddingTop: Spacing.sm,
-    borderTopWidth: 0.5,
-    borderTopColor: Colors.border,
-    marginTop: Spacing.sm,
-  },
-  summaryTxt: {
-    fontSize: 11,
-    color: Colors.muted,
-    flex: 1,
-    lineHeight: 15,
-  },
-});
-
-const planeStyles = StyleSheet.create({
-  row: {
-    flexDirection: "row",
-    borderRadius: Radius.xl,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    overflow: "hidden",
-    backgroundColor: Colors.panel,
-    marginBottom: Spacing.sm,
-    ...Shadow.card,
-  },
-  stripe: {
-    width: 4,
-  },
-  body: {
-    flex: 1,
-    padding: Spacing.md,
-    gap: Spacing.sm,
-  },
-  top: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 7,
-  },
-  name: {
-    flex: 1,
-    fontSize: 14,
-    color: Colors.text,
-    fontWeight: "700",
-  },
-  rewardLine: {
-    fontSize: 11,
-    color: Colors.green,
-    marginTop: 3,
-  },
-  lockPill: {
-    borderRadius: Radius.full,
-    backgroundColor: Colors.inset,
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-  },
-  lockText: {
-    fontSize: 8,
-    color: Colors.muted,
-    fontFamily: Typography.mono,
-    fontWeight: "700",
-  },
-  specs: {
-    fontSize: 10,
-    color: Colors.muted,
-  },
-});
-
-const s = StyleSheet.create({
+const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: Colors.surface,
@@ -1229,445 +1049,460 @@ const s = StyleSheet.create({
   content: {
     paddingBottom: Spacing.xxl,
   },
-  prompt: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    padding: Spacing.xl,
-    gap: Spacing.lg,
-    backgroundColor: Colors.surface,
-  },
-  promptIcon: {
-    width: 70,
-    height: 70,
-    borderRadius: 22,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  promptTitle: {
-    fontFamily: Typography.display,
-    fontSize: 28,
-    color: Colors.text,
-    textAlign: "center",
-  },
-  promptSub: {
-    fontSize: 13,
-    color: Colors.muted,
-    textAlign: "center",
-    lineHeight: 20,
-  },
-  promptTips: {
-    alignSelf: "stretch",
-    gap: 9,
-    marginTop: Spacing.sm,
-    padding: Spacing.md,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: Radius.lg,
-    backgroundColor: Colors.panel,
-    ...Shadow.card,
-  },
-  tipRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.sm,
-  },
-  tipText: {
-    fontSize: 12,
-    color: Colors.muted,
-    flex: 1,
-  },
-  buildingRoute: {
-    alignItems: "center",
-    gap: 8,
-    width: "100%",
-  },
-  buildingChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    borderRadius: Radius.full,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.panel,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 8,
-  },
-  buildingChipEmpty: {
-    borderStyle: "dashed",
-    backgroundColor: "transparent",
-  },
-  buildingIata: {
-    fontFamily: Typography.mono,
-    fontSize: 16,
-    fontWeight: "700",
-  },
-  buildingCity: {
-    fontSize: 11,
-    color: Colors.muted,
-  },
-  buildingEmptyText: {
-    fontSize: 12,
-    color: Colors.muted,
-    fontWeight: "700",
-  },
-  buildingArrow: {
-    flexDirection: "row",
-    alignItems: "center",
-    width: "60%",
-    justifyContent: "center",
-  },
-  buildingLine: {
-    flex: 1,
-    height: 1,
-  },
-  cancelPrompt: {
-    marginTop: Spacing.sm,
-    minHeight: MIN_TOUCH,
-    justifyContent: "center",
-    paddingHorizontal: Spacing.lg,
-    borderRadius: Radius.md,
-    backgroundColor: Palette.redSoft,
-  },
-  cancelPromptText: {
-    fontSize: 12,
-    color: Colors.red,
-    fontWeight: "700",
-  },
-  success: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    padding: Spacing.xl,
-    gap: Spacing.md,
-    backgroundColor: Colors.surface,
-  },
-  successIcon: {
-    width: 76,
-    height: 76,
-    borderRadius: 24,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: Colors.green,
-  },
-  successTitle: {
-    fontFamily: Typography.display,
-    fontSize: 30,
-    color: Colors.text,
-  },
-  successRoute: {
-    fontFamily: Typography.mono,
-    fontSize: 18,
-    fontWeight: "700",
-    letterSpacing: 1,
-    color: Colors.skyDark,
-  },
-  successSub: {
-    fontSize: 13,
-    color: Colors.muted,
-    textAlign: "center",
-    lineHeight: 20,
-  },
   header: {
+    minHeight: 68,
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.sm,
-    paddingBottom: Spacing.md,
-    gap: Spacing.md,
+    paddingVertical: Spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
   },
-  headerMark: {
-    width: MIN_TOUCH,
-    height: MIN_TOUCH,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderRadius: Radius.md,
-  },
-  headerCopy: { flex: 1 },
-  headerKicker: {
-    color: Colors.skyDark,
-    fontFamily: Typography.mono,
-    fontSize: 8,
-    letterSpacing: 1.3,
+  headerCopy: {
+    flex: 1,
   },
   title: {
-    fontFamily: Typography.display,
-    fontSize: 28,
-    lineHeight: 31,
-    letterSpacing: 0.4,
     color: Colors.text,
+    fontSize: Typography.size.title,
+    lineHeight: Typography.lineHeight.title,
+    fontWeight: Typography.weight.bold,
   },
   subtitle: {
-    fontSize: 10,
     color: Colors.muted,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
   },
   closeButton: {
     width: MIN_TOUCH,
     height: MIN_TOUCH,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: Radius.full,
-    backgroundColor: Colors.inset,
+    borderRadius: Radius.md,
   },
   section: {
-    paddingHorizontal: Spacing.lg,
-    gap: Spacing.sm,
-    marginBottom: Spacing.sm,
+    marginHorizontal: Spacing.lg,
+    paddingTop: Spacing.xl,
   },
   sectionHeader: {
+    minHeight: 32,
+    flexDirection: "row",
+    alignItems: "baseline",
+    justifyContent: "space-between",
+    gap: Spacing.md,
+  },
+  sectionTitle: {
+    flex: 1,
+    color: Colors.text,
+    fontSize: 16,
+    lineHeight: 21,
+    fontWeight: Typography.weight.bold,
+  },
+  sectionDetail: {
+    color: Colors.muted,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
+    textAlign: "right",
+  },
+  pathTable: {
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSection,
+  },
+  pathRow: {
+    minHeight: 56,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+  },
+  pathLabel: {
+    width: 72,
+    color: Colors.muted,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
+  },
+  pathAirport: {
+    flex: 1,
+    minWidth: 0,
+  },
+  pathCode: {
+    color: Colors.skyDark,
+    fontFamily: Typography.mono,
+    fontSize: 15,
+    lineHeight: 19,
+    fontWeight: Typography.weight.bold,
+  },
+  pathCity: {
+    color: Colors.muted,
+    fontSize: 10,
+    lineHeight: 14,
+  },
+  pathRemove: {
+    width: MIN_TOUCH,
+    height: MIN_TOUCH,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: Radius.md,
+  },
+  stopHint: {
+    minHeight: MIN_TOUCH,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
+  stopHintText: {
+    flex: 1,
+    color: Colors.muted,
+    fontSize: Typography.size.caption,
+    lineHeight: 17,
+  },
+  dataTable: {
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSection,
+  },
+  dataRow: {
+    minHeight: 42,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    gap: Spacing.lg,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
   },
-  eyebrow: {
+  dataRowLast: {
+    borderBottomWidth: 0,
+  },
+  dataLabel: {
+    flex: 1,
+    color: Colors.muted,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+  },
+  dataValue: {
+    flex: 1,
+    color: Colors.text,
     fontFamily: Typography.mono,
-    fontSize: 9,
-    color: Colors.skyDark,
-    letterSpacing: 2.5,
-    fontWeight: "700",
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+    fontWeight: Typography.weight.semibold,
+    textAlign: "right",
   },
-  eligible: {
+  helperText: {
+    color: Colors.muted,
+    fontSize: Typography.size.caption,
+    lineHeight: 17,
+    paddingTop: Spacing.sm,
+  },
+  competitionSection: {
+    marginHorizontal: Spacing.lg,
+    paddingTop: Spacing.xl,
+  },
+  competitionList: {
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSection,
+  },
+  competitionRow: {
+    minHeight: 58,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+  },
+  competitionIdentity: {
+    flex: 1,
+    minWidth: 0,
+  },
+  competitionName: {
+    color: Colors.text,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: Typography.weight.semibold,
+  },
+  competitionCode: {
+    color: Colors.muted,
     fontFamily: Typography.mono,
     fontSize: 10,
-    fontWeight: "700",
+    lineHeight: 14,
+    marginTop: Spacing.xxs,
   },
-  divider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: Colors.border,
-    marginVertical: Spacing.sm,
+  competitionTrust: {
+    minWidth: 48,
+    alignItems: "flex-end",
   },
-  summaryBar: {
-    flexDirection: "row",
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.sm,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.panel,
-    overflow: "hidden",
-    ...Shadow.card,
-  },
-  summaryItem: {
-    flex: 1,
-    alignItems: "center",
-    paddingVertical: Spacing.sm,
-    gap: 2,
-  },
-  summaryDivider: {
-    width: StyleSheet.hairlineWidth,
-    backgroundColor: Colors.border,
-  },
-  summaryLabel: {
-    fontFamily: Typography.mono,
-    fontSize: 7,
-    color: Colors.muted,
-    letterSpacing: 1.3,
-  },
-  summaryValue: {
-    fontFamily: Typography.mono,
-    fontSize: 11,
+  competitionTrustValue: {
     color: Colors.text,
-    fontWeight: "700",
+    fontFamily: Typography.mono,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: Typography.weight.bold,
   },
-  warningBox: {
+  competitionTrustLabel: {
+    color: Colors.muted,
+    fontSize: 9,
+    lineHeight: 13,
+  },
+  competitionHelp: {
+    color: Colors.muted,
+    fontSize: Typography.size.caption,
+    lineHeight: 17,
+    paddingTop: Spacing.sm,
+  },
+  noticeContainer: {
+    marginHorizontal: Spacing.lg,
+    paddingTop: Spacing.lg,
+  },
+  notice: {
+    minHeight: 58,
     flexDirection: "row",
     alignItems: "flex-start",
     gap: Spacing.sm,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.amber,
-    backgroundColor: Palette.orangeSoft,
-    marginHorizontal: Spacing.lg,
-    padding: Spacing.md,
+    paddingVertical: Spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSection,
   },
-  warningTitle: {
-    fontSize: 12,
-    color: Colors.amber,
-    fontWeight: "700",
+  noticeCopy: {
+    flex: 1,
   },
-  warningText: {
-    fontSize: 11,
+  noticeTitle: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: Typography.weight.bold,
+  },
+  noticeMessage: {
     color: Colors.muted,
-    lineHeight: 16,
-    marginTop: 2,
+    fontSize: Typography.size.caption,
+    lineHeight: 17,
+    marginTop: Spacing.xxs,
   },
-  incompatibleToggle: {
+  aircraftSection: {
+    marginHorizontal: Spacing.lg,
+    paddingTop: Spacing.xxl,
+  },
+  aircraftList: {
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSection,
+  },
+  aircraftRow: {
+    minHeight: 78,
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
-    paddingVertical: 10,
-    justifyContent: "center",
-  },
-  incompatibleToggleTxt: {
-    fontSize: 11,
-    color: Colors.muted,
-    fontWeight: "500",
-  },
-  odBox: {
-    backgroundColor: Colors.panel,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.borderHi,
-    padding: Spacing.md,
     gap: Spacing.sm,
-    marginBottom: Spacing.sm,
-    marginHorizontal: Spacing.lg,
-    ...Shadow.card,
+    paddingVertical: Spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
   },
-  odHeader: {
+  aircraftRowSelected: {
+    backgroundColor: Colors.skyDim,
+  },
+  aircraftRowDisabled: {
+    opacity: 0.55,
+  },
+  aircraftCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  aircraftNameRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
+    gap: Spacing.sm,
   },
-  odTitle: {
-    fontSize: 12,
-    fontWeight: "700",
+  aircraftName: {
+    flex: 1,
     color: Colors.text,
-    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: Typography.weight.semibold,
   },
-  odLegs: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
+  recommendedText: {
+    color: Colors.skyDark,
+    fontSize: 9,
+    lineHeight: 13,
+    fontWeight: Typography.weight.semibold,
   },
-  odLeg: {
-    flex: 1,
-    alignItems: "center",
-    gap: 2,
+  aircraftSpecs: {
+    color: Colors.muted,
+    fontSize: 10,
+    lineHeight: 14,
+    marginTop: Spacing.xxs,
   },
-  odLegIata: {
+  aircraftBoarding: {
+    color: Colors.muted,
+    fontSize: 10,
+    lineHeight: 14,
+    marginTop: Spacing.xxs,
+  },
+  aircraftUnavailable: {
+    color: Colors.red,
+    fontSize: 10,
+    lineHeight: 14,
+    marginTop: Spacing.xxs,
+  },
+  aircraftResult: {
+    minWidth: 72,
+    alignItems: "flex-end",
+  },
+  aircraftResultValue: {
     fontFamily: Typography.mono,
     fontSize: 11,
-    fontWeight: "700",
-    color: Colors.text,
+    lineHeight: 15,
+    fontWeight: Typography.weight.bold,
   },
-  odLegDist: {
-    fontSize: 10,
+  aircraftResultLabel: {
     color: Colors.muted,
+    fontSize: 9,
+    lineHeight: 13,
   },
-  odHint: {
-    fontSize: 10,
-    color: Colors.sky,
-  },
-  odWarn: {
+  unavailableToggle: {
+    minHeight: MIN_TOUCH,
     flexDirection: "row",
     alignItems: "center",
-    gap: 5,
-    backgroundColor: Palette.orangeSoft,
-    borderRadius: 6,
-    padding: 6,
+    justifyContent: "space-between",
+    gap: Spacing.md,
   },
-  odWarnTxt: {
-    fontSize: 10,
-    color: Colors.amber,
+  unavailableToggleText: {
     flex: 1,
-    lineHeight: 14,
+    color: Colors.muted,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
   },
-  emptyPlanes: {
-    alignItems: "center",
+  emptyState: {
     paddingVertical: Spacing.xl,
-    gap: Spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSection,
   },
   emptyTitle: {
-    fontSize: 15,
     color: Colors.text,
-    fontWeight: "700",
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: Typography.weight.semibold,
   },
-  emptySub: {
-    fontSize: 12,
+  emptyText: {
     color: Colors.muted,
+    fontSize: Typography.size.caption,
+    lineHeight: 17,
+    marginTop: Spacing.xs,
   },
-  errorBox: {
+  emptyAction: {
+    minHeight: MIN_TOUCH,
     flexDirection: "row",
-    alignItems: "flex-start",
-    gap: 6,
-    borderRadius: Radius.md,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: Spacing.sm,
+    marginTop: Spacing.md,
     borderWidth: 1,
-    borderColor: Colors.red,
-    backgroundColor: Palette.redSoft,
+    borderColor: Colors.borderSection,
+    borderRadius: Radius.md,
+  },
+  emptyActionText: {
+    color: Colors.skyDark,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+    fontWeight: Typography.weight.semibold,
+  },
+  confirmSection: {
     marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.sm,
-    padding: Spacing.sm,
+    paddingTop: Spacing.xl,
   },
-  errorText: {
-    flex: 1,
-    fontSize: 11,
-    color: Colors.red,
-    lineHeight: 16,
-  },
-  confirm: {
+  confirmButton: {
     minHeight: MIN_TOUCH + 4,
-    borderRadius: Radius.lg,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: Spacing.sm,
     paddingHorizontal: Spacing.md,
-  },
-  confirmText: {
-    fontSize: 12,
-    fontWeight: "700",
-    textAlign: "center",
-    color: Colors.textOnColor,
-  },
-  shortfall: {
-    fontSize: 10,
-    color: Colors.red,
-    textAlign: "center",
-    marginTop: 4,
-  },
-  swapBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-
+    backgroundColor: Colors.sky,
     borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.purple,
-    backgroundColor: Palette.violetSoft,
-
-    marginTop: Spacing.xs,
   },
-
-  swapText: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: Colors.purple,
+  confirmButtonDisabled: {
+    backgroundColor: Colors.inset,
   },
-
-  selectedSummary: {
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    backgroundColor: Colors.panel,
-    padding: Spacing.sm,
-    marginBottom: Spacing.sm,
-    ...Shadow.card,
+  confirmButtonText: {
+    color: Colors.textOnColor,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+    fontWeight: Typography.weight.semibold,
+    textAlign: "center",
   },
-  selectedSummaryTop: {
+  confirmButtonTextDisabled: {
+    color: Colors.muted,
+  },
+  promptRoot: {
+    flex: 1,
+    backgroundColor: Colors.surface,
+    paddingBottom: Spacing.xl,
+  },
+  promptHeader: {
+    minHeight: 68,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: Spacing.sm,
+    gap: Spacing.md,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
   },
-  selectedSummaryTitle: {
-    fontSize: 12,
+  promptTitle: {
     color: Colors.text,
-    fontWeight: "700",
+    fontSize: Typography.size.title,
+    lineHeight: Typography.lineHeight.title,
+    fontWeight: Typography.weight.bold,
   },
-  selectedSummaryValue: {
-    fontFamily: Typography.mono,
-    fontSize: 11,
-    fontWeight: "700",
-  },
-  selectedSummarySub: {
-    fontSize: 10,
+  promptSubtitle: {
     color: Colors.muted,
-    marginTop: 3,
-    fontWeight: "700",
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
+  },
+  promptSelection: {
+    marginHorizontal: Spacing.lg,
+    marginTop: Spacing.xl,
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSection,
+  },
+  promptStep: {
+    minHeight: 58,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+  },
+  promptStepCopy: {
+    flex: 1,
+  },
+  promptStepLabel: {
+    color: Colors.text,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+    fontWeight: Typography.weight.semibold,
+  },
+  promptStepValue: {
+    color: Colors.muted,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
+    marginTop: Spacing.xxs,
+  },
+  promptHelp: {
+    color: Colors.muted,
+    fontSize: Typography.size.caption,
+    lineHeight: 17,
+    marginHorizontal: Spacing.lg,
+    marginTop: Spacing.md,
   },
 });

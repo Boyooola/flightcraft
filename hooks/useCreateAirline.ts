@@ -6,6 +6,7 @@
  */
 
 import { getPlayerId } from "@/hooks/useAuth";
+import type { AirlineLogoId, AirlinePaletteId } from "@/lib/airlineBrand";
 import { setDemandSeed } from "@/lib/demands";
 import { supabase } from "@/lib/supabase";
 import { useGameStore } from "@/store";
@@ -13,7 +14,11 @@ import { useCallback } from "react";
 
 interface CreateAirlineParams {
   name: string;
+  airline_code: string;
   color: string;
+  secondary_color: string;
+  logo_id: AirlineLogoId;
+  palette_id: AirlinePaletteId;
   difficulty: string;
   cash: number;
   loan: number;
@@ -29,7 +34,11 @@ export function useCreateAirline() {
     async (params: CreateAirlineParams): Promise<{ error: string | null }> => {
       const {
         name,
+        airline_code,
         color,
+        secondary_color,
+        logo_id,
+        palette_id,
         difficulty,
         cash,
         loan,
@@ -39,6 +48,9 @@ export function useCreateAirline() {
       } = params;
 
       if (!name.trim()) return { error: "Airline name is required" };
+      if (!/^[A-Z]{3}$/.test(airline_code)) {
+        return { error: "Airline code must contain three letters" };
+      }
 
       try {
         const loanRate =
@@ -72,12 +84,36 @@ export function useCreateAirline() {
 
         console.log("Created airline with ID:", data.id);
 
+        // Persist the complete brand when the brand columns are available.
+        // Older databases can still create and load the airline with its
+        // primary color; the migration persists the complete identity.
+        const { error: brandError } = await supabase
+          .from("airlines")
+          .update({
+            airline_code,
+            logo_id,
+            palette_id,
+            secondary_color,
+          })
+          .eq("id", data.id);
+
+        if (brandError) {
+          console.warn(
+            "Airline created with legacy brand fields. Apply the airline-brand migration to persist every customization.",
+            brandError.message,
+          );
+        }
+
         setAirline({
           id: data.id,
           player_id: getPlayerId()!,
           name: name.trim(),
+          airline_code,
           color,
-          icon: "airplane",
+          secondary_color,
+          logo_id,
+          palette_id,
+          icon: logo_id,
           difficulty,
           cash,
           loan,

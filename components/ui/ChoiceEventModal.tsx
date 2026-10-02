@@ -1,517 +1,698 @@
 /**
- * components/modals/ChoiceEventModal.tsx
+ * Pausing airline-decision sheet.
  *
- * Full-screen modal that interrupts gameplay when a choice event fires.
- * The game is paused (speed=0) while this is visible.
- * Dismissing without choosing is not possible — player must decide.
- *
- * Fixes applied:
- *   FIX 3 — Card content wrapped in ScrollView with bounces={false}.
- *            On small phones (SE, Pixel 4a) long situation text + two
- *            option buttons overflow the screen. Now scrollable.
- *
- *   FIX 4 — Active consequence badge added above the options.
- *            When a lingering revenue multiplier from a previous choice
- *            is still running, a small indicator shows it alongside
- *            "YOUR DECISION" so the player knows they're stacking effects.
+ * Every option exposes the simulation effects it can actually apply. The
+ * decision cannot be dismissed without a response, and the previous game
+ * speed is restored only after the player acknowledges the result.
  */
 
-import { Colors, Radius, Spacing } from "@/constants/theme";
-import { resolveChoiceEvent } from "@/hooks/useDailyEvents";
-import type { ChoiceOption, ResolvedChoice } from "@/lib/choiceEvents";
-import { fmtCash } from "@/lib/revenue";
-import { useGameStore } from "@/store";
-import { Ionicons } from "@expo/vector-icons";
-import { useEffect, useRef, useState } from "react";
+import { AirlineBrandMark } from "@/components/airline-identity";
 import {
-  Animated,
+  Colors,
+  MIN_TOUCH,
+  Radius,
+  Spacing,
+  Typography,
+} from "@/constants/theme";
+import { resolveChoiceEvent } from "@/hooks/useDailyEvents";
+import { useHaptics } from "@/hooks/useHaptics";
+import { DEFAULT_AIRLINE_LOGO_ID, getAirlinePalette } from "@/lib/airlineBrand";
+import type {
+  ChoiceEvent,
+  ChoiceOption,
+  ResolvedChoice,
+} from "@/lib/choiceEvents";
+import { fmtCash } from "@/lib/revenue";
+import { useAirline, useCash, useGameStore } from "@/store";
+import { Ionicons } from "@expo/vector-icons";
+import { useEffect, useState } from "react";
+import {
   Modal,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-// ─────────────────────────────────────────────────────────────────
-// CATEGORY CONFIG
-// ─────────────────────────────────────────────────────────────────
+const CATEGORY_LABEL: Record<ChoiceEvent["category"], string> = {
+  operations: "Operations decision",
+  finance: "Finance decision",
+  weather: "Weather response",
+  competitor: "Competitor response",
+  opportunity: "Commercial opportunity",
+};
 
-const CATEGORY_CONFIG = {
-  operations: { label: "Operations", color: Colors.sky },
-  finance: { label: "Finance", color: Colors.green },
-  weather: { label: "Weather", color: Colors.amber },
-  competitor: { label: "Competitor", color: Colors.red },
-  opportunity: { label: "Opportunity", color: Colors.purple ?? "#a855f7" },
-} as const;
-
-// ─────────────────────────────────────────────────────────────────
-// RESULT SUMMARY — shown after choice is made
-// ─────────────────────────────────────────────────────────────────
-
-function ResultCard({
-  option,
-  resolved,
-  onDone,
-}: {
+interface ResolvedDecision {
+  event: ChoiceEvent;
   option: ChoiceOption;
-  resolved: ResolvedChoice;
-  onDone: () => void;
-}) {
-  const progress = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    const timer = setTimeout(onDone, 2200);
-    Animated.timing(progress, {
-      toValue: 1,
-      duration: 2200,
-      useNativeDriver: false,
-    }).start();
-    return () => clearTimeout(timer);
-  }, []);
-
-  const cash = resolved.consequence.cashDelta ?? 0;
-  const hasLingering = !!resolved.revenueMultiplierEndsDay;
-
-  return (
-    <View style={rc.card}>
-      <View style={rc.iconWrap}>
-        <Ionicons name="checkmark-circle" size={28} color={Colors.green} />
-      </View>
-      <Text style={rc.chosen}>You chose: {option.label}</Text>
-      <Text style={rc.effect}>{option.effectSummary}</Text>
-
-      {cash !== 0 && (
-        <Text
-          style={[rc.cashLine, { color: cash > 0 ? Colors.green : Colors.red }]}
-        >
-          {cash > 0 ? "+" : ""}
-          {fmtCash(cash)}
-        </Text>
-      )}
-
-      {hasLingering && (
-        <Text style={rc.linger}>
-          Effect lasts until Day {resolved.revenueMultiplierEndsDay}
-        </Text>
-      )}
-
-      <View style={rc.progressTrack}>
-        <Animated.View
-          style={[
-            rc.progressFill,
-            {
-              width: progress.interpolate({
-                inputRange: [0, 1],
-                outputRange: ["0%", "100%"],
-              }),
-            },
-          ]}
-        />
-      </View>
-    </View>
-  );
+  result: ResolvedChoice;
 }
 
-const rc = StyleSheet.create({
-  card: {
-    backgroundColor: "rgba(255,255,255,.04)",
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.green + "44",
-    padding: Spacing.lg,
-    alignItems: "center",
-    gap: 6,
-  },
-  iconWrap: { marginBottom: 4 },
-  chosen: {
-    fontSize: 14,
-    fontWeight: "900",
-    color: Colors.text,
-    textAlign: "center",
-  },
-  effect: {
-    fontSize: 12,
-    color: Colors.muted,
-    textAlign: "center",
-    fontWeight: "600",
-  },
-  cashLine: { fontSize: 18, fontWeight: "900" },
-  linger: { fontSize: 11, color: Colors.dim, textAlign: "center" },
-  progressTrack: {
-    marginTop: 10,
-    height: 2,
-    width: "100%",
-    backgroundColor: "rgba(255,255,255,.08)",
-    borderRadius: 1,
-    overflow: "hidden",
-  },
-  progressFill: {
-    height: "100%",
-    backgroundColor: Colors.green,
-    borderRadius: 1,
-  },
-});
-
-// ─────────────────────────────────────────────────────────────────
-// ACTIVE CONSEQUENCE BADGE
-// FIX 4 — surfaces a lingering multiplier from a previous choice
-// so the player knows effects are stacking before they decide again
-// ─────────────────────────────────────────────────────────────────
-
-function ActiveConsequenceBadge({
-  consequence,
-  currentDay,
-}: {
-  consequence: ResolvedChoice;
-  currentDay: number;
-}) {
-  if (
-    !consequence.revenueMultiplier ||
-    !consequence.revenueMultiplierEndsDay ||
-    currentDay >= consequence.revenueMultiplierEndsDay
-  ) {
-    return null;
-  }
-
-  const daysLeft = consequence.revenueMultiplierEndsDay - currentDay;
-  const pct = Math.round((consequence.revenueMultiplier - 1) * 100);
-  const sign = pct >= 0 ? "+" : "";
-  const color = pct >= 0 ? Colors.green : Colors.red;
-
-  return (
-    <View
-      style={[
-        acb.wrap,
-        { borderColor: color + "33", backgroundColor: color + "0d" },
-      ]}
-    >
-      <Ionicons name="timer-outline" size={11} color={color} />
-      <Text style={[acb.txt, { color }]}>
-        Previous choice: {sign}
-        {pct}% revenue · {daysLeft} day{daysLeft !== 1 ? "s" : ""} left
-      </Text>
-    </View>
-  );
+function effectsFor(option: ChoiceOption) {
+  return option.effectSummary
+    .split("|")
+    .map((effect) => effect.trim())
+    .filter(Boolean);
 }
 
-const acb = StyleSheet.create({
-  wrap: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    paddingHorizontal: 9,
-    paddingVertical: 5,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-  },
-  txt: { fontSize: 10, fontWeight: "700", flex: 1 },
-});
+function effectColor(effect: string) {
+  if (/\+/.test(effect)) return Colors.green;
+  if (/-/.test(effect)) return Colors.red;
+  return Colors.muted;
+}
 
-// ─────────────────────────────────────────────────────────────────
-// OPTION BUTTON
-// ─────────────────────────────────────────────────────────────────
-
-function OptionButton({
-  option,
-  onPress,
-  disabled,
-  airlineColor,
-}: {
-  option: ChoiceOption;
-  onPress: () => void;
-  disabled: boolean;
-  airlineColor: string;
-}) {
+function EffectList({ option }: { option: ChoiceOption }) {
   return (
-    <TouchableOpacity
-      style={[ob.btn, disabled && { opacity: 0.5 }]}
-      onPress={onPress}
-      disabled={disabled}
-      activeOpacity={0.84}
-    >
-      <View style={ob.top}>
-        <Text style={ob.label}>{option.label}</Text>
-        <View
-          style={[
-            ob.effectChip,
-            {
-              backgroundColor: airlineColor + "18",
-              borderColor: airlineColor + "44",
-            },
-          ]}
-        >
-          <Text
-            style={[ob.effectTxt, { color: airlineColor }]}
-            numberOfLines={1}
-          >
-            {option.effectSummary}
+    <View style={styles.effectList}>
+      {effectsFor(option).map((effect) => (
+        <View key={effect} style={styles.effectRow}>
+          <View
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+            style={[
+              styles.effectRule,
+              { backgroundColor: effectColor(effect) },
+            ]}
+          />
+          <Text style={[styles.effectText, { color: effectColor(effect) }]}>
+            {effect}
           </Text>
         </View>
-      </View>
-      <Text style={ob.desc}>{option.desc}</Text>
-    </TouchableOpacity>
+      ))}
+    </View>
   );
 }
 
-const ob = StyleSheet.create({
-  btn: {
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: "rgba(255,255,255,.035)",
-    padding: Spacing.md,
-    gap: 6,
-  },
-  top: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    gap: 8,
-  },
-  label: { fontSize: 14, fontWeight: "900", color: Colors.text, flex: 1 },
-  effectChip: {
-    borderWidth: 1,
-    borderRadius: Radius.full,
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    flexShrink: 0,
-    maxWidth: 140,
-  },
-  effectTxt: { fontSize: 8, fontWeight: "800", letterSpacing: 0.3 },
-  desc: {
-    fontSize: 12,
-    color: Colors.muted,
-    lineHeight: 17,
-    fontWeight: "600",
-  },
-});
+function OptionRow({
+  option,
+  index,
+  cash,
+  disabled,
+  onPress,
+}: {
+  option: ChoiceOption;
+  index: number;
+  cash: number;
+  disabled: boolean;
+  onPress: () => void;
+}) {
+  const optionLetter = String.fromCharCode(65 + index);
+  const projectedCash = cash + (option.consequence.cashDelta ?? 0);
+  const willOverdraw = projectedCash < 0;
 
-// ─────────────────────────────────────────────────────────────────
-// MAIN MODAL
-// ─────────────────────────────────────────────────────────────────
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`Option ${optionLetter}: ${option.label}`}
+      accessibilityHint={`${option.desc} Expected effect: ${option.effectSummary}`}
+      accessibilityState={{ disabled, busy: disabled }}
+      disabled={disabled}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.option,
+        pressed && styles.optionPressed,
+        disabled && styles.disabled,
+      ]}
+    >
+      <View style={styles.optionHeader}>
+        <Text style={styles.optionLetter}>{optionLetter}</Text>
+        <Text style={styles.optionTitle}>{option.label}</Text>
+        <View style={styles.chooseAction}>
+          <Text style={styles.chooseLabel}>Choose</Text>
+          <Ionicons
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+            name="arrow-forward"
+            size={16}
+            color={Colors.skyDark}
+          />
+        </View>
+      </View>
+
+      <Text style={styles.optionDescription}>{option.desc}</Text>
+      <EffectList option={option} />
+
+      {willOverdraw ? (
+        <View style={styles.overdrawWarning}>
+          <Ionicons name="warning-outline" size={16} color={Colors.red} />
+          <Text style={styles.overdrawText}>
+            This choice would leave cash below $0.
+          </Text>
+        </View>
+      ) : null}
+    </Pressable>
+  );
+}
+
+function DecisionResult({
+  decision,
+  cash,
+  onContinue,
+}: {
+  decision: ResolvedDecision;
+  cash: number;
+  onContinue: () => void;
+}) {
+  const endDay = decision.result.revenueMultiplierEndsDay;
+
+  return (
+    <View style={styles.result} accessibilityLiveRegion="polite">
+      <View style={styles.resultStatus}>
+        <Ionicons
+          name="checkmark-circle"
+          size={20}
+          color={Colors.green}
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+        />
+        <Text style={styles.resultStatusText}>Decision applied</Text>
+      </View>
+
+      <Text style={styles.resultTitle}>{decision.option.label}</Text>
+      <Text style={styles.resultDescription}>{decision.option.desc}</Text>
+
+      <View style={styles.appliedSection}>
+        <Text style={styles.appliedLabel}>Applied effects</Text>
+        <EffectList option={decision.option} />
+      </View>
+
+      <View style={styles.resultData}>
+        <View style={styles.resultDataRow}>
+          <Text style={styles.resultDataLabel}>Cash after decision</Text>
+          <Text
+            style={[
+              styles.resultDataValue,
+              cash < 0 && styles.resultDataValueNegative,
+            ]}
+          >
+            {fmtCash(cash)}
+          </Text>
+        </View>
+        {endDay !== undefined ? (
+          <View style={styles.resultDataRow}>
+            <Text style={styles.resultDataLabel}>Temporary effect ends</Text>
+            <Text style={styles.resultDataValue}>Day {endDay}</Text>
+          </View>
+        ) : null}
+      </View>
+
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Resume simulation"
+        onPress={onContinue}
+        style={({ pressed }) => [
+          styles.continueButton,
+          pressed && styles.continueButtonPressed,
+        ]}
+      >
+        <Text style={styles.continueButtonText}>Resume simulation</Text>
+        <Ionicons name="play" size={18} color={Colors.textOnColor} />
+      </Pressable>
+    </View>
+  );
+}
 
 export default function ChoiceEventModal() {
-  const pendingChoiceEvent = useGameStore((s) => s.pendingChoiceEvent);
-  const activeChoiceConsequence = useGameStore(
-    (s) => s.activeChoiceConsequence,
-  );
-  const airline = useGameStore((s) => s.airline);
-  const airlineColor = airline?.color ?? Colors.sky;
+  const insets = useSafeAreaInsets();
+  const pendingEvent = useGameStore((state) => state.pendingChoiceEvent);
+  const airline = useAirline();
+  const cash = useCash();
+  const { confirm, success, error: errorHaptic } = useHaptics();
+  const [resolved, setResolved] = useState<ResolvedDecision | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const defaultPalette = getAirlinePalette("aviation-blue");
+  const airlineName = airline?.name ?? "Your airline";
+  const airlineCode = airline?.airline_code ?? "AIR";
+  const airlineLogoId = airline?.logo_id ?? DEFAULT_AIRLINE_LOGO_ID;
+  const airlinePrimaryColor = airline?.color ?? defaultPalette.primary;
+  const airlineSecondaryColor =
+    airline?.secondary_color ?? defaultPalette.secondary;
   const day = airline?.day ?? 1;
 
-  const [resolved, setResolved] = useState<{
-    option: ChoiceOption;
-    result: ResolvedChoice;
-  } | null>(null);
-
-  const scale = useRef(new Animated.Value(0.92)).current;
-  const opacity = useRef(new Animated.Value(0)).current;
-
   useEffect(() => {
-    if (pendingChoiceEvent) {
-      setResolved(null);
-      scale.setValue(0.92);
-      opacity.setValue(0);
-      Animated.parallel([
-        Animated.spring(scale, {
-          toValue: 1,
-          useNativeDriver: true,
-          tension: 70,
-          friction: 9,
-        }),
-        Animated.timing(opacity, {
-          toValue: 1,
-          duration: 200,
-          useNativeDriver: true,
-        }),
-      ]).start();
-    }
-  }, [pendingChoiceEvent?.id]);
+    if (!pendingEvent) return;
+    if (resolved?.event.id === pendingEvent.id) return;
+    setResolved(null);
+    setSubmitting(false);
+    setError(null);
+  }, [pendingEvent, resolved?.event.id]);
 
-  const handleChoose = (optionId: "a" | "b") => {
-    if (!pendingChoiceEvent) return;
-    const result = resolveChoiceEvent(pendingChoiceEvent, optionId);
-    const option = pendingChoiceEvent.options.find((o) => o.id === optionId)!;
-    setResolved({ option, result });
+  const event = pendingEvent ?? resolved?.event ?? null;
+  if (!event) return null;
+
+  const handleChoose = (option: ChoiceOption) => {
+    if (!pendingEvent || submitting || resolved) return;
+
+    confirm();
+    setSubmitting(true);
+    setError(null);
+
+    try {
+      const result = resolveChoiceEvent(pendingEvent, option.id);
+      setResolved({ event: pendingEvent, option, result });
+      success();
+    } catch (choiceError) {
+      console.warn("[choice-event] failed to apply decision", choiceError);
+      setError("Unable to apply this decision. Try again.");
+      setSubmitting(false);
+      errorHaptic();
+    }
   };
 
-  const handleDismiss = () => setResolved(null);
-
-  if (!pendingChoiceEvent) return null;
-
-  const catCfg =
-    CATEGORY_CONFIG[pendingChoiceEvent.category] ?? CATEGORY_CONFIG.operations;
+  const handleContinue = () => {
+    confirm();
+    useGameStore.getState().resumeAfterChoice();
+    setResolved(null);
+    setSubmitting(false);
+    setError(null);
+  };
 
   return (
     <Modal
-      visible={!!pendingChoiceEvent}
+      visible
       transparent
       animationType="none"
       statusBarTranslucent
+      onRequestClose={() => undefined}
     >
-      <View style={s.overlay}>
-        <Animated.View style={[s.card, { transform: [{ scale }], opacity }]}>
-          {/* Day indicator */}
-          <Text style={s.dayLabel}>DAY {day}</Text>
-
-          {/* FIX 3 — ScrollView wraps all card content so it doesn't
-              overflow on small phones. bounces={false} keeps it feeling
-              like a card rather than a list. */}
+      <View style={styles.scrim} accessibilityViewIsModal>
+        <View
+          style={[
+            styles.sheet,
+            { paddingBottom: Math.max(insets.bottom, Spacing.md) },
+          ]}
+        >
           <ScrollView
             bounces={false}
             showsVerticalScrollIndicator={false}
-            contentContainerStyle={s.scrollContent}
+            contentContainerStyle={styles.content}
           >
-            {/* Category tag */}
-            <View
-              style={[
-                s.categoryTag,
-                {
-                  backgroundColor: catCfg.color + "18",
-                  borderColor: catCfg.color + "44",
-                },
-              ]}
-            >
-              <Ionicons
-                name={pendingChoiceEvent.icon as any}
-                size={12}
-                color={catCfg.color}
+            <View style={styles.airlineHeader}>
+              <AirlineBrandMark
+                accessibilityLabel={`${airlineName} emblem`}
+                logoId={airlineLogoId}
+                primary={airlinePrimaryColor}
+                secondary={airlineSecondaryColor}
+                size={40}
+                variant="emblem"
               />
-              <Text style={[s.categoryTxt, { color: catCfg.color }]}>
-                {catCfg.label.toUpperCase()}
-              </Text>
+              <View style={styles.airlineCopy}>
+                <Text numberOfLines={1} style={styles.airlineName}>
+                  {airlineName}
+                </Text>
+                <Text style={styles.airlineContext}>
+                  {airlineCode} · Day {day}
+                </Text>
+              </View>
+              <View style={styles.pausedState}>
+                <Ionicons name="pause" size={13} color={Colors.red} />
+                <Text style={styles.pausedText}>Paused</Text>
+              </View>
             </View>
 
-            {/* Title */}
-            <Text style={s.title}>{pendingChoiceEvent.title}</Text>
+            <View style={styles.eventMeta}>
+              <Ionicons
+                name={event.icon as keyof typeof Ionicons.glyphMap}
+                size={18}
+                color={Colors.skyDark}
+                accessibilityElementsHidden
+                importantForAccessibility="no-hide-descendants"
+              />
+              <Text style={styles.categoryText}>
+                {CATEGORY_LABEL[event.category]}
+              </Text>
+              <Text style={styles.cashPosition}>{fmtCash(cash)} cash</Text>
+            </View>
 
-            {/* Situation */}
-            <Text style={s.situation}>{pendingChoiceEvent.situation}</Text>
+            <Text accessibilityRole="header" style={styles.title}>
+              {event.title}
+            </Text>
+            <Text style={styles.situation}>{event.situation}</Text>
 
-            {/* Divider */}
-            <View style={s.divider} />
+            <View style={styles.sectionDivider} />
 
-            {/* Result card OR option buttons */}
             {resolved ? (
-              <ResultCard
-                option={resolved.option}
-                resolved={resolved.result}
-                onDone={handleDismiss}
+              <DecisionResult
+                cash={cash}
+                decision={resolved}
+                onContinue={handleContinue}
               />
             ) : (
-              <View style={s.options}>
-                <Text style={s.optionsLabel}>YOUR DECISION</Text>
+              <View>
+                <View style={styles.decisionHeader}>
+                  <Text style={styles.sectionLabel}>Decision required</Text>
+                  <Text style={styles.decisionCount}>
+                    {event.options.length} responses
+                  </Text>
+                </View>
+                <Text style={styles.pauseNote}>
+                  Compare the operational effects. The simulation remains paused
+                  until you choose.
+                </Text>
 
-                {/* FIX 4 — Show active lingering consequence before options
-                    so player knows effects stack before they decide again */}
-                {activeChoiceConsequence && (
-                  <ActiveConsequenceBadge
-                    consequence={activeChoiceConsequence}
-                    currentDay={day}
-                  />
-                )}
+                <View style={styles.options}>
+                  {event.options.map((option, index) => (
+                    <OptionRow
+                      cash={cash}
+                      disabled={submitting}
+                      index={index}
+                      key={option.id}
+                      onPress={() => handleChoose(option)}
+                      option={option}
+                    />
+                  ))}
+                </View>
 
-                {pendingChoiceEvent.options.map((option) => (
-                  <OptionButton
-                    key={option.id}
-                    option={option}
-                    onPress={() => handleChoose(option.id)}
-                    disabled={false}
-                    airlineColor={airlineColor}
-                  />
-                ))}
+                {error ? (
+                  <View accessibilityRole="alert" style={styles.errorRow}>
+                    <Ionicons
+                      name="alert-circle-outline"
+                      size={18}
+                      color={Colors.red}
+                    />
+                    <Text style={styles.errorText}>{error}</Text>
+                  </View>
+                ) : null}
               </View>
             )}
           </ScrollView>
-        </Animated.View>
+        </View>
       </View>
     </Modal>
   );
 }
 
-// ─────────────────────────────────────────────────────────────────
-// STYLES
-// ─────────────────────────────────────────────────────────────────
-
-const s = StyleSheet.create({
-  overlay: {
+const styles = StyleSheet.create({
+  scrim: {
     flex: 1,
-    backgroundColor: "rgba(4,9,20,0.88)",
-    justifyContent: "center",
+    justifyContent: "flex-end",
     alignItems: "center",
-    paddingHorizontal: Spacing.lg,
-    // Vertical padding keeps card away from status bar / home indicator
-    paddingVertical: 48,
+    backgroundColor: Colors.overlayLight,
   },
-  card: {
+  sheet: {
     width: "100%",
-    maxWidth: 420,
-    // maxHeight ensures ScrollView kicks in on small phones
-    maxHeight: "90%",
-    backgroundColor: "#0d1526",
-    borderRadius: Radius.xl ?? 20,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    overflow: "hidden", // clips ScrollView to rounded corners
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.6,
-    shadowRadius: 32,
-    elevation: 24,
+    maxWidth: 560,
+    maxHeight: "92%",
+    backgroundColor: Colors.surface,
+    borderTopLeftRadius: Radius.lg,
+    borderTopRightRadius: Radius.lg,
+    overflow: "hidden",
   },
-  dayLabel: {
-    position: "absolute",
-    top: Spacing.md,
-    right: Spacing.md,
-    fontSize: 8,
-    color: Colors.dim,
-    fontWeight: "900",
-    letterSpacing: 2,
-    zIndex: 1,
+  content: {
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.lg,
+    paddingBottom: Spacing.lg,
   },
-  // ScrollView content — mirrors old card padding + gap
-  scrollContent: {
-    padding: Spacing.lg,
-    gap: 10,
-    // Extra top padding so content clears the absolute dayLabel
-    paddingTop: Spacing.lg + 4,
-  },
-  categoryTag: {
+  airlineHeader: {
+    minHeight: 50,
     flexDirection: "row",
     alignItems: "center",
-    gap: 5,
-    alignSelf: "flex-start",
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-    borderRadius: Radius.full,
-    borderWidth: 1,
+    gap: Spacing.md,
+    paddingBottom: Spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSection,
   },
-  categoryTxt: { fontSize: 9, fontWeight: "900", letterSpacing: 1.5 },
-  title: {
-    fontSize: 20,
-    fontWeight: "900",
+  airlineCopy: {
+    flex: 1,
+    gap: Spacing.xxs,
+  },
+  airlineName: {
     color: Colors.text,
-    lineHeight: 25,
-    letterSpacing: -0.3,
+    fontSize: Typography.size.label,
+    fontWeight: Typography.weight.bold,
+    lineHeight: Typography.lineHeight.label,
+  },
+  airlineContext: {
+    color: Colors.muted,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
+  },
+  pausedState: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.xs,
+  },
+  pausedText: {
+    color: Colors.red,
+    fontSize: Typography.size.caption,
+    fontWeight: Typography.weight.semibold,
+    lineHeight: Typography.lineHeight.caption,
+  },
+  eventMeta: {
+    minHeight: 40,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+    marginTop: Spacing.sm,
+  },
+  categoryText: {
+    flex: 1,
+    color: Colors.muted,
+    fontSize: Typography.size.label,
+    fontWeight: Typography.weight.semibold,
+    lineHeight: Typography.lineHeight.label,
+  },
+  cashPosition: {
+    color: Colors.text,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
+  },
+  title: {
+    marginTop: Spacing.sm,
+    color: Colors.text,
+    fontSize: Typography.size.display,
+    fontWeight: Typography.weight.bold,
+    lineHeight: Typography.lineHeight.display,
   },
   situation: {
-    fontSize: 13,
+    marginTop: Spacing.sm,
     color: Colors.muted,
-    lineHeight: 20,
-    fontWeight: "500",
+    fontSize: Typography.size.body,
+    lineHeight: Typography.lineHeight.body,
   },
-  divider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: Colors.border,
-    marginVertical: 2,
+  sectionDivider: {
+    height: 1,
+    marginVertical: Spacing.lg,
+    backgroundColor: Colors.borderSection,
   },
-  optionsLabel: {
-    fontSize: 8,
+  decisionHeader: {
+    minHeight: 28,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: Spacing.md,
+  },
+  sectionLabel: {
+    color: Colors.text,
+    fontSize: Typography.size.body,
+    fontWeight: Typography.weight.bold,
+    lineHeight: Typography.lineHeight.body,
+  },
+  decisionCount: {
     color: Colors.dim,
-    fontWeight: "900",
-    letterSpacing: 2.5,
-    marginBottom: 2,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
   },
-  options: { gap: 8 },
+  pauseNote: {
+    marginTop: Spacing.xs,
+    color: Colors.muted,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.body,
+  },
+  options: {
+    marginTop: Spacing.lg,
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
+  },
+  option: {
+    minHeight: MIN_TOUCH,
+    gap: Spacing.sm,
+    paddingVertical: Spacing.lg,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSection,
+  },
+  optionPressed: {
+    backgroundColor: Colors.skyDim,
+  },
+  disabled: {
+    opacity: 0.55,
+  },
+  optionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
+  optionLetter: {
+    width: 24,
+    color: Colors.skyDark,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.label,
+    fontWeight: Typography.weight.bold,
+    lineHeight: Typography.lineHeight.label,
+  },
+  optionTitle: {
+    flex: 1,
+    color: Colors.text,
+    fontSize: Typography.size.body,
+    fontWeight: Typography.weight.semibold,
+    lineHeight: Typography.lineHeight.body,
+  },
+  chooseAction: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.xs,
+  },
+  chooseLabel: {
+    color: Colors.skyDark,
+    fontSize: Typography.size.label,
+    fontWeight: Typography.weight.semibold,
+    lineHeight: Typography.lineHeight.label,
+  },
+  optionDescription: {
+    marginLeft: 32,
+    color: Colors.muted,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.body,
+  },
+  effectList: {
+    marginLeft: 32,
+    gap: Spacing.xs,
+  },
+  effectRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
+  effectRule: {
+    width: 10,
+    height: 2,
+  },
+  effectText: {
+    flex: 1,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
+  },
+  overdrawWarning: {
+    minHeight: 32,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+    marginLeft: 32,
+  },
+  overdrawText: {
+    flex: 1,
+    color: Colors.red,
+    fontSize: Typography.size.caption,
+    fontWeight: Typography.weight.semibold,
+    lineHeight: Typography.lineHeight.caption,
+  },
+  errorRow: {
+    minHeight: MIN_TOUCH,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+    marginTop: Spacing.md,
+  },
+  errorText: {
+    flex: 1,
+    color: Colors.red,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.body,
+  },
+  result: {
+    paddingBottom: Spacing.sm,
+  },
+  resultStatus: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
+  resultStatusText: {
+    color: Colors.green,
+    fontSize: Typography.size.label,
+    fontWeight: Typography.weight.semibold,
+    lineHeight: Typography.lineHeight.label,
+  },
+  resultTitle: {
+    marginTop: Spacing.md,
+    color: Colors.text,
+    fontSize: Typography.size.title,
+    fontWeight: Typography.weight.bold,
+    lineHeight: Typography.lineHeight.title,
+  },
+  resultDescription: {
+    marginTop: Spacing.xs,
+    color: Colors.muted,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.body,
+  },
+  appliedSection: {
+    gap: Spacing.sm,
+    marginTop: Spacing.lg,
+    paddingVertical: Spacing.md,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: Colors.borderSection,
+  },
+  appliedLabel: {
+    color: Colors.text,
+    fontSize: Typography.size.label,
+    fontWeight: Typography.weight.bold,
+    lineHeight: Typography.lineHeight.label,
+  },
+  resultData: {
+    marginTop: Spacing.md,
+  },
+  resultDataRow: {
+    minHeight: 42,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: Spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  resultDataLabel: {
+    flex: 1,
+    color: Colors.muted,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+  },
+  resultDataValue: {
+    color: Colors.text,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+  },
+  resultDataValueNegative: {
+    color: Colors.red,
+  },
+  continueButton: {
+    minHeight: 50,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: Spacing.sm,
+    marginTop: Spacing.xl,
+    paddingHorizontal: Spacing.lg,
+    backgroundColor: Colors.sky,
+    borderRadius: Radius.md,
+  },
+  continueButtonPressed: {
+    backgroundColor: Colors.skyDark,
+  },
+  continueButtonText: {
+    color: Colors.textOnColor,
+    fontSize: Typography.size.body,
+    fontWeight: Typography.weight.bold,
+    lineHeight: Typography.lineHeight.body,
+  },
 });

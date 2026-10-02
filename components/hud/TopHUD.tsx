@@ -1,29 +1,37 @@
 /**
- * Bright, compact operations header shown above the game map.
+ * Compact airline operations header.
+ *
+ * Persistent controls live in one row. Temporary operational information is
+ * consolidated into a horizontally scrollable dispatch line below it.
  */
 
+import { AirlineBrandMark } from "@/components/airline-identity";
+import { Colors, Spacing, Typography } from "@/constants/theme";
 import {
-  Colors,
-  MIN_TOUCH,
-  Palette,
-  Radius,
-  Shadow,
-  Spacing,
-  Typography,
-} from "@/constants/theme";
+  type DispatchNewsTone,
+  useDispatchNews,
+} from "@/hooks/useDispatchNews";
+import { DEFAULT_AIRLINE_LOGO_ID, getAirlinePalette } from "@/lib/airlineBrand";
 import { fmtCash } from "@/lib/revenue";
+import { getActiveSeason } from "@/lib/seasons";
 import {
+  useActiveChoiceConsequence,
+  useActiveDemandWave,
   useAirline,
   useCash,
+  useDailyEvent,
+  useDailyMissions,
   useDay,
   useDayProgress,
   useGameStore,
   useTodayCash,
 } from "@/store";
-import { Ionicons } from "@expo/vector-icons";
 import { useEffect, useRef, useState } from "react";
 import {
+  AccessibilityInfo,
   Animated,
+  Easing,
+  type LayoutChangeEvent,
   Platform,
   StatusBar,
   StyleSheet,
@@ -34,252 +42,332 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 type GameSpeed = 0 | 1 | 2 | 3;
+type NewsTone = DispatchNewsTone;
 
-const SPEEDS: {
-  value: GameSpeed;
-  label: string;
-  icon: keyof typeof Ionicons.glyphMap;
-}[] = [
-  { value: 0, label: "", icon: "pause" },
-  { value: 1, label: "1x", icon: "play" },
-  { value: 2, label: "2x", icon: "play-forward" },
-  { value: 3, label: "3x", icon: "play-skip-forward" },
+interface NewsItem {
+  id: string;
+  text: string;
+  tone: NewsTone;
+}
+
+const SPEEDS: { value: GameSpeed; label: string; spokenLabel: string }[] = [
+  { value: 0, label: "II", spokenLabel: "Pause simulation" },
+  { value: 1, label: "1x", spokenLabel: "Set speed to 1x" },
+  { value: 2, label: "2x", spokenLabel: "Set speed to 2x" },
+  { value: 3, label: "3x", spokenLabel: "Set speed to 3x" },
 ];
+
+const NEWS_TONE_COLOR: Record<NewsTone, string> = {
+  neutral: Colors.sky,
+  positive: Colors.green,
+  warning: Colors.amber,
+  negative: Colors.red,
+};
 
 export default function TopHUD() {
   const insets = useSafeAreaInsets();
   const airline = useAirline();
   const cash = useCash();
   const day = useDay();
-  const todayReward = useTodayCash();
+  const dispatchNews = useDispatchNews(day);
+  const todayResult = useTodayCash();
   const dayProgress = useDayProgress();
+  const dailyEvent = useDailyEvent();
+  const dailyMissions = useDailyMissions();
+  const activeDemandWave = useActiveDemandWave();
+  const activeChoiceConsequence = useActiveChoiceConsequence();
   const updateAirline = useGameStore((state) => state.updateAirline);
+  const tickerX = useRef(new Animated.Value(0)).current;
+  const [newsWidth, setNewsWidth] = useState(0);
+  const [viewportWidth, setViewportWidth] = useState(0);
+  const [reduceMotion, setReduceMotion] = useState(false);
 
-  const airlineColor = airline?.color ?? Colors.sky;
   const speed = airline?.speed ?? 1;
+  const fallbackPalette = getAirlinePalette("aviation-blue");
+  const airlineLogoId = airline?.logo_id ?? DEFAULT_AIRLINE_LOGO_ID;
+  const airlinePrimary = airline?.color ?? fallbackPalette.primary;
+  const airlineSecondary =
+    airline?.secondary_color ?? fallbackPalette.secondary;
   const lowCash = cash < 200_000;
   const topInset =
     Platform.OS === "android"
       ? (StatusBar.currentHeight ?? insets.top ?? 24)
       : insets.top;
 
-  const timeTicker = useRef(new Animated.Value(0)).current;
-  const previousMinutes = useRef(0);
-  const [displayedMinutes, setDisplayedMinutes] = useState(0);
-
-  const rewardTicker = useRef(new Animated.Value(0)).current;
-  const previousReward = useRef(0);
-  const [displayedReward, setDisplayedReward] = useState(0);
-  const rewardFlash = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    const listener = timeTicker.addListener(({ value }) => {
-      setDisplayedMinutes(Math.floor(value));
-    });
-
-    return () => timeTicker.removeListener(listener);
-  }, [timeTicker]);
-
-  const targetMinutes = Math.floor(dayProgress * 24 * 60);
-
-  useEffect(() => {
-    if (targetMinutes === 0) {
-      previousMinutes.current = 0;
-      timeTicker.setValue(0);
-      setDisplayedMinutes(0);
-      return;
-    }
-
-    if (targetMinutes !== previousMinutes.current) {
-      timeTicker.setValue(previousMinutes.current);
-      Animated.timing(timeTicker, {
-        toValue: targetMinutes,
-        duration: 800,
-        useNativeDriver: false,
-      }).start();
-      previousMinutes.current = targetMinutes;
-    }
-  }, [targetMinutes, timeTicker]);
-
-  useEffect(() => {
-    const listener = rewardTicker.addListener(({ value }) => {
-      setDisplayedReward(Math.round(value));
-    });
-
-    return () => rewardTicker.removeListener(listener);
-  }, [rewardTicker]);
-
-  useEffect(() => {
-    if (todayReward === 0) {
-      previousReward.current = 0;
-      rewardTicker.setValue(0);
-      setDisplayedReward(0);
-      return;
-    }
-
-    if (todayReward !== previousReward.current) {
-      const from = previousReward.current;
-      previousReward.current = todayReward;
-      rewardTicker.setValue(from);
-
-      Animated.parallel([
-        Animated.sequence([
-          Animated.timing(rewardFlash, {
-            toValue: 1,
-            duration: 100,
-            useNativeDriver: true,
-          }),
-          Animated.timing(rewardFlash, {
-            toValue: 0,
-            duration: 300,
-            useNativeDriver: true,
-          }),
-        ]),
-        Animated.timing(rewardTicker, {
-          toValue: todayReward,
-          duration: 400,
-          useNativeDriver: false,
-        }),
-      ]).start();
-    }
-  }, [rewardFlash, rewardTicker, todayReward]);
-
-  const hour = Math.floor(displayedMinutes / 60) % 24;
-  const minute = displayedMinutes % 60;
+  const minutes = Math.floor(dayProgress * 24 * 60);
+  const hour = Math.floor(minutes / 60) % 24;
+  const minute = minutes % 60;
   const gameTime = `${String(hour).padStart(2, "0")}:${String(minute).padStart(
     2,
     "0",
   )}`;
+  const progress = Math.max(0, Math.min(100, Math.round(dayProgress * 100)));
 
-  const rewardScale = rewardFlash.interpolate({
-    inputRange: [0, 0.5, 1],
-    outputRange: [1, 1.08, 1],
+  const newsItems: NewsItem[] = [];
+
+  dispatchNews.forEach((item) => {
+    newsItems.push({
+      id: item.id,
+      text: item.text,
+      tone: item.tone,
+    });
   });
 
-  const rewardColor =
-    todayReward > 0
-      ? Colors.green
-      : todayReward < 0
-        ? Colors.red
-        : Colors.muted;
+  if (activeDemandWave) {
+    const routeCount = activeDemandWave.updates.length;
+    newsItems.push({
+      id: `wave-${activeDemandWave.wave.id}`,
+      text: `${activeDemandWave.wave.title}: +${activeDemandWave.totalAddedPax.toLocaleString()} passengers across ${routeCount} route ${routeCount === 1 ? "opportunity" : "opportunities"}`,
+      tone: "warning",
+    });
+  }
 
-  const rewardText =
-    todayReward > 0
-      ? `+${fmtCash(displayedReward || todayReward)}`
-      : todayReward < 0
-        ? fmtCash(displayedReward || todayReward)
+  const eventDuplicatesWave =
+    dailyEvent &&
+    activeDemandWave &&
+    (dailyEvent.id === activeDemandWave.wave.id ||
+      dailyEvent.title === activeDemandWave.wave.title);
+
+  if (dailyEvent && !eventDuplicatesWave) {
+    newsItems.push({
+      id: dailyEvent.id,
+      text: `${dailyEvent.title}: ${dailyEvent.effect}`,
+      tone:
+        dailyEvent.type === "positive"
+          ? "positive"
+          : dailyEvent.type === "negative"
+            ? "negative"
+            : "neutral",
+    });
+  }
+
+  const seasonalEffect = getActiveSeason(day).effects[0];
+  if (seasonalEffect && Math.abs(seasonalEffect.multiplier - 1) >= 0.05) {
+    const seasonalPercent = Math.round(
+      Math.abs(seasonalEffect.multiplier - 1) * 100,
+    );
+    const seasonalDirection =
+      seasonalEffect.multiplier > 1
+        ? `up ${seasonalPercent}%`
+        : `down ${seasonalPercent}%`;
+
+    newsItems.push({
+      id: `season-${day}-${seasonalEffect.region}`,
+      text: `${seasonalEffect.label}: ${seasonalEffect.region.replace(/_/g, " ")} demand ${seasonalDirection}`,
+      tone: seasonalEffect.multiplier > 1 ? "positive" : "warning",
+    });
+  }
+
+  const choiceEndsDay = activeChoiceConsequence?.revenueMultiplierEndsDay;
+  const choiceMultiplier = activeChoiceConsequence?.revenueMultiplier;
+  if (
+    activeChoiceConsequence &&
+    choiceEndsDay !== undefined &&
+    choiceMultiplier !== undefined &&
+    day < choiceEndsDay
+  ) {
+    const choicePercent = Math.round((choiceMultiplier - 1) * 100);
+    const choiceSign = choicePercent > 0 ? "+" : "";
+    const daysRemaining = choiceEndsDay - day;
+
+    newsItems.push({
+      id: `choice-${activeChoiceConsequence.eventId}`,
+      text: `Decision effect: ${choiceSign}${choicePercent}% revenue for ${daysRemaining} more day${daysRemaining === 1 ? "" : "s"}`,
+      tone: choicePercent >= 0 ? "positive" : "negative",
+    });
+  }
+
+  if (dailyMissions.length > 0) {
+    const completedMissions = dailyMissions.filter(
+      (mission) => mission.completed,
+    ).length;
+    const allMissionsComplete = completedMissions === dailyMissions.length;
+
+    newsItems.push({
+      id: "daily-missions",
+      text: allMissionsComplete
+        ? "Daily missions complete"
+        : `Daily missions: ${completedMissions}/${dailyMissions.length} complete`,
+      tone: allMissionsComplete ? "positive" : "neutral",
+    });
+  }
+
+  const resultText =
+    todayResult > 0
+      ? `+${fmtCash(todayResult)}`
+      : todayResult < 0
+        ? fmtCash(todayResult)
         : "$0";
+  newsItems.push({
+    id: "today-result",
+    text: `Today: ${resultText}`,
+    tone:
+      todayResult > 0 ? "positive" : todayResult < 0 ? "negative" : "neutral",
+  });
+
+  const newsSignature = newsItems
+    .map((item) => `${item.id}:${item.text}`)
+    .join("|");
+  const tickerGap = Spacing.xxl;
+  const shouldScroll =
+    !reduceMotion && newsWidth > viewportWidth && viewportWidth > 0;
+
+  useEffect(() => {
+    AccessibilityInfo.isReduceMotionEnabled().then(setReduceMotion);
+    const subscription = AccessibilityInfo.addEventListener(
+      "reduceMotionChanged",
+      setReduceMotion,
+    );
+
+    return () => subscription.remove();
+  }, []);
+
+  useEffect(() => {
+    tickerX.stopAnimation();
+    tickerX.setValue(0);
+
+    if (!shouldScroll) return;
+
+    const travelDistance = newsWidth + tickerGap;
+    const duration = Math.max(9000, Math.round((travelDistance / 28) * 1000));
+    const animation = Animated.loop(
+      Animated.timing(tickerX, {
+        toValue: -travelDistance,
+        duration,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      }),
+    );
+
+    animation.start();
+    return () => animation.stop();
+  }, [newsSignature, newsWidth, shouldScroll, tickerGap, tickerX]);
+
+  const handleViewportLayout = (event: LayoutChangeEvent) => {
+    setViewportWidth(Math.round(event.nativeEvent.layout.width));
+  };
+
+  const renderNewsTrack = (copy: "primary" | "duplicate") => (
+    <View
+      key={copy}
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      onLayout={
+        copy === "primary"
+          ? (event) => setNewsWidth(Math.round(event.nativeEvent.layout.width))
+          : undefined
+      }
+      style={styles.newsTrack}
+    >
+      {newsItems.map((item, index) => (
+        <View key={`${copy}-${item.id}`} style={styles.newsItem}>
+          {index > 0 ? <View style={styles.newsSeparator} /> : null}
+          <View
+            style={[
+              styles.newsMarker,
+              { backgroundColor: NEWS_TONE_COLOR[item.tone] },
+            ]}
+          />
+          <Text style={styles.newsText} numberOfLines={1}>
+            {item.text}
+          </Text>
+        </View>
+      ))}
+    </View>
+  );
 
   return (
     <View style={[styles.container, { paddingTop: topInset + Spacing.xs }]}>
-      <View style={styles.commandRow}>
+      <View style={styles.operationsRow}>
         <View
-          accessibilityElementsHidden
-          style={[
-            styles.airlineMarker,
-            { backgroundColor: airlineColor },
-          ]}
-        />
-
-        <View style={styles.identity}>
-          <Text style={styles.eyebrow}>AIRLINE OPERATIONS</Text>
-          <Text style={styles.airline} numberOfLines={1}>
-            {airline?.name ?? "FlightCraft"}
-          </Text>
-          <Text
-            style={[styles.cash, lowCash && styles.cashWarning]}
-            numberOfLines={1}
-          >
-            {fmtCash(cash)}
-          </Text>
+          accessibilityLabel={`${airline?.name ?? "FlightCraft"}, ${airline?.airline_code ?? "airline"}. Available cash ${fmtCash(cash)}`}
+          style={styles.identity}
+        >
+          <AirlineBrandMark
+            accessibilityLabel=""
+            logoId={airlineLogoId}
+            primary={airlinePrimary}
+            secondary={airlineSecondary}
+            size={28}
+            variant="emblem"
+          />
+          <View style={styles.identityCopy}>
+            <Text style={styles.airline} numberOfLines={1}>
+              {airline?.name ?? "FlightCraft"}
+            </Text>
+            <Text
+              style={[styles.cash, lowCash && styles.cashWarning]}
+              numberOfLines={1}
+            >
+              {fmtCash(cash)}
+            </Text>
+          </View>
         </View>
 
-        <View style={styles.simulationPanel}>
-          <Text style={styles.simulationLabel}>SIM SPEED</Text>
-          <View style={styles.speedGroup}>
-            {SPEEDS.map(({ value, label, icon }) => {
-              const active = speed === value;
-              const accessibilityLabel =
-                value === 0 ? "Pause simulation" : `Set speed to ${label}`;
+        <View style={styles.rowDivider} />
 
-              return (
-                <TouchableOpacity
-                  key={value}
-                  accessibilityLabel={accessibilityLabel}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: active }}
-                  style={[styles.speedButton, active && styles.speedButtonActive]}
-                  onPress={() => updateAirline({ speed: value })}
-                  activeOpacity={0.72}
+        <View style={styles.clock}>
+          <Text style={styles.dayLabel}>Day {day}</Text>
+          <Text style={styles.clockValue}>{gameTime}</Text>
+        </View>
+
+        <View style={styles.rowDivider} />
+
+        <View
+          accessibilityLabel={`Simulation speed ${speed === 0 ? "paused" : `${speed}x`}`}
+          style={styles.speedGroup}
+        >
+          {SPEEDS.map(({ value, label, spokenLabel }) => {
+            const active = speed === value;
+
+            return (
+              <TouchableOpacity
+                key={value}
+                accessibilityLabel={spokenLabel}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
+                activeOpacity={0.65}
+                onPress={() => updateAirline({ speed: value })}
+                style={[styles.speedButton, active && styles.speedButtonActive]}
+              >
+                <Text
+                  style={[styles.speedLabel, active && styles.speedLabelActive]}
                 >
-                  <Ionicons
-                    name={icon}
-                    size={14}
-                    color={active ? Colors.textOnColor : Colors.muted}
-                  />
-                  {label ? (
-                    <Text
-                      style={[
-                        styles.speedLabel,
-                        active && styles.speedLabelActive,
-                      ]}
-                    >
-                      {label}
-                    </Text>
-                  ) : null}
-                </TouchableOpacity>
-              );
-            })}
-          </View>
+                  {label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
         </View>
       </View>
 
-      <View style={styles.operationsStrip}>
+      <View style={styles.newsRow}>
+        <Text style={styles.newsHeading}>Dispatch</Text>
+        <View style={styles.newsDivider} />
         <View
-          style={[
-            styles.resultMetric,
-            todayReward > 0 && styles.resultPositive,
-            todayReward < 0 && styles.resultNegative,
-          ]}
+          accessible
+          accessibilityLabel={newsItems.map((item) => item.text).join(". ")}
+          accessibilityLiveRegion="polite"
+          onLayout={handleViewportLayout}
+          style={styles.newsViewport}
         >
-          <Text style={styles.metricLabel}>TODAY&apos;S RESULT</Text>
-          <Animated.Text
-            numberOfLines={1}
+          <Animated.View
             style={[
-              styles.metricValue,
-              { color: rewardColor, transform: [{ scale: rewardScale }] },
+              styles.newsTicker,
+              { transform: [{ translateX: tickerX }] },
             ]}
           >
-            {rewardText}
-          </Animated.Text>
-        </View>
-
-        <View style={styles.metricDivider} />
-
-        <View style={styles.dayMetric}>
-          <Text style={styles.metricLabel}>DAY</Text>
-          <Text style={styles.metricValue}>{day}</Text>
-        </View>
-
-        <View style={styles.metricDivider} />
-
-        <View style={styles.clockMetric}>
-          <View style={styles.clockCopy}>
-            <Text style={styles.metricLabel}>GAME TIME</Text>
-            <Text style={styles.clockValue}>{gameTime}</Text>
-          </View>
-          <View style={styles.clockTrack}>
-            <View
-              style={[
-                styles.clockFill,
-                {
-                  width: `${Math.round(dayProgress * 100)}%` as `${number}%`,
-                },
-              ]}
-            />
-          </View>
+            {renderNewsTrack("primary")}
+            {shouldScroll ? <View style={{ width: tickerGap }} /> : null}
+            {shouldScroll ? renderNewsTrack("duplicate") : null}
+          </Animated.View>
         </View>
       </View>
+
+      <View
+        accessibilityElementsHidden
+        style={[styles.dayProgress, { width: `${progress}%` }]}
+      />
     </View>
   );
 }
@@ -291,173 +379,154 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     zIndex: 20,
-    paddingHorizontal: Spacing.lg,
-    paddingBottom: Spacing.md,
     backgroundColor: Colors.surface,
     borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
-    ...Shadow.card,
+    borderBottomColor: Colors.borderSection,
   },
-  commandRow: {
-    minHeight: 56,
+  operationsRow: {
+    height: 52,
     flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.md,
-  },
-  airlineMarker: {
-    width: 4,
-    height: 40,
-    borderRadius: Radius.full,
+    alignItems: "stretch",
+    paddingHorizontal: Spacing.md,
   },
   identity: {
     flex: 1,
     minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+    paddingRight: Spacing.sm,
   },
-  eyebrow: {
-    color: Colors.muted,
-    fontFamily: Typography.mono,
-    fontSize: 8,
-    fontWeight: "700",
-    letterSpacing: 1.25,
-    lineHeight: 11,
+  identityCopy: {
+    flex: 1,
+    minWidth: 0,
+    justifyContent: "center",
   },
   airline: {
     color: Colors.text,
-    fontFamily: Typography.display,
-    fontSize: 20,
-    letterSpacing: 0.5,
-    lineHeight: 22,
-    textTransform: "uppercase",
+    fontSize: 14,
+    fontWeight: Typography.weight.semibold,
+    lineHeight: 18,
   },
   cash: {
-    color: Colors.green,
+    color: Colors.text,
     fontFamily: Typography.mono,
-    fontSize: 12,
-    fontWeight: "700",
-    lineHeight: 16,
+    fontSize: 10,
+    fontWeight: Typography.weight.bold,
+    lineHeight: 14,
+    fontVariant: ["tabular-nums"],
   },
   cashWarning: {
     color: Colors.red,
   },
-  simulationPanel: {
-    alignItems: "flex-end",
-    gap: 3,
-  },
-  simulationLabel: {
-    color: Colors.dim,
-    fontFamily: Typography.mono,
-    fontSize: 7,
-    fontWeight: "700",
-    letterSpacing: 1.1,
-  },
-  speedGroup: {
-    flexDirection: "row",
-    gap: 4,
-  },
-  speedButton: {
-    width: MIN_TOUCH,
-    height: MIN_TOUCH,
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 1,
-    backgroundColor: Colors.panel,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: Radius.md,
-  },
-  speedButtonActive: {
-    backgroundColor: Colors.sky,
-    borderColor: Colors.sky,
-  },
-  speedLabel: {
-    color: Colors.muted,
-    fontFamily: Typography.mono,
-    fontSize: 7,
-    fontWeight: "700",
-    lineHeight: 8,
-  },
-  speedLabelActive: {
-    color: Colors.textOnColor,
-  },
-  operationsStrip: {
-    minHeight: 48,
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: Spacing.sm,
-    overflow: "hidden",
-    backgroundColor: Colors.panel,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: Radius.md,
-  },
-  resultMetric: {
-    flex: 1.35,
-    alignSelf: "stretch",
-    justifyContent: "center",
-    paddingHorizontal: Spacing.md,
-  },
-  resultPositive: {
-    backgroundColor: Palette.greenSoft,
-  },
-  resultNegative: {
-    backgroundColor: Palette.redSoft,
-  },
-  dayMetric: {
-    width: 56,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  metricLabel: {
-    color: Colors.muted,
-    fontFamily: Typography.mono,
-    fontSize: 7,
-    fontWeight: "700",
-    letterSpacing: 0.9,
-    lineHeight: 10,
-  },
-  metricValue: {
-    color: Colors.text,
-    fontFamily: Typography.mono,
-    fontSize: 13,
-    fontWeight: "700",
-    lineHeight: 18,
-    fontVariant: ["tabular-nums"],
-  },
-  metricDivider: {
+  rowDivider: {
     width: 1,
-    height: 28,
+    marginVertical: Spacing.sm,
     backgroundColor: Colors.border,
   },
-  clockMetric: {
-    flex: 1.05,
-    alignSelf: "stretch",
-    justifyContent: "center",
-    paddingHorizontal: Spacing.md,
-    gap: 4,
-  },
-  clockCopy: {
-    flexDirection: "row",
+  clock: {
+    width: 64,
     alignItems: "center",
-    justifyContent: "space-between",
-    gap: Spacing.sm,
+    justifyContent: "center",
+  },
+  dayLabel: {
+    color: Colors.muted,
+    fontSize: 10,
+    lineHeight: 14,
   },
   clockValue: {
     color: Colors.text,
     fontFamily: Typography.mono,
-    fontSize: 12,
-    fontWeight: "700",
+    fontSize: 11,
+    fontWeight: Typography.weight.bold,
+    lineHeight: 15,
     fontVariant: ["tabular-nums"],
   },
-  clockTrack: {
-    width: "100%",
-    height: 3,
-    overflow: "hidden",
-    backgroundColor: Colors.skyDim,
-    borderRadius: Radius.full,
+  speedGroup: {
+    width: 176,
+    flexDirection: "row",
+    alignItems: "stretch",
   },
-  clockFill: {
-    height: "100%",
+  speedButton: {
+    width: 44,
+    minHeight: 44,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  speedButtonActive: {
+    backgroundColor: Colors.skyDim,
+  },
+  speedLabel: {
+    color: Colors.muted,
+    fontFamily: Typography.mono,
+    fontSize: 10,
+    fontWeight: Typography.weight.bold,
+    lineHeight: 14,
+  },
+  speedLabelActive: {
+    color: Colors.skyDark,
+  },
+  newsRow: {
+    height: 30,
+    flexDirection: "row",
+    alignItems: "center",
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+  },
+  newsHeading: {
+    paddingHorizontal: Spacing.md,
+    color: Colors.text,
+    fontSize: 10,
+    fontWeight: Typography.weight.semibold,
+    lineHeight: 14,
+  },
+  newsDivider: {
+    width: 1,
+    height: 16,
+    backgroundColor: Colors.borderSection,
+  },
+  newsViewport: {
+    flex: 1,
+    overflow: "hidden",
+  },
+  newsTicker: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+  },
+  newsTrack: {
+    height: 30,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: Spacing.md,
+  },
+  newsItem: {
+    height: 30,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  newsSeparator: {
+    width: 1,
+    height: 14,
+    marginHorizontal: Spacing.md,
+    backgroundColor: Colors.border,
+  },
+  newsMarker: {
+    width: 5,
+    height: 5,
+    marginRight: Spacing.sm,
+    borderRadius: 3,
+  },
+  newsText: {
+    color: Colors.muted,
+    fontSize: 10,
+    lineHeight: 14,
+  },
+  dayProgress: {
+    position: "absolute",
+    left: 0,
+    bottom: 0,
+    height: 2,
     backgroundColor: Colors.sky,
-    borderRadius: Radius.full,
   },
 });

@@ -1,8 +1,8 @@
 /**
- * app/(game)/index.tsx
+ * Root game screen.
  *
- * Root game screen. Routes between all phases.
- * Single default export always present — Metro requires this.
+ * Loading and setup stay lightweight. Persistent game systems mount only
+ * after an airline exists, while the map owns its own readiness lifecycle.
  */
 
 import AuthScreen from "@/components/auth/AuthScreen";
@@ -12,18 +12,13 @@ import GameMap from "@/components/map/GameMap";
 import SheetManager from "@/components/sheets/SheetManager";
 import BankruptScreen from "@/components/ui/BankruptScreen";
 import ChoiceEventModal from "@/components/ui/ChoiceEventModal";
-import DailyEventCard from "@/components/ui/DailyEventCard";
-import GoalsOverlay from "@/components/ui/GoalsOverlay";
 import LoadingScreen from "@/components/ui/LoadingScreen";
-import MissionsPill from "@/components/ui/MissionsPill";
 import RouteCreationBanner from "@/components/ui/RouteCreationBanner";
-import SeasonPill from "@/components/ui/SeasonPill";
-import SurgeIndicator from "@/components/ui/SurgeIndicator";
 import ToastStack from "@/components/ui/ToastStack";
 import { Colors } from "@/constants/theme";
+import { useAchievementChecker } from "@/hooks/useAchievementChecker";
 import { useAICompetition } from "@/hooks/useAICompetition";
 import { useAITick } from "@/hooks/useAITick";
-import { useAchievementChecker } from "@/hooks/useAchievementChecker";
 import { useDailyEvents } from "@/hooks/useDailyEvents";
 import { useGameClock } from "@/hooks/useGameClock";
 import { useGameLoader } from "@/hooks/useGameLoader";
@@ -36,77 +31,103 @@ import {
   useLoadChoiceEventState,
   useLoadPresence,
 } from "@/hooks/useSupabaseWrite";
-import { useWeeklyChallenge } from "@/hooks/useWeeklyChallenge";
-import { useAirline, useLoadComplete, useLoadSteps, usePhase } from "@/store";
-import { useEffect, useState } from "react";
+import {
+  useGameStore,
+  useLoadComplete,
+  useLoadSteps,
+  usePhase,
+  type GamePhase,
+  type LoadStep,
+} from "@/store";
+import { useCallback, useEffect, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import SetupScreen from "./setup";
 import TutorialScreen from "./tutorial";
-import WelcomeScreen from "./welcome";
 
-function GameContent() {
+const MAP_READY_FALLBACK_MS = 4_000;
+
+/**
+ * Long-lived systems that observe the loaded airline.
+ *
+ * Weekly challenge data is intentionally absent here. Its sheet owns that
+ * request, while weekly counters are updated by the systems that earn them.
+ */
+function GameRuntime() {
+  useLoadPresence();
+  useLoadChoiceEventState();
+  useAutoSaveChoiceEventState();
+
   useGameClock();
   useRevenueTick();
   useMissionChecker();
   useAchievementChecker();
   useDailyEvents();
-  useNotifications();
-  useRateUs();
-  useWeeklyChallenge();
   useAITick();
   useAICompetition();
-  useLoadPresence();
-  useLoadChoiceEventState();
-  useAutoSaveChoiceEventState();
 
-  const loadComplete = useLoadComplete();
-  const loadSteps = useLoadSteps();
-  const phase = usePhase();
-  const airline = useAirline();
+  useNotifications();
+  useRateUs();
+
+  return null;
+}
+
+function GameWorld({
+  phase,
+  loadSteps,
+}: {
+  phase: GamePhase;
+  loadSteps: LoadStep[];
+}) {
   const [mapReady, setMapReady] = useState(false);
+  const handleMapReady = useCallback(() => setMapReady(true), []);
 
   useEffect(() => {
-    if (!loadComplete) return;
-    const t = setTimeout(() => setMapReady(true), 4000);
-    return () => clearTimeout(t);
-  }, [loadComplete]);
+    const fallback = setTimeout(handleMapReady, MAP_READY_FALLBACK_MS);
+    return () => clearTimeout(fallback);
+  }, [handleMapReady]);
 
-  if (phase === "auth") return <AuthScreen />;
-
-  if (!loadComplete) return <LoadingScreen steps={loadSteps} />;
-
-  if (phase === "setup" || !airline) return <SetupScreen />;
-
-  if (phase === "welcome") return <WelcomeScreen />;
+  const showRouteCreation = phase === "playing" || phase === "tutorial";
 
   return (
-    <View style={s.root}>
-      <GameMap
-        airlineColor={airline.color}
-        onMapReady={() => setMapReady(true)}
-      />
-      {mapReady && (
+    <View style={styles.root}>
+      <GameMap onMapReady={handleMapReady} />
+
+      {mapReady ? (
         <>
           <TopHUD />
           <TabBar />
         </>
+      ) : (
+        <LoadingScreen steps={loadSteps} overlay />
       )}
-      {!mapReady && <LoadingScreen steps={loadSteps} overlay />}
+
       <SheetManager />
-      {phase === "playing" && <MissionsPill />}
-      {phase === "playing" && <GoalsOverlay />}
-      {phase === "playing" && <DailyEventCard />}
-      {phase === "playing" && <SurgeIndicator />}
-      {phase === "playing" && <SeasonPill />}
       {phase === "playing" && <ToastStack />}
-      {(phase === "playing" || phase === "tutorial") && <RouteCreationBanner />}
+      {showRouteCreation && <RouteCreationBanner />}
       {phase === "tutorial" && mapReady && <TutorialScreen />}
       {phase === "bankrupt" && <BankruptScreen />}
       <ChoiceEventModal />
-      {/* <AwayEarningsModal /> */}
     </View>
+  );
+}
+
+function GameContent() {
+  const loadComplete = useLoadComplete();
+  const loadSteps = useLoadSteps();
+  const phase = usePhase();
+  const airlineId = useGameStore((state) => state.airline?.id ?? null);
+
+  if (phase === "auth") return <AuthScreen />;
+  if (!loadComplete) return <LoadingScreen steps={loadSteps} />;
+  if (phase === "setup" || !airlineId) return <SetupScreen />;
+
+  return (
+    <>
+      <GameRuntime />
+      <GameWorld key={airlineId} phase={phase} loadSteps={loadSteps} />
+    </>
   );
 }
 
@@ -114,7 +135,7 @@ export default function GameScreen() {
   useGameLoader();
 
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
+    <GestureHandlerRootView style={styles.root}>
       <SafeAreaProvider>
         <GameContent />
       </SafeAreaProvider>
@@ -122,6 +143,9 @@ export default function GameScreen() {
   );
 }
 
-const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: Colors.bg },
+const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+    backgroundColor: Colors.bg,
+  },
 });

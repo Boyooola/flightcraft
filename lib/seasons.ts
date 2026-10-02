@@ -664,7 +664,7 @@ export function getActiveSeason(gameDay: number): {
 
 /**
  * Get a display label for the current season.
- * Used in TopHUD or DailyEventCard.
+ * Used in the TopHUD dispatch line.
  */
 export function getSeasonLabel(gameDay: number): string | null {
   const { effects } = getActiveSeason(gameDay);

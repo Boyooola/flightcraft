@@ -1,15 +1,15 @@
+import { AirlineBrandMark } from "@/components/airline-identity";
 import {
   Colors,
   MIN_TOUCH,
-  Palette,
   Radius,
-  Shadow,
   Spacing,
   Typography,
 } from "@/constants/theme";
 import { useHaptics } from "@/hooks/useHaptics";
 import { useTabBarHeight } from "@/hooks/useSheetLayout";
 import { useLoanActions } from "@/hooks/useSupabaseWrite";
+import { DEFAULT_AIRLINE_LOGO_ID, getAirlinePalette } from "@/lib/airlineBrand";
 import { dailyInterest, fmtCash } from "@/lib/revenue";
 import {
   useAirline,
@@ -19,11 +19,12 @@ import {
   useLoan,
   useRouteCount,
 } from "@/store";
-import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { Ionicons } from "@expo/vector-icons";
 import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import { useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -35,62 +36,57 @@ interface LoanPackage {
   name: string;
   amount: number;
   rate: number;
-  desc: string;
+  description: string;
   minDay: number;
   minRoutes: number;
-  tag: string;
 }
 
 const LOAN_PACKAGES: LoanPackage[] = [
   {
     id: "starter",
-    name: "Starter Boost",
+    name: "Working capital",
     amount: 500_000,
     rate: 6,
-    desc: "Buy a plane or open your first useful hub.",
+    description: "Cover an early aircraft purchase or route opening cost.",
     minDay: 1,
     minRoutes: 1,
-    tag: "EARLY RUSH",
   },
   {
     id: "regional",
-    name: "Route Boost",
+    name: "Regional expansion",
     amount: 2_000_000,
     rate: 7,
-    desc: "Add capacity and clear more demand slots.",
+    description:
+      "Add aircraft capacity across an established regional network.",
     minDay: 1,
     minRoutes: 2,
-    tag: "MORE FLOW",
   },
   {
     id: "expansion",
-    name: "Expansion Boost",
+    name: "Fleet expansion",
     amount: 5_000_000,
     rate: 8,
-    desc: "Scale hubs and fleet for bigger routes.",
+    description: "Fund additional aircraft and higher-volume routes.",
     minDay: 15,
     minRoutes: 3,
-    tag: "EXPAND",
   },
   {
     id: "growth",
-    name: "Long-Range Boost",
+    name: "Long-haul expansion",
     amount: 15_000_000,
     rate: 9,
-    desc: "Push into larger planes and longer routes.",
+    description: "Finance larger aircraft and longer-range operations.",
     minDay: 30,
     minRoutes: 5,
-    tag: "BIG JUMP",
   },
   {
     id: "enterprise",
-    name: "Empire Boost",
+    name: "Network expansion",
     amount: 50_000_000,
     rate: 10,
-    desc: "For a network ready to dominate the map.",
+    description: "Support a mature airline entering multiple new markets.",
     minDay: 60,
     minRoutes: 10,
-    tag: "GLOBAL",
   },
 ];
 
@@ -100,60 +96,89 @@ const RATE_MULTIPLIER: Record<string, number> = {
   hard: 1.4,
 };
 
-function RepayPresets({
+function SummaryRow({
+  label,
+  value,
+  valueColor = Colors.text,
+  strong = false,
+  last = false,
+}: {
+  label: string;
+  value: string;
+  valueColor?: string;
+  strong?: boolean;
+  last?: boolean;
+}) {
+  return (
+    <View style={[styles.summaryRow, last && styles.lastRow]}>
+      <Text style={[styles.summaryLabel, strong && styles.strongText]}>
+        {label}
+      </Text>
+      <Text
+        numberOfLines={1}
+        style={[
+          styles.summaryValue,
+          strong && styles.strongText,
+          { color: valueColor },
+        ]}
+      >
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+function RepaymentOptions({
   loan,
   cash,
-  onRepay,
   loading,
+  onRequest,
 }: {
   loan: number;
   cash: number;
-  onRepay: (amount: number) => void;
   loading: boolean;
+  onRequest: (amount: number) => void;
 }) {
   const presets = [
-    { label: "100K", amount: 100_000 },
-    { label: "500K", amount: 500_000 },
-    { label: "1M", amount: 1_000_000 },
-    { label: "Clear", amount: loan },
-  ].filter((p) => p.amount <= loan);
+    { label: "$100K", amount: 100_000 },
+    { label: "$500K", amount: 500_000 },
+    { label: "$1M", amount: 1_000_000 },
+    { label: "Pay in full", amount: loan },
+  ].filter((preset) => preset.amount <= loan);
 
   return (
-    <View style={rp.row}>
-      {presets.map((p) => {
-        const canAfford = cash >= p.amount;
+    <View style={styles.repaymentButtons}>
+      {presets.map((preset) => {
+        const canAfford = cash >= preset.amount;
 
         return (
           <TouchableOpacity
-            key={p.label}
-            accessibilityLabel={`Repay ${fmtCash(p.amount)}`}
-            accessibilityRole="button"
-            style={[
-              rp.btn,
+            key={`${preset.label}-${preset.amount}`}
+            accessibilityHint={
               canAfford
-                ? {
-                    borderColor: Colors.green,
-                    backgroundColor: Palette.greenSoft,
-                  }
-                : {
-                    borderColor: Colors.border,
-                    opacity: 0.4,
-                  },
-            ]}
-            onPress={() => canAfford && onRepay(p.amount)}
+                ? "Shows the repayment effect before confirming"
+                : "Your airline does not have enough cash"
+            }
+            accessibilityLabel={`Repay ${fmtCash(preset.amount)}`}
+            accessibilityRole="button"
+            activeOpacity={0.7}
             disabled={!canAfford || loading}
-            activeOpacity={0.85}
+            onPress={() => onRequest(preset.amount)}
+            style={[
+              styles.repaymentButton,
+              (!canAfford || loading) && styles.disabledControl,
+            ]}
           >
             {loading ? (
-              <ActivityIndicator size="small" color={Colors.green} />
+              <ActivityIndicator size="small" color={Colors.skyDark} />
             ) : (
               <Text
                 style={[
-                  rp.lbl,
-                  { color: canAfford ? Colors.green : Colors.dim },
+                  styles.repaymentButtonText,
+                  !canAfford && styles.disabledText,
                 ]}
               >
-                {p.label}
+                {preset.label}
               </Text>
             )}
           </TouchableOpacity>
@@ -163,110 +188,119 @@ function RepayPresets({
   );
 }
 
-function LoanCard({
+function LoanOfferRow({
   pkg,
   effectiveRate,
+  currentLoan,
+  availableCredit,
   locked,
   lockReason,
-  availableCredit,
-  onTake,
   taking,
+  onReview,
+  last,
 }: {
   pkg: LoanPackage;
   effectiveRate: number;
+  currentLoan: number;
+  availableCredit: number;
   locked: boolean;
   lockReason: string;
-  availableCredit: number;
-  onTake: (pkg: LoanPackage, rate: number) => void;
   taking: boolean;
+  onReview: (pkg: LoanPackage, rate: number) => void;
+  last: boolean;
 }) {
-  const dailyDrag = dailyInterest(pkg.amount, effectiveRate);
   const fitsCreditLimit = pkg.amount <= availableCredit;
-  const canTake = !locked && fitsCreditLimit;
+  const canBorrow = !locked && fitsCreditLimit;
+  const projectedBalance = currentLoan + pkg.amount;
+  const projectedDailyInterest = dailyInterest(projectedBalance, effectiveRate);
+  const unavailableReason = locked
+    ? lockReason
+    : `Only ${fmtCash(availableCredit)} credit remains`;
 
   return (
-    <View style={[lc.card, locked && lc.locked]}>
-      <View style={lc.top}>
-        <View style={{ flex: 1 }}>
-          <View style={lc.tag}>
-            <Text style={lc.tagText}>{pkg.tag}</Text>
-          </View>
-          <Text style={lc.name}>{pkg.name}</Text>
-          <Text style={lc.desc}>{pkg.desc}</Text>
+    <View style={[styles.offerRow, last && styles.lastRow]}>
+      <View style={styles.offerHeading}>
+        <View style={styles.offerHeadingCopy}>
+          <Text style={styles.offerName}>{pkg.name}</Text>
+          <Text style={styles.offerDescription}>{pkg.description}</Text>
         </View>
+        <Text style={styles.offerAmount}>{fmtCash(pkg.amount)}</Text>
+      </View>
 
-        <View style={lc.amountBox}>
-          <Text
-            style={[lc.amount, { color: canTake ? Colors.green : Colors.dim }]}
-          >
-            {fmtCash(pkg.amount)}
+      <View style={styles.offerFacts}>
+        <View style={styles.offerFact}>
+          <Text style={styles.offerFactLabel}>Annual rate</Text>
+          <Text style={styles.offerFactValue}>{effectiveRate.toFixed(1)}%</Text>
+        </View>
+        <View style={styles.offerFact}>
+          <Text style={styles.offerFactLabel}>New balance</Text>
+          <Text style={styles.offerFactValue}>{fmtCash(projectedBalance)}</Text>
+        </View>
+        <View style={styles.offerFact}>
+          <Text style={styles.offerFactLabel}>Interest per day</Text>
+          <Text style={[styles.offerFactValue, { color: Colors.red }]}>
+            -{fmtCash(projectedDailyInterest)}
           </Text>
-          <Text style={lc.amountSub}>instant cash</Text>
         </View>
       </View>
 
-      <View style={lc.stats}>
-        <View style={lc.stat}>
-          <Text style={lc.statVal}>{effectiveRate.toFixed(1)}%</Text>
-          <Text style={lc.statLbl}>RATE</Text>
+      {!canBorrow ? (
+        <View style={styles.requirementRow}>
+          <Ionicons name="lock-closed-outline" size={16} color={Colors.muted} />
+          <Text style={styles.requirementText}>{unavailableReason}</Text>
         </View>
-        <View style={lc.stat}>
-          <Text style={[lc.statVal, { color: Colors.red }]}>
-            -{fmtCash(dailyDrag)}
-          </Text>
-          <Text style={lc.statLbl}>Daily interest</Text>
-        </View>
-        <View style={lc.stat}>
-          <Text style={lc.statVal}>{pkg.minRoutes}</Text>
-          <Text style={lc.statLbl}>ROUTES</Text>
-        </View>
-      </View>
+      ) : null}
 
-      {locked ? (
-        <View style={lc.lockRow}>
-          <Ionicons name="lock-closed" size={11} color={Colors.dim} />
-          <Text style={lc.lockText}>{lockReason}</Text>
-        </View>
-      ) : (
-        <TouchableOpacity
-          accessibilityLabel={
-            canTake
-              ? `Borrow ${fmtCash(pkg.amount)} at ${effectiveRate.toFixed(1)} percent interest`
-              : locked
-                ? lockReason
-                : "This loan exceeds your available credit"
-          }
-          accessibilityRole="button"
-          style={[
-            lc.btn,
-            {
-              backgroundColor: canTake ? Colors.sky : Colors.dim,
-              borderColor: canTake ? Colors.sky : Colors.border,
-            },
-            (!canTake || taking) && { opacity: 0.55 },
-          ]}
-          onPress={() => canTake && onTake(pkg, effectiveRate)}
-          disabled={!canTake || taking}
-          activeOpacity={0.85}
-        >
-          {taking ? (
-            <ActivityIndicator size="small" color={Colors.textOnColor} />
-          ) : (
-            <>
-              <Ionicons
-                name="flash-outline"
-                size={15}
-                color={Colors.textOnColor}
-              />
-              <Text style={[lc.btnTxt, { color: Colors.textOnColor }]}>
-                {canTake
-                  ? `Borrow ${fmtCash(pkg.amount)}`
-                  : "Credit limit reached"}
-              </Text>
-            </>
-          )}
-        </TouchableOpacity>
-      )}
+      <TouchableOpacity
+        accessibilityHint={
+          canBorrow
+            ? "Shows the new loan balance and daily interest before confirming"
+            : unavailableReason
+        }
+        accessibilityLabel={
+          canBorrow
+            ? `Review ${fmtCash(pkg.amount)} loan at ${effectiveRate.toFixed(1)} percent annual interest`
+            : `${pkg.name} unavailable. ${unavailableReason}`
+        }
+        accessibilityRole="button"
+        activeOpacity={0.7}
+        disabled={!canBorrow || taking}
+        onPress={() => onReview(pkg, effectiveRate)}
+        style={[
+          styles.reviewButton,
+          (!canBorrow || taking) && styles.disabledControl,
+        ]}
+      >
+        {taking ? (
+          <ActivityIndicator size="small" color={Colors.textOnColor} />
+        ) : (
+          <Text style={styles.reviewButtonText}>
+            {canBorrow ? "Review loan" : "Unavailable"}
+          </Text>
+        )}
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+function StatusMessage({
+  type,
+  message,
+}: {
+  type: "error" | "success";
+  message: string;
+}) {
+  const isError = type === "error";
+  const color = isError ? Colors.red : Colors.green;
+
+  return (
+    <View accessibilityLiveRegion="polite" style={styles.statusMessage}>
+      <Ionicons
+        name={isError ? "warning-outline" : "checkmark-circle-outline"}
+        size={18}
+        color={color}
+      />
+      <Text style={[styles.statusText, { color }]}>{message}</Text>
     </View>
   );
 }
@@ -277,9 +311,9 @@ export default function BankSheet() {
   const loan = useLoan();
   const day = useDay();
   const routeCount = useRouteCount();
-  const closeSheet = useGameStore((s) => s.closeSheet);
+  const closeSheet = useGameStore((state) => state.closeSheet);
   const haptics = useHaptics();
-  const tabBarH = useTabBarHeight();
+  const tabBarHeight = useTabBarHeight();
   const { take, repay } = useLoanActions();
 
   const [taking, setTaking] = useState<string | null>(null);
@@ -289,11 +323,17 @@ export default function BankSheet() {
 
   if (!airline) return null;
 
-  const color = airline.color ?? Colors.sky;
+  const defaultPalette = getAirlinePalette("aviation-blue");
+  const airlineName = airline.name ?? "Your airline";
+  const airlineCode = airline.airline_code ?? "AIR";
+  const airlineLogoId = airline.logo_id ?? DEFAULT_AIRLINE_LOGO_ID;
+  const airlinePrimaryColor = airline.color ?? defaultPalette.primary;
+  const airlineSecondaryColor =
+    airline.secondary_color ?? defaultPalette.secondary;
   const difficulty = airline.difficulty ?? "normal";
-  const rateMulti = RATE_MULTIPLIER[difficulty] ?? 1;
-  const currentRate = airline.loan_rate ?? 5;
-  const dailyDrag = loan > 0 ? dailyInterest(loan, currentRate) : 0;
+  const rateMultiplier = RATE_MULTIPLIER[difficulty] ?? 1;
+  const currentRate = airline.loan_rate ?? 0;
+  const dailyInterestCost = loan > 0 ? dailyInterest(loan, currentRate) : 0;
   const availableCredit = Math.max(0, 50_000_000 - loan);
 
   const handleTake = async (pkg: LoanPackage, rate: number) => {
@@ -302,18 +342,37 @@ export default function BankSheet() {
     setError(null);
     setSuccess(null);
 
-    const { error: err } = await take(pkg.amount, rate);
+    const { error: requestError } = await take(pkg.amount, rate);
 
     setTaking(null);
 
-    if (err) {
-      setError(err);
+    if (requestError) {
+      setError(requestError);
       haptics.error();
       return;
     }
 
-    setSuccess(`${fmtCash(pkg.amount)} boost added. Use it to increase flow.`);
+    setSuccess(
+      `${fmtCash(pkg.amount)} borrowed. New loan balance: ${fmtCash(loan + pkg.amount)}.`,
+    );
     haptics.success();
+  };
+
+  const reviewLoan = (pkg: LoanPackage, rate: number) => {
+    const newBalance = loan + pkg.amount;
+    const newDailyInterest = dailyInterest(newBalance, rate);
+
+    Alert.alert(
+      `Borrow ${fmtCash(pkg.amount)}?`,
+      `New cash: ${fmtCash(cash + pkg.amount)}\nNew loan balance: ${fmtCash(newBalance)}\nAnnual rate: ${rate.toFixed(1)}%\nEstimated interest: ${fmtCash(newDailyInterest)} per day\n\nThis rate will apply to the full loan balance.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Borrow",
+          onPress: () => void handleTake(pkg, rate),
+        },
+      ],
+    );
   };
 
   const handleRepay = async (amount: number) => {
@@ -322,514 +381,452 @@ export default function BankSheet() {
     setError(null);
     setSuccess(null);
 
-    const { error: err } = await repay(amount);
+    const { error: requestError } = await repay(amount);
 
     setRepaying(false);
 
-    if (err) {
-      setError(err);
+    if (requestError) {
+      setError(requestError);
       haptics.error();
       return;
     }
 
+    const remainingLoan = Math.max(0, loan - amount);
     setSuccess(
-      loan - amount <= 0
-        ? "Loan fully repaid — no more interest charges."
-        : `${fmtCash(amount)} repaid — interest reduced.`,
+      remainingLoan === 0
+        ? "Loan fully repaid. Daily interest is now $0."
+        : `${fmtCash(amount)} repaid. Remaining balance: ${fmtCash(remainingLoan)}.`,
     );
     haptics.success();
   };
 
+  const reviewRepayment = (amount: number) => {
+    const actualAmount = Math.min(amount, loan);
+    const remainingLoan = Math.max(0, loan - actualAmount);
+    const newDailyInterest = dailyInterest(remainingLoan, currentRate);
+
+    Alert.alert(
+      `Repay ${fmtCash(actualAmount)}?`,
+      `Cash after repayment: ${fmtCash(cash - actualAmount)}\nLoan balance after repayment: ${fmtCash(remainingLoan)}\nEstimated interest: ${fmtCash(newDailyInterest)} per day`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Repay",
+          onPress: () => void handleRepay(actualAmount),
+        },
+      ],
+    );
+  };
+
   return (
     <BottomSheetScrollView
-      style={s.root}
+      style={styles.root}
       contentContainerStyle={[
-        s.content,
-        { paddingBottom: tabBarH + Spacing.xxl },
+        styles.content,
+        { paddingBottom: tabBarHeight + Spacing.xxl },
       ]}
       showsVerticalScrollIndicator={false}
     >
-      <View style={s.header}>
-        <View
-          style={[
-            s.headerMark,
-            { borderColor: color, backgroundColor: color + "14" },
-          ]}
-        >
-          <MaterialCommunityIcons name="bank-outline" size={20} color={color} />
+      <View style={styles.header}>
+        <AirlineBrandMark
+          accessibilityLabel={`${airlineName} identity`}
+          logoId={airlineLogoId}
+          primary={airlinePrimaryColor}
+          secondary={airlineSecondaryColor}
+          size={42}
+          variant="leaderboard"
+        />
+        <View style={styles.headerCopy}>
+          <Text style={styles.title}>Bank</Text>
+          <Text numberOfLines={1} style={styles.subtitle}>
+            {airlineName} · {airlineCode} · Lending and repayment
+          </Text>
         </View>
-        <View style={s.headerCopy}>
-          <Text style={s.kicker}>FINANCIAL SERVICES</Text>
-          <Text style={s.title}>Airline Bank</Text>
-          <Text style={s.subtitle}>Loans, interest, and repayments</Text>
-        </View>
-
         <TouchableOpacity
-          accessibilityLabel="Close airline bank"
+          accessibilityLabel="Close bank"
           accessibilityRole="button"
+          activeOpacity={0.7}
           onPress={closeSheet}
-          style={s.closeButton}
+          style={styles.closeButton}
         >
           <Ionicons name="close" size={22} color={Colors.text} />
         </TouchableOpacity>
       </View>
 
-      <View style={[s.hero, loan > 0 ? s.heroDebt : s.heroClear]}>
-        <View>
-          <Text style={s.heroLabel}>
-            {loan > 0 ? "DAILY INTEREST COST" : "DEBT STATUS"}
-          </Text>
-          <Text
-            style={[
-              s.heroValue,
-              { color: loan > 0 ? Colors.red : Colors.green },
-            ]}
-          >
-            {loan > 0 ? `-${fmtCash(dailyDrag)}` : "Clear"}
-          </Text>
-          <Text style={s.heroSub}>
-            {loan > 0
-              ? `${fmtCash(loan)} loan · ${currentRate}% rate`
-              : "No active loans or interest charges"}
-          </Text>
+      <View style={styles.section}>
+        <View style={styles.sectionHeading}>
+          <Text style={styles.sectionTitle}>Current position</Text>
+          <Text style={styles.sectionDetail}>Credit limit $50M</Text>
         </View>
-
-        <MaterialCommunityIcons
-          name={loan > 0 ? "bank-minus" : "bank-check"}
-          size={38}
-          color={loan > 0 ? Colors.red : Colors.green}
-        />
-      </View>
-
-      <View style={s.statsRow}>
-        <View style={s.stat}>
-          <Text style={[s.statVal, { color: Colors.green }]}>
-            {fmtCash(cash)}
-          </Text>
-          <Text style={s.statLbl}>CASH</Text>
-        </View>
-        <View style={s.stat}>
-          <Text style={[s.statVal, { color: Colors.skyDark }]}>
-            {fmtCash(availableCredit)}
-          </Text>
-          <Text style={s.statLbl}>AVAILABLE CREDIT</Text>
-        </View>
-        <View style={s.stat}>
-          <Text
-            style={[s.statVal, { color: loan > 0 ? Colors.red : Colors.green }]}
-          >
-            {loan > 0 ? fmtCash(loan) : "0"}
-          </Text>
-          <Text style={s.statLbl}>DEBT</Text>
+        <View style={styles.summaryTable}>
+          <SummaryRow label="Available cash" value={fmtCash(cash)} />
+          <SummaryRow
+            label="Loan balance"
+            value={fmtCash(loan)}
+            valueColor={loan > 0 ? Colors.red : Colors.muted}
+          />
+          <SummaryRow
+            label="Available credit"
+            value={fmtCash(availableCredit)}
+          />
+          <SummaryRow
+            label="Annual rate"
+            value={loan > 0 ? `${currentRate.toFixed(1)}%` : "No active rate"}
+          />
+          <SummaryRow
+            label="Interest per day"
+            value={loan > 0 ? `-${fmtCash(dailyInterestCost)}` : "$0"}
+            valueColor={loan > 0 ? Colors.red : Colors.green}
+            strong
+            last
+          />
         </View>
       </View>
 
-      {loan > 0 && (
-        <View style={s.repayCard}>
-          <Text style={s.eyebrow}>REPAY LOAN</Text>
-          <Text style={s.repayHint}>
-            Repay loans to keep more cash from every passenger rush.
+      {loan > 0 ? (
+        <View style={styles.section}>
+          <View style={styles.sectionHeading}>
+            <Text style={styles.sectionTitle}>Repay loan</Text>
+          </View>
+          <Text style={styles.sectionHelp}>
+            Choose an amount. You will review the remaining cash, balance, and
+            daily interest before repayment.
           </Text>
-
-          <RepayPresets
+          <RepaymentOptions
             loan={loan}
             cash={cash}
-            onRepay={handleRepay}
             loading={repaying}
+            onRequest={reviewRepayment}
           />
         </View>
-      )}
+      ) : null}
 
-      {error && (
-        <View style={s.errBox}>
-          <Ionicons name="warning-outline" size={13} color={Colors.red} />
-          <Text style={s.errTxt}>{error}</Text>
+      {error ? <StatusMessage type="error" message={error} /> : null}
+      {success ? <StatusMessage type="success" message={success} /> : null}
+
+      <View style={styles.section}>
+        <View style={styles.sectionHeading}>
+          <Text style={styles.sectionTitle}>Loan options</Text>
+          <Text style={styles.sectionDetail}>
+            Day {day} · {routeCount} active{" "}
+            {routeCount === 1 ? "route" : "routes"}
+          </Text>
         </View>
-      )}
+        <Text style={styles.sectionHelp}>
+          Rates reflect {difficulty} difficulty. A new rate applies to your full
+          outstanding balance.
+        </Text>
+        <View style={styles.offerList}>
+          {LOAN_PACKAGES.map((pkg, index) => {
+            const effectiveRate =
+              Math.round(pkg.rate * rateMultiplier * 10) / 10;
+            const locked = day < pkg.minDay || routeCount < pkg.minRoutes;
+            const lockReason =
+              day < pkg.minDay
+                ? `Available from day ${pkg.minDay}`
+                : `Requires ${pkg.minRoutes} active routes. You have ${routeCount}.`;
 
-      {success && (
-        <View style={s.successBox}>
-          <Ionicons
-            name="checkmark-circle-outline"
-            size={13}
-            color={Colors.green}
-          />
-          <Text style={s.successTxt}>{success}</Text>
+            return (
+              <LoanOfferRow
+                key={pkg.id}
+                pkg={pkg}
+                effectiveRate={effectiveRate}
+                currentLoan={loan}
+                availableCredit={availableCredit}
+                locked={locked}
+                lockReason={lockReason}
+                taking={taking === pkg.id}
+                onReview={reviewLoan}
+                last={index === LOAN_PACKAGES.length - 1}
+              />
+            );
+          })}
         </View>
-      )}
+      </View>
 
-      <View style={s.divider} />
-
-      <Text style={s.eyebrow}>LOAN OPTIONS</Text>
-      <Text style={s.diffNote}>
-        Day {day} · {routeCount} active route{routeCount === 1 ? "" : "s"} ·{" "}
-        {difficulty.charAt(0).toUpperCase() + difficulty.slice(1)} difficulty ·{" "}
-        {Math.round((rateMulti - 1) * 100) >= 0 ? "+" : ""}
-        {Math.round((rateMulti - 1) * 100)}% rate modifier
-      </Text>
-
-      {LOAN_PACKAGES.map((pkg) => {
-        const effectiveRate = Math.round(pkg.rate * rateMulti * 10) / 10;
-        const locked = day < pkg.minDay || routeCount < pkg.minRoutes;
-        const lockReason =
-          day < pkg.minDay
-            ? `Unlocks on day ${pkg.minDay}`
-            : `Needs ${pkg.minRoutes} active routes · you have ${routeCount}`;
-
-        return (
-          <LoanCard
-            key={pkg.id}
-            pkg={pkg}
-            effectiveRate={effectiveRate}
-            locked={locked}
-            lockReason={lockReason}
-            availableCredit={availableCredit}
-            onTake={handleTake}
-            taking={taking === pkg.id}
-          />
-        );
-      })}
-
-      <View style={s.infoCard}>
+      <View style={styles.guidance}>
         <Ionicons
           name="information-circle-outline"
-          size={14}
-          color={Colors.dim}
+          size={18}
+          color={Colors.muted}
         />
-        <Text style={s.infoTxt}>
-          Boosts are useful when they help you open routes, buy planes, and
-          clear demand faster than the daily interest costs you.
+        <Text style={styles.guidanceText}>
+          Borrow only when the expected route profit is greater than the added
+          daily interest.
         </Text>
       </View>
     </BottomSheetScrollView>
   );
 }
 
-const rp = StyleSheet.create({
-  row: {
-    flexDirection: "row",
-    gap: Spacing.sm,
-    flexWrap: "wrap",
-  },
-  btn: {
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    minHeight: MIN_TOUCH,
-    justifyContent: "center",
-  },
-  lbl: {
-    fontFamily: Typography.mono,
-    fontSize: 11,
-    fontWeight: "700",
-  },
-});
-
-const lc = StyleSheet.create({
-  card: {
-    borderRadius: Radius.xl,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.panel,
-    padding: Spacing.md,
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.md,
-    gap: Spacing.sm,
-    ...Shadow.card,
-  },
-  locked: {
-    backgroundColor: Colors.bg,
-    shadowOpacity: 0,
-    elevation: 0,
-  },
-  top: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    gap: Spacing.sm,
-  },
-  tag: {
-    alignSelf: "flex-start",
-    borderRadius: Radius.full,
-    backgroundColor: Colors.skyDim,
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    marginBottom: 5,
-  },
-  tagText: {
-    fontFamily: Typography.mono,
-    fontSize: 8,
-    color: Colors.skyDark,
-    fontWeight: "700",
-    letterSpacing: 1,
-  },
-  name: {
-    fontSize: 15,
-    color: Colors.text,
-    fontWeight: "700",
-  },
-  desc: {
-    fontSize: 11,
-    color: Colors.muted,
-    lineHeight: 16,
-    marginTop: 2,
-  },
-  amountBox: {
-    alignItems: "flex-end",
-  },
-  amount: {
-    fontFamily: Typography.mono,
-    fontSize: 16,
-    fontWeight: "700",
-  },
-  amountSub: {
-    fontSize: 8,
-    color: Colors.muted,
-  },
-  stats: {
-    flexDirection: "row",
-    gap: Spacing.sm,
-  },
-  stat: {
+const styles = StyleSheet.create({
+  root: {
     flex: 1,
-    backgroundColor: Colors.bg,
-    borderRadius: Radius.md,
-    padding: Spacing.sm,
-    alignItems: "center",
-    gap: 2,
+    backgroundColor: Colors.surface,
   },
-  statVal: {
-    fontFamily: Typography.mono,
-    fontSize: 12,
-    color: Colors.text,
-    fontWeight: "700",
-  },
-  statLbl: {
-    fontFamily: Typography.mono,
-    fontSize: 7,
-    color: Colors.muted,
-    letterSpacing: 1.4,
-  },
-  lockRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-  },
-  lockText: {
-    fontSize: 10,
-    color: Colors.muted,
-  },
-  btn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: Spacing.sm,
-    borderRadius: Radius.lg,
-    minHeight: MIN_TOUCH,
-    borderWidth: 1,
-  },
-  btnTxt: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: Colors.textOnColor,
-  },
-});
-
-const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: Colors.surface },
   content: {
-    paddingBottom: Spacing.xxl,
+    backgroundColor: Colors.surface,
   },
   header: {
+    minHeight: 68,
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.sm,
-    paddingBottom: Spacing.md,
     gap: Spacing.md,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
   },
-  headerMark: {
-    width: MIN_TOUCH,
-    height: MIN_TOUCH,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderRadius: Radius.md,
-  },
-  headerCopy: { flex: 1 },
-  kicker: {
-    color: Colors.skyDark,
-    fontFamily: Typography.mono,
-    fontSize: 8,
-    letterSpacing: 1.3,
+  headerCopy: {
+    flex: 1,
+    minWidth: 0,
   },
   title: {
-    fontFamily: Typography.display,
-    fontSize: 28,
-    lineHeight: 31,
-    letterSpacing: 0.4,
     color: Colors.text,
+    fontSize: Typography.size.title,
+    lineHeight: Typography.lineHeight.title,
+    fontWeight: Typography.weight.bold,
   },
   subtitle: {
-    fontSize: 10,
+    marginTop: Spacing.xxs,
     color: Colors.muted,
-    marginTop: 1,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
   },
   closeButton: {
     width: MIN_TOUCH,
     height: MIN_TOUCH,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: Radius.full,
-    backgroundColor: Colors.inset,
+    borderRadius: Radius.md,
   },
-  hero: {
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.md,
-    borderRadius: Radius.xl,
-    borderWidth: 1,
-    padding: Spacing.md,
+  section: {
+    marginTop: Spacing.xl,
+    paddingHorizontal: Spacing.lg,
+  },
+  sectionHeading: {
+    minHeight: 38,
     flexDirection: "row",
+    alignItems: "center",
     justifyContent: "space-between",
-    alignItems: "center",
-    ...Shadow.card,
+    gap: Spacing.md,
   },
-  heroDebt: { borderColor: Colors.red, backgroundColor: Palette.redSoft },
-  heroClear: { borderColor: Colors.green, backgroundColor: Palette.greenSoft },
-  heroLabel: {
-    fontFamily: Typography.mono,
-    fontSize: 8,
+  sectionTitle: {
+    color: Colors.text,
+    fontSize: 18,
+    lineHeight: 24,
+    fontWeight: Typography.weight.bold,
+  },
+  sectionDetail: {
+    flexShrink: 1,
     color: Colors.muted,
-    letterSpacing: 1.8,
-  },
-  heroValue: {
     fontFamily: Typography.mono,
-    fontSize: 28,
-    fontWeight: "700",
-    marginTop: 4,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+    textAlign: "right",
   },
-  heroSub: {
-    fontSize: 10,
+  sectionHelp: {
+    marginBottom: Spacing.md,
     color: Colors.muted,
-    marginTop: 2,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.body,
   },
-  statsRow: {
+  summaryTable: {
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSection,
+  },
+  summaryRow: {
+    minHeight: 52,
     flexDirection: "row",
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.md,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    overflow: "hidden",
-    backgroundColor: Colors.panel,
-    ...Shadow.card,
-  },
-  stat: {
-    flex: 1,
     alignItems: "center",
-    paddingVertical: Spacing.sm,
+    justifyContent: "space-between",
+    gap: Spacing.lg,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
   },
-  statVal: {
-    fontFamily: Typography.mono,
-    fontSize: 13,
-    fontWeight: "700",
+  lastRow: {
+    borderBottomWidth: 0,
   },
-  statLbl: {
-    fontFamily: Typography.mono,
-    fontSize: 8,
+  summaryLabel: {
+    flex: 1,
     color: Colors.muted,
-    marginTop: 2,
+    fontSize: Typography.size.body,
+    lineHeight: Typography.lineHeight.body,
   },
-  repayCard: {
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.md,
-    borderRadius: Radius.xl,
-    borderWidth: 1,
-    borderColor: Colors.green,
-    backgroundColor: Palette.greenSoft,
-    padding: Spacing.md,
+  summaryValue: {
+    flexShrink: 0,
+    color: Colors.text,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.body,
+    lineHeight: Typography.lineHeight.body,
+    textAlign: "right",
+  },
+  strongText: {
+    color: Colors.text,
+    fontWeight: Typography.weight.bold,
+  },
+  repaymentButtons: {
+    flexDirection: "row",
+    flexWrap: "wrap",
     gap: Spacing.sm,
-    ...Shadow.card,
+    paddingTop: Spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
   },
-  repayHint: {
-    fontSize: 11,
-    color: Colors.muted,
-    lineHeight: 16,
-  },
-  errBox: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: 6,
-    backgroundColor: Palette.redSoft,
-    borderRadius: Radius.md,
+  repaymentButton: {
+    minWidth: 92,
+    minHeight: MIN_TOUCH,
+    flexGrow: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: Spacing.md,
     borderWidth: 1,
-    borderColor: Colors.red,
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.sm,
-    padding: Spacing.sm,
-  },
-  errTxt: {
-    fontSize: 11,
-    color: Colors.red,
-    flex: 1,
-    lineHeight: 16,
-  },
-  successBox: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: 6,
-    backgroundColor: Palette.greenSoft,
+    borderColor: Colors.borderSection,
     borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.green,
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.sm,
-    padding: Spacing.sm,
+    backgroundColor: Colors.surface,
   },
-  successTxt: {
-    fontSize: 11,
-    color: Colors.green,
-    flex: 1,
-    lineHeight: 16,
-  },
-  divider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: Colors.border,
-    marginVertical: Spacing.md,
-  },
-  eyebrow: {
-    fontFamily: Typography.mono,
-    fontSize: 9,
+  repaymentButtonText: {
     color: Colors.skyDark,
-    letterSpacing: 2.5,
-    paddingHorizontal: Spacing.lg,
-    marginBottom: 4,
-    fontWeight: "700",
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+    fontWeight: Typography.weight.bold,
   },
-  diffNote: {
-    fontSize: 10,
+  disabledControl: {
+    opacity: 0.45,
+  },
+  disabledText: {
     color: Colors.muted,
-    paddingHorizontal: Spacing.lg,
-    marginBottom: Spacing.md,
   },
-  infoCard: {
+  statusMessage: {
+    minHeight: 52,
+    marginTop: Spacing.lg,
+    marginHorizontal: Spacing.lg,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+    paddingVertical: Spacing.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Colors.border,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+  },
+  statusText: {
+    flex: 1,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.body,
+    fontWeight: Typography.weight.medium,
+  },
+  offerList: {
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSection,
+  },
+  offerRow: {
+    paddingVertical: Spacing.lg,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+  },
+  offerHeading: {
     flexDirection: "row",
     alignItems: "flex-start",
-    gap: 8,
-    backgroundColor: Colors.panel,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    marginHorizontal: Spacing.lg,
-    marginTop: Spacing.sm,
-    padding: Spacing.sm,
-    ...Shadow.card,
+    gap: Spacing.md,
   },
-  infoTxt: {
-    fontSize: 11,
-    color: Colors.muted,
+  offerHeadingCopy: {
     flex: 1,
-    lineHeight: 16,
+    minWidth: 0,
+  },
+  offerName: {
+    color: Colors.text,
+    fontSize: Typography.size.body,
+    lineHeight: Typography.lineHeight.body,
+    fontWeight: Typography.weight.bold,
+  },
+  offerDescription: {
+    marginTop: Spacing.xxs,
+    color: Colors.muted,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.body,
+  },
+  offerAmount: {
+    flexShrink: 0,
+    color: Colors.text,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.body,
+    lineHeight: Typography.lineHeight.body,
+    fontWeight: Typography.weight.bold,
+  },
+  offerFacts: {
+    flexDirection: "row",
+    marginTop: Spacing.md,
+    paddingVertical: Spacing.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Colors.border,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+  },
+  offerFact: {
+    flex: 1,
+    minWidth: 0,
+    paddingRight: Spacing.xs,
+  },
+  offerFactLabel: {
+    color: Colors.muted,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
+  },
+  offerFactValue: {
+    marginTop: Spacing.xxs,
+    color: Colors.text,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+    fontWeight: Typography.weight.bold,
+  },
+  requirementRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+    marginTop: Spacing.md,
+  },
+  requirementText: {
+    flex: 1,
+    color: Colors.muted,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+  },
+  reviewButton: {
+    minHeight: MIN_TOUCH,
+    marginTop: Spacing.md,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: Spacing.lg,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.sky,
+  },
+  reviewButtonText: {
+    color: Colors.textOnColor,
+    fontSize: Typography.size.body,
+    lineHeight: Typography.lineHeight.body,
+    fontWeight: Typography.weight.bold,
+  },
+  guidance: {
+    marginTop: Spacing.xl,
+    marginHorizontal: Spacing.lg,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: Spacing.sm,
+    paddingVertical: Spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
+  },
+  guidanceText: {
+    flex: 1,
+    color: Colors.muted,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.body,
   },
 });

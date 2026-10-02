@@ -1,9 +1,18 @@
+/**
+ * Fleet ownership, maintenance, and aircraft purchasing.
+ *
+ * Purchases are deliberately one aircraft at a time. This keeps persistence
+ * atomic and makes the next action clear: assign the aircraft to a route.
+ */
+
+import {
+  AirlineBrandMark,
+  type AirlineLogoId,
+} from "@/components/airline-identity";
 import {
   Colors,
   MIN_TOUCH,
-  Palette,
   Radius,
-  Shadow,
   Spacing,
   Typography,
 } from "@/constants/theme";
@@ -11,20 +20,22 @@ import { useGameSounds } from "@/hooks/useGameSounds";
 import { useHaptics } from "@/hooks/useHaptics";
 import { useTabBarHeight } from "@/hooks/useSheetLayout";
 import { useBuyPlane, useMaintenancePlane } from "@/hooks/useSupabaseWrite";
-import { fmtCash } from "@/lib/revenue";
-import type { OwnedPlane, PlaneModel } from "@/store";
+import { DEFAULT_AIRLINE_LOGO_ID, getAirlinePalette } from "@/lib/airlineBrand";
+import { dailyFlights, fmtCash } from "@/lib/revenue";
+import type { Demand, OwnedPlane, PlaneModel, Route } from "@/store";
 import {
   useAirline,
   useCash,
   useDemands,
   useGameStore,
+  useHubs,
   useOwnedPlanes,
   usePlanes,
   useRoutes,
 } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
 import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
-import React, { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   StyleSheet,
@@ -33,17 +44,6 @@ import {
   View,
 } from "react-native";
 
-// ─────────────────────────────────────────────────────────────────
-// CONSTANTS
-// ─────────────────────────────────────────────────────────────────
-
-const FAMILY_COLOR: Record<string, string> = {
-  embraer: Colors.embraer,
-  bombardier: Colors.bombardier,
-  boeing: Colors.boeing,
-  airbus: Colors.airbus,
-};
-
 const FAMILY_LABEL: Record<string, string> = {
   embraer: "Embraer",
   bombardier: "Bombardier",
@@ -51,376 +51,272 @@ const FAMILY_LABEL: Record<string, string> = {
   airbus: "Airbus",
 };
 
-// ─────────────────────────────────────────────────────────────────
-// QUANTITY SELECTOR
-// ─────────────────────────────────────────────────────────────────
+interface OwnedPlaneGroupData {
+  model: PlaneModel;
+  planes: OwnedPlane[];
+}
 
-function QuantitySelector({
-  value,
-  min,
-  max,
-  onChange,
-  color,
+interface FleetBrand {
+  name: string;
+  code: string;
+  logoId: AirlineLogoId;
+  primaryColor: string;
+  secondaryColor: string;
+}
+
+function passengerCount(value: number | null | undefined): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.floor(value))
+    : 0;
+}
+
+function playerPassengerPool(demand: Demand): number {
+  const market = passengerCount(demand.base_pax_day);
+  const carried = passengerCount(demand.delivered_pax_today);
+  const rivalCarried = passengerCount(demand.ai_stolen_pax);
+
+  return Math.max(carried, market - rivalCarried);
+}
+
+function scheduledDailySeats(route: Route): number {
+  const distance = Math.max(1, route.total_dist_nm ?? route.demand.dist_nm);
+  const cycles = dailyFlights(
+    distance,
+    Math.max(1, route.plane.plane_model.speed_kts),
+  );
+
+  return passengerCount(route.plane.plane_model.pax_capacity) * cycles;
+}
+
+function SectionHeader({ title, detail }: { title: string; detail?: string }) {
+  return (
+    <View style={styles.sectionHeader}>
+      <Text style={styles.sectionTitle}>{title}</Text>
+      {detail ? <Text style={styles.sectionDetail}>{detail}</Text> : null}
+    </View>
+  );
+}
+
+function InlineNotice({
+  kind,
+  title,
+  message,
 }: {
-  value: number;
-  min: number;
-  max: number;
-  onChange: (n: number) => void;
-  color: string;
+  kind: "error" | "warning" | "info";
+  title: string;
+  message: string;
+}) {
+  const color =
+    kind === "error"
+      ? Colors.red
+      : kind === "warning"
+        ? Colors.amber
+        : Colors.skyDark;
+  const icon =
+    kind === "error"
+      ? "warning-outline"
+      : kind === "warning"
+        ? "construct-outline"
+        : "information-circle-outline";
+
+  return (
+    <View
+      accessibilityRole={kind === "error" ? "alert" : "text"}
+      style={styles.notice}
+    >
+      <Ionicons name={icon} size={18} color={color} />
+      <View style={styles.noticeCopy}>
+        <Text style={[styles.noticeTitle, { color }]}>{title}</Text>
+        <Text style={styles.noticeMessage}>{message}</Text>
+      </View>
+    </View>
+  );
+}
+
+function FleetSummary({
+  active,
+  idle,
+  maintenance,
+}: {
+  active: number;
+  idle: number;
+  maintenance: number;
 }) {
   return (
-    <View style={qs.wrap}>
+    <View style={styles.summary}>
+      <View style={styles.summaryItem}>
+        <Text style={styles.summaryValue}>{active}</Text>
+        <Text style={styles.summaryLabel}>Flying</Text>
+      </View>
+      <View style={styles.summaryDivider} />
+      <View style={styles.summaryItem}>
+        <Text
+          style={[
+            styles.summaryValue,
+            { color: idle > 0 ? Colors.amber : Colors.text },
+          ]}
+        >
+          {idle}
+        </Text>
+        <Text style={styles.summaryLabel}>Idle</Text>
+      </View>
+      <View style={styles.summaryDivider} />
+      <View style={styles.summaryItem}>
+        <Text
+          style={[
+            styles.summaryValue,
+            { color: maintenance > 0 ? Colors.red : Colors.text },
+          ]}
+        >
+          {maintenance}
+        </Text>
+        <Text style={styles.summaryLabel}>Need service</Text>
+      </View>
+    </View>
+  );
+}
+
+function OwnedPlaneGroup({
+  group,
+  brand,
+  planeRouteMap,
+  onPress,
+}: {
+  group: OwnedPlaneGroupData;
+  brand: FleetBrand;
+  planeRouteMap: Map<string, string>;
+  onPress: () => void;
+}) {
+  const total = group.planes.length;
+  const flying = group.planes.filter(
+    (plane) => Boolean(plane.route_id) || planeRouteMap.has(plane.id),
+  ).length;
+  const idle = total - flying;
+  const lowestCondition = Math.min(
+    ...group.planes.map((plane) => plane.condition ?? 100),
+  );
+  const conditionColor =
+    lowestCondition <= 15
+      ? Colors.red
+      : lowestCondition <= 40
+        ? Colors.amber
+        : Colors.muted;
+
+  return (
+    <TouchableOpacity
+      accessibilityHint="Opens individual aircraft management"
+      accessibilityLabel={`${group.model.nickname} in ${brand.name} livery, ${total} owned, ${flying} flying, ${idle} idle`}
+      accessibilityRole="button"
+      activeOpacity={0.7}
+      onPress={onPress}
+      style={styles.ownedRow}
+    >
+      <AirlineBrandMark
+        accessibilityLabel=""
+        logoId={brand.logoId}
+        primary={brand.primaryColor}
+        secondary={brand.secondaryColor}
+        size={40}
+        variant="tail"
+      />
+      <View style={styles.ownedCopy}>
+        <View style={styles.ownedTitleRow}>
+          <Text numberOfLines={1} style={styles.ownedName}>
+            {group.model.nickname}
+          </Text>
+          <Text style={styles.ownedCount}>×{total}</Text>
+        </View>
+        <Text style={styles.ownedSpecs}>
+          {group.model.pax_capacity.toLocaleString()} seats ·{" "}
+          {group.model.range_nm.toLocaleString()} nm range
+        </Text>
+        <Text style={styles.ownedStatus}>
+          {brand.code} · {flying} flying · {idle} idle ·{" "}
+          <Text style={{ color: conditionColor }}>
+            lowest condition {Math.round(lowestCondition)}%
+          </Text>
+        </Text>
+      </View>
+      <Text style={styles.manageText}>Manage</Text>
+      <Ionicons name="chevron-forward" size={17} color={Colors.muted} />
+    </TouchableOpacity>
+  );
+}
+
+function MaintenanceRow({
+  plane,
+  brand,
+  routeLabel,
+  loading,
+  onMaintain,
+}: {
+  plane: OwnedPlane;
+  brand: FleetBrand;
+  routeLabel: string | null;
+  loading: boolean;
+  onMaintain: () => void;
+}) {
+  const condition = Math.round(plane.condition ?? 100);
+  const conditionColor = condition <= 15 ? Colors.red : Colors.amber;
+  const maintenanceCost = 5_000 + plane.plane_model.pax_capacity * 50;
+
+  return (
+    <View style={styles.maintenanceRow}>
+      <AirlineBrandMark
+        accessibilityLabel={`${brand.name} aircraft livery`}
+        logoId={brand.logoId}
+        primary={brand.primaryColor}
+        secondary={brand.secondaryColor}
+        size={32}
+        variant="tail"
+      />
+      <View style={styles.maintenanceCopy}>
+        <Text style={styles.maintenanceName}>{plane.plane_model.nickname}</Text>
+        <Text style={styles.maintenanceRoute}>
+          {routeLabel ?? "Idle aircraft"}
+        </Text>
+        <View style={styles.conditionRow}>
+          <View style={styles.conditionTrack}>
+            <View
+              style={[
+                styles.conditionFill,
+                {
+                  width: `${condition}%` as `${number}%`,
+                  backgroundColor: conditionColor,
+                },
+              ]}
+            />
+          </View>
+          <Text style={[styles.conditionValue, { color: conditionColor }]}>
+            {condition}%
+          </Text>
+        </View>
+      </View>
       <TouchableOpacity
-        accessibilityLabel="Decrease quantity"
+        accessibilityLabel={`Service ${plane.plane_model.nickname} for ${fmtCash(maintenanceCost)}`}
         accessibilityRole="button"
-        style={[qs.btn, value <= min && qs.disabled]}
-        onPress={() => value > min && onChange(value - 1)}
-        disabled={value <= min}
+        accessibilityState={{ busy: loading, disabled: loading }}
+        activeOpacity={0.7}
+        disabled={loading}
+        onPress={onMaintain}
+        style={styles.maintenanceButton}
       >
-        <Ionicons
-          name="remove"
-          size={14}
-          color={value <= min ? Colors.dim : color}
-        />
-      </TouchableOpacity>
-      <Text style={[qs.val, { color }]}>{value}</Text>
-      <TouchableOpacity
-        accessibilityLabel="Increase quantity"
-        accessibilityRole="button"
-        style={[qs.btn, value >= max && qs.disabled]}
-        onPress={() => value < max && onChange(value + 1)}
-        disabled={value >= max}
-      >
-        <Ionicons
-          name="add"
-          size={14}
-          color={value >= max ? Colors.dim : color}
-        />
+        {loading ? (
+          <ActivityIndicator size="small" color={Colors.skyDark} />
+        ) : (
+          <>
+            <Text style={styles.maintenanceButtonText}>Service</Text>
+            <Text style={styles.maintenanceCost}>
+              {fmtCash(maintenanceCost)}
+            </Text>
+          </>
+        )}
       </TouchableOpacity>
     </View>
   );
 }
 
-const qs = StyleSheet.create({
-  wrap: { flexDirection: "row", alignItems: "center", gap: 4 },
-  btn: {
-    width: 36,
-    height: 36,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.bg,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  disabled: { opacity: 0.35 },
-  val: {
-    fontFamily: Typography.mono,
-    fontSize: 13,
-    fontWeight: "700",
-    minWidth: 24,
-    textAlign: "center",
-  },
-});
-
-// ─────────────────────────────────────────────────────────────────
-// OWNED PLANE GROUP ROW
-// — dead `day` prop removed
-// — condition badge shown when any plane in group is worn
-// ─────────────────────────────────────────────────────────────────
-
-const OwnedPlaneGroup = React.memo(function OwnedPlaneGroup({
-  group,
-  planeRouteMap,
-  onTap,
-  onClose,
-}: {
-  group: { model: PlaneModel; planes: OwnedPlane[] };
-  planeRouteMap: Map<string, string>;
-  onTap: () => void;
-  onClose: () => void;
-}) {
-  const fc = FAMILY_COLOR[group.model.family] ?? Colors.sky;
-  const total = group.planes.length;
-  const active = group.planes.filter((p) => planeRouteMap.has(p.id)).length;
-  const idle = total - active;
-
-  // Worst condition across the group — show badge if any plane is worn
-  const minCond = Math.min(...group.planes.map((p) => p.condition ?? 100));
-  const condBadge =
-    minCond <= 15
-      ? { color: Colors.red, label: `LOW ${minCond}%` }
-      : minCond <= 40
-        ? { color: Colors.amber, label: `SERVICE ${minCond}%` }
-        : null;
-
-  return (
-    <TouchableOpacity
-      accessibilityHint="Opens aircraft management for this model"
-      accessibilityLabel={`${group.model.nickname}, ${total} aircraft, ${active} flying, ${idle} idle`}
-      accessibilityRole="button"
-      activeOpacity={0.82}
-      onPress={() => {
-        onClose();
-        setTimeout(onTap, 120);
-      }}
-      style={g.row}
-    >
-      <View style={[g.stripe, { backgroundColor: fc }]} />
-      <View style={g.body}>
-        <View style={g.top}>
-          <Text style={g.name} numberOfLines={1}>
-            {group.model.nickname}
-            <Text style={g.count}> ×{total}</Text>
-          </Text>
-          {condBadge && (
-            <Text style={[g.condBadge, { color: condBadge.color }]}>
-              {condBadge.label}
-            </Text>
-          )}
-        </View>
-        <Text style={g.meta}>
-          {active} flying
-          {idle > 0 ? ` · ` : ""}
-          {idle > 0 && <Text style={{ color: Colors.amber }}>{idle} idle</Text>}
-        </Text>
-        <Text style={g.specs}>
-          {group.model.pax_capacity} pax ·{" "}
-          {group.model.range_nm.toLocaleString()}nm
-        </Text>
-      </View>
-      <View style={g.manageBtn}>
-        <Text style={g.manageTxt}>Manage</Text>
-        <Ionicons name="chevron-forward" size={15} color={Colors.sky} />
-      </View>
-    </TouchableOpacity>
-  );
-});
-
-const g = StyleSheet.create({
-  row: {
-    flexDirection: "row",
-    alignItems: "center",
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    overflow: "hidden",
-    marginBottom: Spacing.sm,
-    backgroundColor: Colors.panel,
-    ...Shadow.card,
-  },
-  stripe: { width: 4, alignSelf: "stretch" },
-  body: { flex: 1, padding: Spacing.md, gap: 4 },
-  top: { flexDirection: "row", alignItems: "center", gap: 6 },
-  name: { flex: 1, fontSize: 15, fontWeight: "700", color: Colors.text },
-  count: {
-    fontFamily: Typography.mono,
-    fontSize: 12,
-    fontWeight: "700",
-    color: Colors.muted,
-  },
-  condBadge: {
-    fontFamily: Typography.mono,
-    fontSize: 8,
-    fontWeight: "700",
-    flexShrink: 0,
-  },
-  meta: { fontSize: 11, color: Colors.muted },
-  specs: { fontSize: 10, color: Colors.muted },
-  manageBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 2,
-    paddingHorizontal: Spacing.sm,
-    minHeight: MIN_TOUCH,
-    marginRight: Spacing.md,
-  },
-  manageTxt: { fontSize: 10, fontWeight: "700", color: Colors.sky },
-});
-
-// ─────────────────────────────────────────────────────────────────
-// WORN PLANES SECTION
-// — extracted from IIFE into named component
-// — now shows active route label per plane
-// ─────────────────────────────────────────────────────────────────
-
-function WornPlanesSection({
-  ownedPlanes,
-  planeRouteMap,
-  onMaintain,
-}: {
-  ownedPlanes: OwnedPlane[];
-  planeRouteMap: Map<string, string>;
-  onMaintain: (id: string) => void;
-}) {
-  const worn = ownedPlanes.filter((p) => (p.condition ?? 100) <= 40);
-  if (worn.length === 0) return null;
-
-  return (
-    <>
-      <Text style={s.eyebrow}>NEEDS ATTENTION</Text>
-      <View style={s.section}>
-        {worn.map((plane) => {
-          const cond = plane.condition ?? 100;
-          const condColor = cond <= 15 ? Colors.red : Colors.amber;
-          const maintCost = 5_000 + plane.plane_model.pax_capacity * 50;
-          const routeLabel = planeRouteMap.get(plane.id) ?? null;
-
-          return (
-            <View key={plane.id} style={m.row}>
-              <View style={[m.stripe, { backgroundColor: condColor }]} />
-              <View style={m.body}>
-                <View style={m.nameRow}>
-                  <Text style={m.name} numberOfLines={1}>
-                    {plane.plane_model.nickname}
-                  </Text>
-                  {/* Route context — critical if plane is flying worn */}
-                  {routeLabel ? (
-                    <View
-                      style={[
-                        m.routePill,
-                        {
-                          backgroundColor: condColor + "18",
-                          borderColor: condColor + "44",
-                        },
-                      ]}
-                    >
-                      <Ionicons name="airplane" size={8} color={condColor} />
-                      <Text
-                        style={[m.routeTxt, { color: condColor }]}
-                        numberOfLines={1}
-                      >
-                        {routeLabel}
-                      </Text>
-                    </View>
-                  ) : (
-                    <View style={m.idlePill}>
-                      <Text style={m.idleTxt}>IDLE</Text>
-                    </View>
-                  )}
-                </View>
-                <View style={m.barRow}>
-                  <View style={m.track}>
-                    <View
-                      style={[
-                        m.fill,
-                        {
-                          width: `${cond}%` as any,
-                          backgroundColor: condColor,
-                        },
-                      ]}
-                    />
-                  </View>
-                  <Text style={[m.pct, { color: condColor }]}>{cond}%</Text>
-                </View>
-              </View>
-              <TouchableOpacity
-                accessibilityLabel={`Service ${plane.plane_model.nickname} for ${fmtCash(maintCost)}`}
-                accessibilityRole="button"
-                style={m.btn}
-                onPress={() => onMaintain(plane.id)}
-              >
-                <Ionicons
-                  name="construct-outline"
-                  size={13}
-                  color={Colors.textOnColor}
-                />
-                <Text style={m.btnTxt}>${Math.round(maintCost / 1000)}K</Text>
-              </TouchableOpacity>
-            </View>
-          );
-        })}
-      </View>
-    </>
-  );
-}
-
-const m = StyleSheet.create({
-  row: {
-    flexDirection: "row",
-    alignItems: "center",
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    overflow: "hidden",
-    marginBottom: Spacing.sm,
-    backgroundColor: Colors.panel,
-    ...Shadow.card,
-  },
-  stripe: { width: 4, alignSelf: "stretch", backgroundColor: Colors.amber },
-  body: { flex: 1, padding: Spacing.md, gap: 6 },
-  nameRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    flexWrap: "wrap",
-  },
-  name: { fontSize: 12, fontWeight: "700", color: Colors.text },
-  routePill: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 3,
-    borderWidth: 1,
-    borderRadius: Radius.full,
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-  },
-  routeTxt: { fontFamily: Typography.mono, fontSize: 8, fontWeight: "700" },
-  idlePill: {
-    backgroundColor: Colors.inset,
-    borderRadius: Radius.full,
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-  },
-  idleTxt: {
-    fontSize: 8,
-    color: Colors.muted,
-    fontFamily: Typography.mono,
-    fontWeight: "700",
-    letterSpacing: 0.5,
-  },
-  barRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  track: {
-    flex: 1,
-    height: 3,
-    borderRadius: 2,
-    backgroundColor: Colors.inset,
-    overflow: "hidden",
-  },
-  fill: { height: "100%" as any, borderRadius: 2 },
-  pct: {
-    fontFamily: Typography.mono,
-    fontSize: 9,
-    fontWeight: "700",
-    minWidth: 24,
-  },
-  btn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    marginRight: Spacing.md,
-    paddingHorizontal: Spacing.sm,
-    minHeight: MIN_TOUCH,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.amber,
-    backgroundColor: Colors.amber,
-  },
-  btnTxt: {
-    fontFamily: Typography.mono,
-    fontSize: 10,
-    fontWeight: "700",
-    color: Colors.textOnColor,
-  },
-});
-
-// ─────────────────────────────────────────────────────────────────
-// PLANE CARD (Store)
-// — lock reason states exact route count needed
-// — buy errors use prominent errorBox
-// ─────────────────────────────────────────────────────────────────
-
-function PlaneCard({
+function PlaneStoreRow({
   model,
   demandScore,
   cash,
@@ -432,775 +328,970 @@ function PlaneCard({
   const buyPlane = useBuyPlane();
   const haptics = useHaptics();
   const sounds = useGameSounds();
-
-  const [qty, setQty] = useState(1);
   const [buying, setBuying] = useState(false);
-  const [bought, setBought] = useState(false);
+  const [purchased, setPurchased] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fc = FAMILY_COLOR[model.family] ?? Colors.sky;
-
-  const lockedByDemands =
+  const lockedByRoutes =
     model.unlock_demands > 0 && demandScore < model.unlock_demands;
   const lockedByCash = model.unlock_cash > 0 && cash < model.unlock_cash;
-  const locked = lockedByDemands || lockedByCash;
-
-  // Exact routes needed — more useful than a generic message
-  const routesNeeded = model.unlock_demands - demandScore;
-  const lockReason = lockedByDemands
-    ? `Open ${routesNeeded} more route${routesNeeded !== 1 ? "s" : ""} to unlock`
-    : lockedByCash
-      ? `Need ${fmtCash(model.unlock_cash - cash)} more`
-      : "";
-
-  const maxAffordable =
-    model.price > 0
-      ? Math.max(1, Math.min(20, Math.floor(cash / model.price)))
-      : 20;
-  const totalCost = model.price * qty;
-  const canAfford = cash >= totalCost;
+  const locked = lockedByRoutes || lockedByCash;
+  const canAfford = cash >= model.price;
   const canBuy = !locked && canAfford && !buying;
+  const routesNeeded = Math.max(0, model.unlock_demands - demandScore);
+  const lockReason = lockedByRoutes
+    ? `Open ${routesNeeded} more route${routesNeeded === 1 ? "" : "s"}`
+    : lockedByCash
+      ? `Reach ${fmtCash(model.unlock_cash)} cash`
+      : null;
 
   const handleBuy = async () => {
+    if (!canBuy) return;
     haptics.confirm();
     setBuying(true);
+    setPurchased(false);
     setError(null);
-    let lastError: string | null = null;
-    for (let i = 0; i < qty; i++) {
-      const { error: err } = await buyPlane(model);
-      if (err) {
-        lastError = err;
-        break;
+
+    try {
+      const result = await buyPlane(model);
+      if (result.error) {
+        setError(result.error);
+        haptics.error();
+        sounds.error();
+        return;
       }
-    }
-    setBuying(false);
-    if (lastError) {
-      setError(lastError);
+      setPurchased(true);
+      haptics.success();
+      sounds.planeBuy();
+      setTimeout(() => setPurchased(false), 1600);
+    } catch {
+      setError("Unable to buy this aircraft. Try again.");
       haptics.error();
       sounds.error();
-      return;
+    } finally {
+      setBuying(false);
     }
-    setBought(true);
-    haptics.success();
-    sounds.planeBuy();
-    setTimeout(() => setBought(false), 1200);
   };
 
   return (
-    <View style={[pc.card, locked && pc.locked]}>
-      <View
-        style={[pc.stripe, { backgroundColor: locked ? Colors.dim : fc }]}
-      />
-
-      <View style={pc.main}>
-        <View style={pc.top}>
-          <View style={pc.info}>
-            <Text style={[pc.family, { color: locked ? Colors.dim : fc }]}>
-              {FAMILY_LABEL[model.family] ?? model.family}
-            </Text>
-            <Text style={pc.name} numberOfLines={1}>
-              {model.nickname}
-            </Text>
-            <Text style={pc.specs} numberOfLines={1}>
-              {model.pax_capacity} pax · {model.range_nm.toLocaleString()}nm ·{" "}
-              {model.speed_kts}kts
-            </Text>
-          </View>
-          <View style={pc.priceBlock}>
-            <Text
-              style={[
-                pc.price,
-                { color: canAfford && !locked ? Colors.green : Colors.red },
-              ]}
-            >
-              {fmtCash(model.price)}
-            </Text>
-            <Text style={pc.priceSub}>each</Text>
-          </View>
+    <View style={[styles.storeRow, locked && styles.storeRowLocked]}>
+      <View style={styles.storeTop}>
+        <View style={styles.storeIdentity}>
+          <Text style={styles.storeFamily}>
+            {FAMILY_LABEL[model.family] ?? model.family}
+          </Text>
+          <Text numberOfLines={1} style={styles.storeName}>
+            {model.nickname}
+          </Text>
+          <Text style={styles.storeSpecs}>
+            {model.pax_capacity.toLocaleString()} seats ·{" "}
+            {model.range_nm.toLocaleString()} nm range
+          </Text>
         </View>
-
-        {locked ? (
-          <View style={pc.lockRow}>
-            <Ionicons name="lock-closed" size={11} color={Colors.dim} />
-            <Text style={pc.lockTxt}>{lockReason}</Text>
-          </View>
-        ) : (
-          <View style={pc.buyRow}>
-            <QuantitySelector
-              value={qty}
-              min={1}
-              max={maxAffordable}
-              onChange={setQty}
-              color={fc}
-            />
-            <Text
-              style={[
-                pc.total,
-                { color: canAfford ? Colors.green : Colors.red },
-              ]}
-              numberOfLines={1}
-            >
-              {fmtCash(totalCost)}
-            </Text>
-            <TouchableOpacity
-              accessibilityLabel={`Buy ${qty} ${model.nickname} aircraft for ${fmtCash(totalCost)}`}
-              accessibilityRole="button"
-              style={[
-                pc.buyBtn,
-                { backgroundColor: canBuy ? Colors.sky : Colors.dim },
-                !canBuy && { opacity: 0.5 },
-              ]}
-              onPress={handleBuy}
-              disabled={!canBuy}
-              activeOpacity={0.84}
-            >
-              {buying ? (
-                <ActivityIndicator size="small" color={Colors.textOnColor} />
-              ) : bought ? (
-                <>
-                  <Ionicons
-                    name="checkmark"
-                    size={13}
-                    color={Colors.textOnColor}
-                  />
-                  <Text style={pc.buyTxt}>Added</Text>
-                </>
-              ) : (
-                <>
-                  <Ionicons
-                    name="add-circle-outline"
-                    size={13}
-                    color={Colors.textOnColor}
-                  />
-                  <Text style={[pc.buyTxt, { color: Colors.textOnColor }]}>
-                    Add ×{qty}
-                  </Text>
-                </>
-              )}
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {/* Prominent error — not fine print */}
-        {error && (
-          <View style={pc.errorBox}>
-            <Ionicons name="warning-outline" size={12} color={Colors.red} />
-            <Text style={pc.errorTxt}>{error}</Text>
-          </View>
-        )}
+        <View style={styles.storePriceBlock}>
+          <Text
+            style={[
+              styles.storePrice,
+              { color: canAfford && !locked ? Colors.text : Colors.red },
+            ]}
+          >
+            {fmtCash(model.price)}
+          </Text>
+          <Text style={styles.storePriceLabel}>Purchase price</Text>
+        </View>
       </View>
+
+      {locked ? (
+        <View style={styles.lockRow}>
+          <Ionicons name="lock-closed-outline" size={16} color={Colors.muted} />
+          <Text style={styles.lockText}>{lockReason}</Text>
+        </View>
+      ) : (
+        <View style={styles.purchaseRow}>
+          <Text style={styles.purchaseHelp}>
+            {purchased
+              ? "Aircraft purchased. Assign it from My fleet."
+              : canAfford
+                ? "Adds one idle aircraft to your fleet."
+                : `You need ${fmtCash(model.price - cash)} more.`}
+          </Text>
+          <TouchableOpacity
+            accessibilityLabel={`Buy one ${model.nickname} for ${fmtCash(model.price)}`}
+            accessibilityRole="button"
+            accessibilityState={{
+              busy: buying,
+              disabled: !canBuy || purchased,
+            }}
+            activeOpacity={0.7}
+            disabled={!canBuy || purchased}
+            onPress={handleBuy}
+            style={[
+              styles.buyButton,
+              (!canBuy || purchased) && styles.buyButtonDisabled,
+            ]}
+          >
+            {buying ? (
+              <ActivityIndicator size="small" color={Colors.textOnColor} />
+            ) : (
+              <Text
+                style={[
+                  styles.buyButtonText,
+                  (!canBuy || purchased) && styles.buyButtonTextDisabled,
+                ]}
+              >
+                {purchased ? "Purchased" : "Buy aircraft"}
+              </Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {error ? (
+        <View style={styles.rowError} accessibilityRole="alert">
+          <Ionicons name="warning-outline" size={16} color={Colors.red} />
+          <Text style={styles.rowErrorText}>{error}</Text>
+        </View>
+      ) : null}
     </View>
   );
 }
 
-const pc = StyleSheet.create({
-  card: {
-    flexDirection: "row",
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    overflow: "hidden",
-    marginBottom: Spacing.sm,
-    backgroundColor: Colors.panel,
-    ...Shadow.card,
-  },
-  locked: {
-    backgroundColor: Colors.bg,
-    shadowOpacity: 0,
-    elevation: 0,
-  },
-  stripe: { width: 4 },
-  main: { flex: 1, padding: Spacing.md, gap: 8 },
-  top: { flexDirection: "row", alignItems: "flex-start", gap: Spacing.sm },
-  info: { flex: 1, gap: 2 },
-  family: {
-    fontFamily: Typography.mono,
-    fontSize: 8,
-    fontWeight: "700",
-    letterSpacing: 0.7,
-    textTransform: "uppercase",
-  },
-  name: { fontSize: 15, fontWeight: "700", color: Colors.text },
-  specs: { fontSize: 10, color: Colors.muted },
-  priceBlock: { alignItems: "flex-end", gap: 2 },
-  price: { fontFamily: Typography.mono, fontSize: 15, fontWeight: "700" },
-  priceSub: { fontSize: 8, color: Colors.muted },
-  lockRow: { flexDirection: "row", alignItems: "center", gap: 6 },
-  lockTxt: { fontSize: 10, color: Colors.muted, flex: 1 },
-  buyRow: { flexDirection: "row", alignItems: "center", gap: Spacing.sm },
-  total: {
-    fontFamily: Typography.mono,
-    fontSize: 12,
-    fontWeight: "700",
-    flex: 1,
-  },
-  buyBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    paddingHorizontal: Spacing.md,
-    minHeight: MIN_TOUCH,
-    borderRadius: Radius.md,
-  },
-  buyTxt: { fontSize: 11, fontWeight: "700", color: Colors.textOnColor },
-  // Prominent error box — same pattern as AirportSheet
-  errorBox: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    backgroundColor: Palette.redSoft,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.red,
-    padding: Spacing.sm,
-  },
-  errorTxt: { flex: 1, fontSize: 11, color: Colors.red, fontWeight: "700" },
-});
-
-// ─────────────────────────────────────────────────────────────────
-// MAIN COMPONENT
-// ─────────────────────────────────────────────────────────────────
-
 export default function FleetSheet() {
-  const [activeTab, setActiveTab] = useState<"planes" | "store">("planes");
+  const [activeTab, setActiveTab] = useState<"fleet" | "buy">("fleet");
+  const [maintainingPlaneId, setMaintainingPlaneId] = useState<string | null>(
+    null,
+  );
+  const [maintenanceError, setMaintenanceError] = useState<string | null>(null);
 
   const ownedPlanes = useOwnedPlanes();
-  const planes = usePlanes();
+  const planeModels = usePlanes();
   const routes = useRoutes();
   const demands = useDemands();
+  const hubs = useHubs();
   const airline = useAirline();
   const cash = useCash();
-  const openSheet = useGameStore((s) => s.openSheet);
-  const closeSheet = useGameStore((s) => s.closeSheet);
-  const startCreation = useGameStore((s) => s.startRouteCreation);
-  const tabBarH = useTabBarHeight();
+  const openSheet = useGameStore((state) => state.openSheet);
+  const closeSheet = useGameStore((state) => state.closeSheet);
+  const startRouteCreation = useGameStore((state) => state.startRouteCreation);
+  const tabBarHeight = useTabBarHeight();
   const haptics = useHaptics();
-
-  const color = airline?.color ?? Colors.sky;
+  const maintenancePlane = useMaintenancePlane();
   const demandScore = airline?.demand_score ?? 0;
-
-  // ── Derived data ───────────────────────────────────────────────
+  const defaultPalette = getAirlinePalette("aviation-blue");
+  const fleetBrand: FleetBrand = {
+    name: airline?.name ?? "Your airline",
+    code: airline?.airline_code ?? "AIR",
+    logoId: airline?.logo_id ?? DEFAULT_AIRLINE_LOGO_ID,
+    primaryColor: airline?.color ?? defaultPalette.primary,
+    secondaryColor: airline?.secondary_color ?? defaultPalette.secondary,
+  };
 
   const planeRouteMap = useMemo(() => {
     const map = new Map<string, string>();
     routes
-      .filter((r) => r.active)
-      .forEach((r) => {
-        const via = r.via_iata ? ` → ${r.via_iata}` : "";
+      .filter((route) => route.active)
+      .forEach((route) => {
+        const stop = route.via_iata ? ` to ${route.via_iata} to` : " to";
         map.set(
-          r.plane.id,
-          `${r.demand.origin.iata}${via} → ${r.demand.dest.iata}`,
+          route.plane.id,
+          `${route.demand.origin.iata}${stop} ${route.demand.dest.iata}`,
         );
       });
     return map;
   }, [routes]);
 
-  const idlePlanes = ownedPlanes.filter((p) => !planeRouteMap.has(p.id));
-  const activePlanes = ownedPlanes.length - idlePlanes.length;
-
-  const waitingPax = useMemo(
+  const idlePlanes = useMemo(
     () =>
-      demands
-        .filter((d) => d.status === "pending")
-        .reduce(
-          (sum, d) =>
-            sum + Math.max(0, d.base_pax_day - (d.delivered_pax_today ?? 0)),
-          0,
+      ownedPlanes.filter(
+        (plane) => !plane.route_id && !planeRouteMap.has(plane.id),
+      ),
+    [ownedPlanes, planeRouteMap],
+  );
+  const activePlaneCount = ownedPlanes.length - idlePlanes.length;
+  const wornPlanes = useMemo(
+    () =>
+      ownedPlanes
+        .filter((plane) => (plane.condition ?? 100) <= 40)
+        .sort(
+          (first, second) =>
+            (first.condition ?? 100) - (second.condition ?? 100),
         ),
-    [demands],
+    [ownedPlanes],
   );
-  const totalCapacity = ownedPlanes.reduce(
-    (sum, p) => sum + p.plane_model.pax_capacity,
-    0,
-  );
-  const wornCount = ownedPlanes.filter(
-    (p) => (p.condition ?? 100) <= 40,
-  ).length;
+  const fleetDemandAdvice = useMemo(() => {
+    const capacityByDemand = new Map<string, number>();
+    const activeDemandIds = new Set<string>();
 
-  // Store tab: how many models are unlocked vs locked per family
-  const grouped = useMemo(() => {
-    const families = ["embraer", "bombardier", "boeing", "airbus"];
-    return families
-      .map((fam) => ({
-        family: fam,
-        label: FAMILY_LABEL[fam],
-        color: FAMILY_COLOR[fam],
-        planes: planes.filter((p) => p.family === fam),
-      }))
-      .filter((g) => g.planes.length > 0);
-  }, [planes]);
+    routes
+      .filter((route) => route.active)
+      .forEach((route) => {
+        activeDemandIds.add(route.demand.id);
+        capacityByDemand.set(
+          route.demand.id,
+          (capacityByDemand.get(route.demand.id) ?? 0) +
+            scheduledDailySeats(route),
+        );
+      });
 
-  const groupedOwned = useMemo(() => {
-    const map = new Map<string, { model: PlaneModel; planes: OwnedPlane[] }>();
-    ownedPlanes.forEach((p) => {
-      const key = p.plane_model.id;
-      if (!map.has(key)) map.set(key, { model: p.plane_model, planes: [] });
-      map.get(key)!.planes.push(p);
+    let seatGap = 0;
+    let marketsShort = 0;
+    let unservedMarkets = 0;
+
+    demands.forEach((demand) => {
+      if (!activeDemandIds.has(demand.id)) {
+        unservedMarkets += 1;
+        return;
+      }
+
+      const gap = Math.max(
+        0,
+        playerPassengerPool(demand) - (capacityByDemand.get(demand.id) ?? 0),
+      );
+      if (gap > 0) {
+        seatGap += gap;
+        marketsShort += 1;
+      }
     });
-    return Array.from(map.values());
+
+    return { marketsShort, seatGap, unservedMarkets };
+  }, [demands, routes]);
+
+  const assignmentTitle =
+    hubs.length === 0
+      ? "Build a hub first"
+      : fleetDemandAdvice.seatGap > 0
+        ? "Capacity needed"
+        : "Idle aircraft available";
+  const assignmentMessage =
+    hubs.length === 0
+      ? "Open the map and build a hub before assigning this aircraft."
+      : fleetDemandAdvice.seatGap > 0
+        ? `${fleetDemandAdvice.seatGap.toLocaleString()} more daily seats are needed across ${fleetDemandAdvice.marketsShort} market${fleetDemandAdvice.marketsShort === 1 ? "" : "s"}.`
+        : fleetDemandAdvice.unservedMarkets > 0
+          ? `${fleetDemandAdvice.unservedMarkets} route opportunit${fleetDemandAdvice.unservedMarkets === 1 ? "y is" : "ies are"} not yet served.`
+          : "Current routes have enough daily seats. Open another route when ready.";
+
+  const ownedGroups = useMemo(() => {
+    const groups = new Map<string, OwnedPlaneGroupData>();
+    ownedPlanes.forEach((plane) => {
+      const current = groups.get(plane.plane_model.id);
+      if (current) {
+        current.planes.push(plane);
+      } else {
+        groups.set(plane.plane_model.id, {
+          model: plane.plane_model,
+          planes: [plane],
+        });
+      }
+    });
+
+    return Array.from(groups.values()).sort((first, second) =>
+      first.model.nickname.localeCompare(second.model.nickname),
+    );
   }, [ownedPlanes]);
 
-  const maintenancePlane = useMaintenancePlane();
-  const handleMaintain = useCallback(
-    (id: string) => maintenancePlane(id),
-    [maintenancePlane],
+  const sortedModels = useMemo(
+    () =>
+      [...planeModels].sort((first, second) => {
+        const firstLocked =
+          first.unlock_demands > demandScore || first.unlock_cash > cash;
+        const secondLocked =
+          second.unlock_demands > demandScore || second.unlock_cash > cash;
+        if (firstLocked !== secondLocked) return firstLocked ? 1 : -1;
+        if (first.price !== second.price) return first.price - second.price;
+        return first.nickname.localeCompare(second.nickname);
+      }),
+    [cash, demandScore, planeModels],
   );
+
   const handleAssign = useCallback(() => {
     haptics.confirm();
     closeSheet();
-    setTimeout(() => startCreation(), 120);
-  }, [haptics, closeSheet, startCreation]);
+    if (hubs.length > 0) {
+      setTimeout(() => startRouteCreation(), 120);
+    }
+  }, [closeSheet, haptics, hubs.length, startRouteCreation]);
 
-  // ── Render ────────────────────────────────────────────────────
+  const handleMaintain = useCallback(
+    async (plane: OwnedPlane) => {
+      if (maintainingPlaneId) return;
+      haptics.confirm();
+      setMaintainingPlaneId(plane.id);
+      setMaintenanceError(null);
+
+      try {
+        const result = await maintenancePlane(plane.id);
+        if (result.error) {
+          setMaintenanceError(result.error);
+          haptics.error();
+          return;
+        }
+        haptics.success();
+      } catch {
+        setMaintenanceError("Unable to service this aircraft. Try again.");
+        haptics.error();
+      } finally {
+        setMaintainingPlaneId(null);
+      }
+    },
+    [haptics, maintainingPlaneId, maintenancePlane],
+  );
 
   return (
     <BottomSheetScrollView
-      style={s.root}
+      style={styles.root}
       contentContainerStyle={[
-        s.content,
-        { paddingBottom: tabBarH + Spacing.xxl },
+        styles.content,
+        { paddingBottom: tabBarHeight + Spacing.xxl },
       ]}
       showsVerticalScrollIndicator={false}
     >
-      {/* ── Header ── */}
-      <View style={s.header}>
-        <View
-          style={[
-            s.headerMark,
-            { borderColor: color, backgroundColor: color + "14" },
-          ]}
-        >
-          <Ionicons name="airplane-outline" size={21} color={color} />
-        </View>
-        <View style={s.headerCopy}>
-          <Text style={s.kicker}>AIRCRAFT CONTROL</Text>
-          <Text style={s.title}>Fleet Operations</Text>
-          <Text style={s.subtitle} numberOfLines={1}>
-            {ownedPlanes.length} aircraft · {activePlanes} flying ·{" "}
+      <View style={styles.header}>
+        <View style={styles.headerCopy}>
+          <Text style={styles.title}>Fleet</Text>
+          <Text style={styles.subtitle}>
+            {ownedPlanes.length} aircraft · {activePlaneCount} flying ·{" "}
             {idlePlanes.length} idle
           </Text>
         </View>
         <TouchableOpacity
-          accessibilityLabel="Close fleet operations"
+          accessibilityLabel="Close fleet"
           accessibilityRole="button"
+          activeOpacity={0.7}
           onPress={closeSheet}
-          style={s.closeButton}
+          style={styles.closeButton}
         >
           <Ionicons name="close" size={22} color={Colors.text} />
         </TouchableOpacity>
       </View>
 
-      {/* ── Segmented control ── */}
-      <View style={s.segWrap}>
-        {(["planes", "store"] as const).map((tab) => (
-          <TouchableOpacity
-            key={tab}
-            accessibilityRole="tab"
-            accessibilityState={{ selected: activeTab === tab }}
-            style={[s.seg, activeTab === tab && s.segActive]}
-            onPress={() => setActiveTab(tab)}
-            activeOpacity={0.8}
-          >
-            <Ionicons
-              name={
-                tab === "planes" ? "airplane-outline" : "storefront-outline"
-              }
-              size={15}
-              color={activeTab === tab ? Colors.textOnColor : Colors.muted}
-            />
-            <Text style={[s.segTxt, activeTab === tab && s.segTxtActive]}>
-              {tab === "planes" ? "My Fleet" : "Buy Aircraft"}
-            </Text>
-          </TouchableOpacity>
-        ))}
+      <View accessibilityRole="tablist" style={styles.tabs}>
+        {(["fleet", "buy"] as const).map((tab) => {
+          const selected = tab === activeTab;
+          return (
+            <TouchableOpacity
+              key={tab}
+              accessibilityRole="tab"
+              accessibilityState={{ selected }}
+              activeOpacity={0.7}
+              onPress={() => {
+                haptics.tap();
+                setActiveTab(tab);
+              }}
+              style={[styles.tab, selected && styles.tabSelected]}
+            >
+              <Text
+                style={[styles.tabText, selected && styles.tabTextSelected]}
+              >
+                {tab === "fleet" ? "My fleet" : "Buy aircraft"}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
       </View>
 
-      {/* ── Stat bar — tab-aware ── */}
-      {activeTab === "planes" ? (
-        // My Planes: fleet health stats
-        <View style={s.statBar}>
-          <View style={s.stat}>
-            <Text style={s.statVal}>{activePlanes}</Text>
-            <Text style={s.statLbl}>FLYING</Text>
-          </View>
-          <View style={s.statDivider} />
-          <View style={s.stat}>
-            <Text
-              style={[
-                s.statVal,
-                { color: idlePlanes.length > 0 ? Colors.amber : Colors.green },
-              ]}
-            >
-              {idlePlanes.length}
-            </Text>
-            <Text style={s.statLbl}>IDLE</Text>
-          </View>
-          <View style={s.statDivider} />
-          <View style={s.stat}>
-            <Text style={[s.statVal, { color: Colors.green }]}>
-              {totalCapacity.toLocaleString()}
-            </Text>
-            <Text style={s.statLbl}>SEATS</Text>
-          </View>
-          <View style={s.statDivider} />
-          <View style={s.stat}>
-            <Text
-              style={[
-                s.statVal,
-                { color: wornCount > 0 ? Colors.red : Colors.text },
-              ]}
-            >
-              {wornCount}
-            </Text>
-            <Text style={s.statLbl}>SERVICE</Text>
-          </View>
-        </View>
-      ) : (
-        // Store: cash + unlock progress
-        <View style={s.statBar}>
-          <View style={[s.stat, { flex: 1.4 }]}>
-            <Text style={[s.statVal, { color: Colors.green }]}>
-              {fmtCash(cash)}
-            </Text>
-            <Text style={s.statLbl}>AVAILABLE FUNDS</Text>
-          </View>
-          <View style={s.statDivider} />
-          <View style={s.stat}>
-            <Text style={[s.statVal, { color: Colors.skyDark }]}>
-              {demandScore}
-            </Text>
-            <Text style={s.statLbl}>ROUTES OPEN</Text>
-          </View>
-        </View>
-      )}
-
-      {/* ══════════════════════════════════════════════════════════
-          MY PLANES TAB
-          ══════════════════════════════════════════════════════════ */}
-      {activeTab === "planes" && (
+      {activeTab === "fleet" ? (
         <>
+          <FleetSummary
+            active={activePlaneCount}
+            idle={idlePlanes.length}
+            maintenance={wornPlanes.length}
+          />
+
           {ownedPlanes.length === 0 ? (
-            <View style={s.emptyState}>
-              <Ionicons name="airplane-outline" size={48} color={Colors.dim} />
-              <Text style={s.emptyTitle}>No planes yet</Text>
-              <Text style={s.emptySub}>
-                Go to the Store tab to buy your first aircraft.
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyTitle}>No aircraft owned</Text>
+              <Text style={styles.emptyText}>
+                Buy one aircraft, then assign it to a route from one of your
+                hubs.
               </Text>
               <TouchableOpacity
                 accessibilityRole="button"
-                style={s.emptyBtn}
-                onPress={() => setActiveTab("store")}
-                activeOpacity={0.8}
+                activeOpacity={0.7}
+                onPress={() => setActiveTab("buy")}
+                style={styles.primaryButton}
               >
-                <Ionicons
-                  name="storefront-outline"
-                  size={16}
-                  color={Colors.textOnColor}
-                />
-                <Text style={s.emptyBtnTxt}>Browse aircraft</Text>
+                <Text style={styles.primaryButtonText}>Buy an aircraft</Text>
               </TouchableOpacity>
             </View>
           ) : (
             <>
-              {/* ── Idle assign banner — urgent styling ── */}
-              {idlePlanes.length > 0 && waitingPax > 0 && (
-                <TouchableOpacity
-                  accessibilityHint="Starts route creation"
-                  accessibilityLabel={`Assign ${idlePlanes.length} idle aircraft. ${waitingPax} passengers are waiting.`}
-                  accessibilityRole="button"
-                  style={s.assignBanner}
-                  onPress={handleAssign}
-                  activeOpacity={0.84}
-                >
-                  <View style={s.assignIconWrap}>
-                    <Ionicons
-                      name="navigate-outline"
-                      size={18}
-                      color={Colors.textOnColor}
-                    />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={s.assignTitle}>Put idle aircraft to work</Text>
-                    <Text style={s.assignSub}>
-                      {waitingPax.toLocaleString()} passengers waiting — tap to
-                      assign
-                    </Text>
-                  </View>
-                  <Ionicons
-                    name="chevron-forward"
-                    size={18}
-                    color={Colors.sky}
-                  />
-                </TouchableOpacity>
-              )}
-
-              {/* ── Worn planes — named component, shows route context ── */}
-              <WornPlanesSection
-                ownedPlanes={ownedPlanes}
-                planeRouteMap={planeRouteMap}
-                onMaintain={handleMaintain}
-              />
-
-              {/* ── Fleet grouped by model ── */}
-              <Text style={s.eyebrow}>OWNED AIRCRAFT</Text>
-              <View style={s.section}>
-                {groupedOwned.map((group) => (
-                  <OwnedPlaneGroup
-                    key={group.model.id}
-                    group={group}
-                    planeRouteMap={planeRouteMap}
-                    onTap={() =>
-                      openSheet("manage-planes", undefined, undefined, group)
+              {idlePlanes.length > 0 ? (
+                <View style={styles.actionSection}>
+                  <TouchableOpacity
+                    accessibilityHint={
+                      hubs.length === 0
+                        ? "Returns to the map so you can build a hub"
+                        : "Starts route planning"
                     }
-                    onClose={closeSheet}
+                    accessibilityLabel={
+                      hubs.length === 0
+                        ? "Open the map to build a hub"
+                        : `Plan a route for ${idlePlanes.length} idle aircraft`
+                    }
+                    accessibilityRole="button"
+                    activeOpacity={0.7}
+                    onPress={handleAssign}
+                    style={styles.assignAction}
+                  >
+                    <View style={styles.assignCopy}>
+                      <Text style={styles.assignTitle}>{assignmentTitle}</Text>
+                      <Text style={styles.assignMessage}>
+                        {assignmentMessage}
+                      </Text>
+                    </View>
+                    <Text style={styles.assignLink}>
+                      {hubs.length === 0 ? "Open map" : "Plan route"}
+                    </Text>
+                    <Ionicons
+                      name="chevron-forward"
+                      size={17}
+                      color={Colors.skyDark}
+                    />
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+
+              {maintenanceError ? (
+                <View style={styles.noticeContainer}>
+                  <InlineNotice
+                    kind="error"
+                    title="Aircraft not serviced"
+                    message={maintenanceError}
                   />
-                ))}
+                </View>
+              ) : null}
+
+              {wornPlanes.length > 0 ? (
+                <View style={styles.section}>
+                  <SectionHeader
+                    title="Maintenance"
+                    detail={`${wornPlanes.length} need service`}
+                  />
+                  <View style={styles.flatList}>
+                    {wornPlanes.map((plane) => (
+                      <MaintenanceRow
+                        key={plane.id}
+                        brand={fleetBrand}
+                        loading={maintainingPlaneId === plane.id}
+                        onMaintain={() => handleMaintain(plane)}
+                        plane={plane}
+                        routeLabel={planeRouteMap.get(plane.id) ?? null}
+                      />
+                    ))}
+                  </View>
+                </View>
+              ) : null}
+
+              <View style={styles.section}>
+                <SectionHeader
+                  title="Owned aircraft"
+                  detail={`${ownedGroups.length} model${ownedGroups.length === 1 ? "" : "s"}`}
+                />
+                <View style={styles.flatList}>
+                  {ownedGroups.map((group) => (
+                    <OwnedPlaneGroup
+                      key={group.model.id}
+                      brand={fleetBrand}
+                      group={group}
+                      onPress={() => {
+                        closeSheet();
+                        setTimeout(
+                          () =>
+                            openSheet(
+                              "manage-planes",
+                              undefined,
+                              undefined,
+                              group,
+                            ),
+                          120,
+                        );
+                      }}
+                      planeRouteMap={planeRouteMap}
+                    />
+                  ))}
+                </View>
               </View>
             </>
           )}
         </>
-      )}
-
-      {/* ══════════════════════════════════════════════════════════
-          STORE TAB
-          — family headers show available/locked count
-          ══════════════════════════════════════════════════════════ */}
-      {activeTab === "store" && (
+      ) : (
         <>
-          <Text style={s.eyebrow}>AIRCRAFT MARKET</Text>
-          <Text style={s.eyebrowSub}>
-            Serve more routes to unlock larger aircraft
-          </Text>
+          <View style={styles.purchaseSummary}>
+            <View>
+              <Text style={styles.purchaseSummaryLabel}>Available cash</Text>
+              <Text style={styles.purchaseSummaryValue}>{fmtCash(cash)}</Text>
+            </View>
+            <View style={styles.purchaseSummaryRight}>
+              <Text style={styles.purchaseSummaryLabel}>Routes opened</Text>
+              <Text style={styles.purchaseSummaryValue}>{demandScore}</Text>
+            </View>
+          </View>
 
-          {grouped.map(({ family, label, color: fc, planes: familyPlanes }) => {
-            const unlockedCount = familyPlanes.filter(
-              (p) =>
-                !(p.unlock_demands > 0 && demandScore < p.unlock_demands) &&
-                !(p.unlock_cash > 0 && cash < p.unlock_cash),
-            ).length;
-            const lockedCount = familyPlanes.length - unlockedCount;
+          <View style={styles.storeIntro}>
+            <Text style={styles.storeIntroTitle}>Choose one aircraft</Text>
+            <Text style={styles.storeIntroText}>
+              Range must cover the longest route leg. Seats, speed, and route
+              distance determine daily capacity.
+            </Text>
+          </View>
 
-            return (
-              <View key={family} style={s.section}>
-                {/* Family header with count context */}
-                <View style={s.familyHeader}>
-                  <View style={[s.familyDot, { backgroundColor: fc }]} />
-                  <Text style={[s.familyLabel, { color: fc }]}>{label}</Text>
-                  <Text style={s.familyCount}>
-                    {unlockedCount} available
-                    {lockedCount > 0 ? ` · ${lockedCount} locked` : ""}
-                  </Text>
-                </View>
-
-                {familyPlanes.map((model) => (
-                  <PlaneCard
-                    key={model.id}
-                    model={model}
-                    demandScore={demandScore}
-                    cash={cash}
-                  />
-                ))}
-              </View>
-            );
-          })}
+          <View style={styles.storeList}>
+            {sortedModels.map((model) => (
+              <PlaneStoreRow
+                key={model.id}
+                cash={cash}
+                demandScore={demandScore}
+                model={model}
+              />
+            ))}
+          </View>
         </>
       )}
-
-      <View style={{ height: 36 }} />
     </BottomSheetScrollView>
   );
 }
 
-// ─────────────────────────────────────────────────────────────────
-// STYLES
-// ─────────────────────────────────────────────────────────────────
-
-const s = StyleSheet.create({
+const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: Colors.surface },
-  content: { paddingTop: Spacing.sm },
-
+  content: { backgroundColor: Colors.surface },
   header: {
+    minHeight: 64,
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: Spacing.lg,
-    paddingBottom: Spacing.md,
     gap: Spacing.md,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
   },
-  headerMark: {
-    width: MIN_TOUCH,
-    height: MIN_TOUCH,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  headerCopy: { flex: 1 },
-  kicker: {
-    color: Colors.skyDark,
-    fontFamily: Typography.mono,
-    fontSize: 8,
-    letterSpacing: 1.4,
-  },
+  headerCopy: { flex: 1, minWidth: 0 },
   title: {
-    fontFamily: Typography.display,
-    fontSize: 28,
-    lineHeight: 31,
-    letterSpacing: 0.4,
     color: Colors.text,
+    fontSize: Typography.size.title,
+    lineHeight: Typography.lineHeight.title,
+    fontWeight: Typography.weight.bold,
   },
-  subtitle: { fontSize: 11, color: Colors.muted },
+  subtitle: {
+    color: Colors.muted,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
+  },
   closeButton: {
     width: MIN_TOUCH,
     height: MIN_TOUCH,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.inset,
     alignItems: "center",
     justifyContent: "center",
-  },
-
-  segWrap: {
-    flexDirection: "row",
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.md,
-    padding: Spacing.xs,
-    gap: Spacing.xs,
-    borderRadius: Radius.lg,
-    backgroundColor: Colors.inset,
-  },
-  seg: {
-    flex: 1,
-    minHeight: MIN_TOUCH,
-    flexDirection: "row",
-    justifyContent: "center",
-    alignItems: "center",
-    gap: Spacing.sm,
     borderRadius: Radius.md,
   },
-  segActive: { backgroundColor: Colors.sky, ...Shadow.card },
-  segTxt: { fontSize: 12, fontWeight: "700", color: Colors.muted },
-  segTxtActive: { color: Colors.textOnColor },
-
-  // Stat bar — with hairline dividers
-  statBar: {
+  tabs: {
+    minHeight: MIN_TOUCH,
+    flexDirection: "row",
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  tab: {
+    flex: 1,
+    minHeight: MIN_TOUCH,
+    alignItems: "center",
+    justifyContent: "center",
+    borderBottomWidth: 3,
+    borderBottomColor: "transparent",
+  },
+  tabSelected: { borderBottomColor: Colors.sky },
+  tabText: {
+    color: Colors.muted,
+    fontSize: Typography.size.label,
+    fontWeight: Typography.weight.semibold,
+  },
+  tabTextSelected: { color: Colors.skyDark },
+  summary: {
+    minHeight: 68,
     flexDirection: "row",
     marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.md,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.panel,
-    overflow: "hidden",
-    ...Shadow.card,
+    marginTop: Spacing.lg,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: Colors.borderSection,
   },
-  stat: {
+  summaryItem: {
     flex: 1,
     alignItems: "center",
-    paddingVertical: Spacing.sm + 2,
-    gap: 2,
+    justifyContent: "center",
+    paddingVertical: Spacing.sm,
   },
-  statVal: {
+  summaryDivider: {
+    width: StyleSheet.hairlineWidth,
+    marginVertical: Spacing.sm,
+    backgroundColor: Colors.border,
+  },
+  summaryValue: {
+    color: Colors.text,
     fontFamily: Typography.mono,
     fontSize: 16,
-    fontWeight: "700",
-    color: Colors.text,
+    lineHeight: 20,
+    fontWeight: Typography.weight.bold,
   },
-  statLbl: {
-    fontSize: 8,
+  summaryLabel: { color: Colors.muted, fontSize: 10, lineHeight: 14 },
+  actionSection: {
+    marginHorizontal: Spacing.lg,
+    paddingTop: Spacing.lg,
+  },
+  assignAction: {
+    minHeight: 66,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+    paddingVertical: Spacing.sm,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: Colors.borderSection,
+  },
+  assignCopy: { flex: 1 },
+  assignTitle: {
+    color: Colors.text,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+    fontWeight: Typography.weight.semibold,
+  },
+  assignMessage: {
+    color: Colors.muted,
+    fontSize: Typography.size.caption,
+    lineHeight: 17,
+    marginTop: Spacing.xxs,
+  },
+  assignLink: {
+    color: Colors.skyDark,
+    fontSize: Typography.size.label,
+    fontWeight: Typography.weight.semibold,
+  },
+  section: { marginHorizontal: Spacing.lg, paddingTop: Spacing.xl },
+  sectionHeader: {
+    minHeight: 32,
+    flexDirection: "row",
+    alignItems: "baseline",
+    justifyContent: "space-between",
+    gap: Spacing.md,
+  },
+  sectionTitle: {
+    flex: 1,
+    color: Colors.text,
+    fontSize: 16,
+    lineHeight: 21,
+    fontWeight: Typography.weight.bold,
+  },
+  sectionDetail: {
     color: Colors.muted,
     fontFamily: Typography.mono,
-    letterSpacing: 0.5,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
   },
-  statDivider: {
-    width: StyleSheet.hairlineWidth,
-    backgroundColor: Colors.border,
-    alignSelf: "stretch",
+  flatList: {
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: Colors.borderSection,
   },
-
-  // Idle assign banner — urgent, airline color
-  assignBanner: {
+  ownedRow: {
+    minHeight: 76,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+    paddingVertical: Spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+  },
+  ownedCopy: { flex: 1, minWidth: 0 },
+  ownedTitleRow: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    gap: Spacing.sm,
+  },
+  ownedName: {
+    flexShrink: 1,
+    color: Colors.text,
+    fontSize: 14,
+    lineHeight: 19,
+    fontWeight: Typography.weight.semibold,
+  },
+  ownedCount: {
+    color: Colors.muted,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.caption,
+  },
+  ownedSpecs: {
+    color: Colors.muted,
+    fontSize: Typography.size.caption,
+    lineHeight: 17,
+    marginTop: Spacing.xxs,
+  },
+  ownedStatus: {
+    color: Colors.muted,
+    fontSize: 10,
+    lineHeight: 14,
+    marginTop: Spacing.xxs,
+  },
+  manageText: {
+    color: Colors.skyDark,
+    fontSize: Typography.size.label,
+    fontWeight: Typography.weight.semibold,
+  },
+  maintenanceRow: {
+    minHeight: 78,
     flexDirection: "row",
     alignItems: "center",
     gap: Spacing.md,
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.md,
-    padding: Spacing.md,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.borderHi,
-    backgroundColor: Colors.panel,
-    ...Shadow.card,
-  },
-  assignIconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: Radius.md,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: Colors.sky,
-  },
-  assignTitle: { fontSize: 13, fontWeight: "700", color: Colors.text },
-  assignSub: { fontSize: 11, color: Colors.muted, marginTop: 2 },
-
-  eyebrow: {
-    fontSize: 9,
-    color: Colors.skyDark,
-    fontFamily: Typography.mono,
-    letterSpacing: 2.5,
-    fontWeight: "700",
-    paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.lg,
-    paddingBottom: Spacing.xs,
-  },
-  eyebrowSub: {
-    fontSize: 11,
-    color: Colors.muted,
-    paddingHorizontal: Spacing.lg,
-    marginBottom: Spacing.sm,
-  },
-
-  section: { paddingHorizontal: Spacing.lg },
-
-  familyHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    marginBottom: Spacing.sm,
-  },
-  familyDot: { width: 8, height: 8, borderRadius: 4 },
-  familyLabel: { fontSize: 12, fontWeight: "700" },
-  familyCount: {
-    fontSize: 10,
-    color: Colors.muted,
-    fontWeight: "600",
-    marginLeft: "auto",
-  },
-
-  emptyState: {
-    alignItems: "center",
-    gap: Spacing.sm,
-    paddingVertical: Spacing.xxl ?? 40,
-    paddingHorizontal: Spacing.xl,
-  },
-  emptyTitle: { fontSize: 16, fontWeight: "700", color: Colors.text },
-  emptySub: {
-    fontSize: 13,
-    color: Colors.muted,
-    textAlign: "center",
-    lineHeight: 19,
-  },
-  emptyBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.sm,
-    borderRadius: Radius.lg,
-    backgroundColor: Colors.sky,
     paddingVertical: Spacing.sm,
-    paddingHorizontal: Spacing.lg,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+  },
+  maintenanceCopy: { flex: 1, minWidth: 0 },
+  maintenanceName: {
+    color: Colors.text,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+    fontWeight: Typography.weight.semibold,
+  },
+  maintenanceRoute: {
+    color: Colors.muted,
+    fontSize: 10,
+    lineHeight: 14,
+    marginTop: Spacing.xxs,
+  },
+  conditionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
     marginTop: Spacing.sm,
   },
-  emptyBtnTxt: {
-    fontSize: 12,
-    fontWeight: "700",
+  conditionTrack: {
+    flex: 1,
+    height: 3,
+    overflow: "hidden",
+    backgroundColor: Colors.inset,
+  },
+  conditionFill: { height: 3 },
+  conditionValue: {
+    minWidth: 34,
+    fontFamily: Typography.mono,
+    fontSize: 10,
+    textAlign: "right",
+  },
+  maintenanceButton: {
+    minWidth: 82,
+    minHeight: MIN_TOUCH,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: Spacing.sm,
+    borderWidth: 1,
+    borderColor: Colors.borderSection,
+    borderRadius: Radius.md,
+  },
+  maintenanceButtonText: {
+    color: Colors.skyDark,
+    fontSize: Typography.size.label,
+    fontWeight: Typography.weight.semibold,
+  },
+  maintenanceCost: {
+    color: Colors.muted,
+    fontFamily: Typography.mono,
+    fontSize: 9,
+    marginTop: 2,
+  },
+  noticeContainer: {
+    marginHorizontal: Spacing.lg,
+    paddingTop: Spacing.lg,
+  },
+  notice: {
+    minHeight: 58,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: Spacing.sm,
+    paddingVertical: Spacing.md,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: Colors.borderSection,
+  },
+  noticeCopy: { flex: 1 },
+  noticeTitle: {
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+    fontWeight: Typography.weight.semibold,
+  },
+  noticeMessage: {
+    color: Colors.muted,
+    fontSize: Typography.size.caption,
+    lineHeight: 17,
+    marginTop: Spacing.xxs,
+  },
+  emptyState: {
+    alignItems: "flex-start",
+    marginHorizontal: Spacing.lg,
+    marginTop: Spacing.xl,
+    paddingVertical: Spacing.xl,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: Colors.borderSection,
+  },
+  emptyTitle: {
+    color: Colors.text,
+    fontSize: Typography.size.body,
+    lineHeight: Typography.lineHeight.body,
+    fontWeight: Typography.weight.bold,
+  },
+  emptyText: {
+    maxWidth: 330,
+    color: Colors.muted,
+    fontSize: Typography.size.label,
+    lineHeight: 19,
+    marginTop: Spacing.xs,
+  },
+  primaryButton: {
+    minHeight: MIN_TOUCH,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: Spacing.lg,
+    paddingHorizontal: Spacing.lg,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.sky,
+  },
+  primaryButtonText: {
     color: Colors.textOnColor,
+    fontSize: Typography.size.label,
+    fontWeight: Typography.weight.semibold,
+  },
+  purchaseSummary: {
+    minHeight: 66,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: Spacing.lg,
+    marginHorizontal: Spacing.lg,
+    marginTop: Spacing.lg,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: Colors.borderSection,
+  },
+  purchaseSummaryRight: { alignItems: "flex-end" },
+  purchaseSummaryLabel: {
+    color: Colors.muted,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
+  },
+  purchaseSummaryValue: {
+    color: Colors.text,
+    fontFamily: Typography.mono,
+    fontSize: 16,
+    lineHeight: 21,
+    fontWeight: Typography.weight.bold,
+  },
+  storeIntro: {
+    marginHorizontal: Spacing.lg,
+    paddingTop: Spacing.xl,
+    paddingBottom: Spacing.md,
+  },
+  storeIntroTitle: {
+    color: Colors.text,
+    fontSize: 16,
+    lineHeight: 21,
+    fontWeight: Typography.weight.bold,
+  },
+  storeIntroText: {
+    color: Colors.muted,
+    fontSize: Typography.size.caption,
+    lineHeight: 17,
+    marginTop: Spacing.xs,
+  },
+  storeList: {
+    marginHorizontal: Spacing.lg,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: Colors.borderSection,
+  },
+  storeRow: {
+    paddingVertical: Spacing.lg,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+  },
+  storeRowLocked: { opacity: 0.62 },
+  storeTop: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: Spacing.md,
+  },
+  storeIdentity: { flex: 1, minWidth: 0 },
+  storeFamily: { color: Colors.muted, fontSize: 10, lineHeight: 14 },
+  storeName: {
+    color: Colors.text,
+    fontSize: 14,
+    lineHeight: 19,
+    fontWeight: Typography.weight.semibold,
+  },
+  storeSpecs: {
+    color: Colors.muted,
+    fontSize: Typography.size.caption,
+    lineHeight: 17,
+    marginTop: Spacing.xxs,
+  },
+  storePriceBlock: { alignItems: "flex-end", flexShrink: 0 },
+  storePrice: {
+    fontFamily: Typography.mono,
+    fontSize: 15,
+    lineHeight: 19,
+    fontWeight: Typography.weight.bold,
+  },
+  storePriceLabel: { color: Colors.muted, fontSize: 9, lineHeight: 13 },
+  lockRow: {
+    minHeight: MIN_TOUCH,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+    marginTop: Spacing.sm,
+  },
+  lockText: {
+    flex: 1,
+    color: Colors.muted,
+    fontSize: Typography.size.caption,
+    lineHeight: 17,
+  },
+  purchaseRow: {
+    minHeight: MIN_TOUCH,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.md,
+    marginTop: Spacing.sm,
+  },
+  purchaseHelp: {
+    flex: 1,
+    color: Colors.muted,
+    fontSize: Typography.size.caption,
+    lineHeight: 17,
+  },
+  buyButton: {
+    minWidth: 112,
+    minHeight: MIN_TOUCH,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: Spacing.md,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.sky,
+  },
+  buyButtonDisabled: { backgroundColor: Colors.inset },
+  buyButtonText: {
+    color: Colors.textOnColor,
+    fontSize: Typography.size.label,
+    fontWeight: Typography.weight.semibold,
+  },
+  buyButtonTextDisabled: { color: Colors.muted },
+  rowError: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: Spacing.sm,
+    paddingTop: Spacing.sm,
+  },
+  rowErrorText: {
+    flex: 1,
+    color: Colors.red,
+    fontSize: Typography.size.caption,
+    lineHeight: 17,
   },
 });

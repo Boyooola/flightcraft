@@ -1,16 +1,11 @@
 /**
- * Shared animated decision dialog for notices, confirmations, and warnings.
+ * Shared action sheet for notices, confirmations, and permanent actions.
+ *
+ * Callers supply the exact consequence and button wording. This component
+ * keeps the visual hierarchy and dismissal behavior consistent everywhere.
  */
 
-import {
-  Colors,
-  MIN_TOUCH,
-  Palette,
-  Radius,
-  Shadow,
-  Spacing,
-  Typography,
-} from "@/constants/theme";
+import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import { Ionicons } from "@expo/vector-icons";
 import {
   forwardRef,
@@ -20,14 +15,14 @@ import {
   useState,
 } from "react";
 import {
-  Animated,
   Modal,
+  Pressable,
+  ScrollView,
   StyleSheet,
   Text,
-  TouchableOpacity,
-  TouchableWithoutFeedback,
   View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 export interface GameAlertButton {
   label: string;
@@ -47,110 +42,65 @@ export interface GameAlertHandle {
   hide: () => void;
 }
 
-const ANIMATION_MS = 220;
+type ButtonAppearance = "primary" | "secondary" | "destructive";
 
-function getAlertTone(primary?: GameAlertButton) {
-  const destructive = primary?.style === "destructive";
+function buttonAppearance(
+  button: GameAlertButton,
+  buttonCount: number,
+): ButtonAppearance {
+  if (button.style === "destructive") return "destructive";
+  if (button.style === "cancel" && buttonCount > 1) return "secondary";
+  return "primary";
+}
 
-  return {
-    destructive,
-    accent: destructive ? Colors.red : Colors.sky,
-    surface: destructive ? Palette.redSoft : Palette.blueSoft,
-    eyebrow: destructive ? "PERMANENT ACTION" : "FLIGHTCRAFT NOTICE",
-  };
+function isWarningIcon(icon?: string) {
+  if (!icon) return false;
+  return ["warning", "alert", "trash", "close-circle"].some((name) =>
+    icon.includes(name),
+  );
+}
+
+function alertType(
+  destructive: boolean,
+  warning: boolean,
+  buttonCount: number,
+) {
+  if (destructive) return "Permanent action";
+  if (warning) return "Warning";
+  if (buttonCount > 1) return "Confirmation";
+  return "FlightCraft notice";
 }
 
 export const GameAlert = forwardRef<GameAlertHandle>((_, ref) => {
+  const insets = useSafeAreaInsets();
   const [visible, setVisible] = useState(false);
   const [config, setConfig] = useState<GameAlertConfig | null>(null);
-  const translateY = useRef(new Animated.Value(80)).current;
-  const opacity = useRef(new Animated.Value(0)).current;
-  const scale = useRef(new Animated.Value(0.97)).current;
-  const closingRef = useRef(false);
 
-  const show = useCallback(
-    (nextConfig: GameAlertConfig) => {
-      closingRef.current = false;
-      translateY.stopAnimation();
-      opacity.stopAnimation();
-      scale.stopAnimation();
+  const show = useCallback((nextConfig: GameAlertConfig) => {
+    setConfig(nextConfig);
+    setVisible(true);
+  }, []);
 
-      setConfig(nextConfig);
-      setVisible(true);
-      translateY.setValue(80);
-      opacity.setValue(0);
-      scale.setValue(0.97);
-
-      Animated.parallel([
-        Animated.spring(translateY, {
-          toValue: 0,
-          friction: 8,
-          tension: 85,
-          useNativeDriver: true,
-        }),
-        Animated.spring(scale, {
-          toValue: 1,
-          friction: 8,
-          tension: 90,
-          useNativeDriver: true,
-        }),
-        Animated.timing(opacity, {
-          toValue: 1,
-          duration: ANIMATION_MS,
-          useNativeDriver: true,
-        }),
-      ]).start();
-    },
-    [opacity, scale, translateY],
-  );
-
-  const hide = useCallback(
-    (onDone?: () => void) => {
-      if (closingRef.current) return;
-      closingRef.current = true;
-
-      Animated.parallel([
-        Animated.timing(translateY, {
-          toValue: 60,
-          duration: ANIMATION_MS,
-          useNativeDriver: true,
-        }),
-        Animated.timing(scale, {
-          toValue: 0.97,
-          duration: ANIMATION_MS,
-          useNativeDriver: true,
-        }),
-        Animated.timing(opacity, {
-          toValue: 0,
-          duration: ANIMATION_MS,
-          useNativeDriver: true,
-        }),
-      ]).start(({ finished }) => {
-        if (!finished) return;
-        setVisible(false);
-        setConfig(null);
-        closingRef.current = false;
-        onDone?.();
-      });
-    },
-    [opacity, scale, translateY],
-  );
+  const hide = useCallback(() => {
+    setVisible(false);
+    setConfig(null);
+  }, []);
 
   useImperativeHandle(ref, () => ({ show, hide }), [hide, show]);
 
   if (!visible || !config) return null;
 
-  const primary =
-    config.buttons.find((button) => button.style === "destructive") ??
-    config.buttons.find((button) => button.style === "default");
   const cancel = config.buttons.find((button) => button.style === "cancel");
-  const secondaryButtons = config.buttons.filter(
-    (button) => button !== primary && button !== cancel,
+  const destructive = config.buttons.some(
+    (button) => button.style === "destructive",
   );
-  const tone = getAlertTone(primary);
+  const warning = destructive || isWarningIcon(config.icon);
+  const typeLabel = alertType(destructive, warning, config.buttons.length);
+  const iconColor = warning ? Colors.red : Colors.skyDark;
 
   const handleButton = (button: GameAlertButton) => {
-    hide(() => button.onPress?.());
+    hide();
+    button.onPress?.();
   };
 
   const handleDismiss = () => {
@@ -165,103 +115,112 @@ export const GameAlert = forwardRef<GameAlertHandle>((_, ref) => {
       statusBarTranslucent
       onRequestClose={handleDismiss}
     >
-      <TouchableWithoutFeedback onPress={handleDismiss}>
-        <Animated.View style={[styles.backdrop, { opacity }]} />
-      </TouchableWithoutFeedback>
+      <View style={styles.modalRoot}>
+        <Pressable
+          accessibilityLabel={cancel ? "Dismiss dialog" : undefined}
+          accessibilityRole={cancel ? "button" : undefined}
+          disabled={!cancel}
+          onPress={handleDismiss}
+          style={styles.backdrop}
+        />
 
-      <Animated.View
-        pointerEvents="box-none"
-        style={[
-          styles.positioner,
-          {
-            opacity,
-            transform: [{ translateY }, { scale }],
-          },
-        ]}
-      >
         <View
+          accessibilityLabel={`${typeLabel}. ${config.title}. ${config.message}`}
           accessibilityViewIsModal
-          style={[styles.card, { borderTopColor: tone.accent }]}
+          accessibilityRole="alert"
+          style={[
+            styles.sheet,
+            { paddingBottom: Math.max(insets.bottom, Spacing.lg) },
+          ]}
         >
-          <View style={styles.heading}>
-            <View style={[styles.icon, { backgroundColor: tone.surface }]}>
-              <Ionicons
-                name={(config.icon ?? "information-circle-outline") as any}
-                size={24}
-                color={tone.accent}
-              />
-            </View>
-
-            <View style={styles.headingCopy}>
-              <Text style={[styles.eyebrow, { color: tone.accent }]}>
-                {tone.eyebrow}
-              </Text>
-              <Text style={styles.title}>{config.title}</Text>
-            </View>
-          </View>
-
-          <Text style={styles.message}>{config.message}</Text>
-
-          <View style={styles.actions}>
-            {primary && (
-              <TouchableOpacity
-                accessibilityLabel={primary.label}
-                accessibilityRole="button"
-                style={[styles.primaryButton, { backgroundColor: tone.accent }]}
-                onPress={() => handleButton(primary)}
-                activeOpacity={0.86}
-              >
+          <ScrollView
+            bounces={false}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.content}
+          >
+            <View style={styles.typeRow}>
+              <View style={[styles.iconBox, warning && styles.iconBoxWarning]}>
                 <Ionicons
+                  accessibilityElementsHidden
+                  importantForAccessibility="no-hide-descendants"
                   name={
-                    tone.destructive
-                      ? "warning-outline"
-                      : "checkmark-circle-outline"
+                    (config.icon ??
+                      (destructive
+                        ? "warning-outline"
+                        : "information-circle-outline")) as keyof typeof Ionicons.glyphMap
                   }
-                  size={17}
-                  color={Colors.textOnColor}
+                  size={21}
+                  color={iconColor}
                 />
-                <Text style={styles.primaryText}>{primary.label}</Text>
-              </TouchableOpacity>
-            )}
+              </View>
+              <Text style={[styles.typeLabel, warning && styles.typeWarning]}>
+                {typeLabel}
+              </Text>
+            </View>
 
-            {secondaryButtons.map((button, index) => (
-              <TouchableOpacity
-                key={`${button.label}-${index}`}
-                accessibilityLabel={button.label}
-                accessibilityRole="button"
-                style={styles.secondaryButton}
-                onPress={() => handleButton(button)}
-                activeOpacity={0.82}
-              >
-                <Text style={styles.secondaryText}>{button.label}</Text>
-              </TouchableOpacity>
-            ))}
+            <Text accessibilityRole="header" style={styles.title}>
+              {config.title}
+            </Text>
+            <Text style={styles.message}>{config.message}</Text>
 
-            {cancel && (
-              <TouchableOpacity
-                accessibilityLabel={cancel.label}
-                accessibilityRole="button"
-                style={[
-                  styles.cancelButton,
-                  !primary && styles.cancelButtonOnly,
-                ]}
-                onPress={() => handleButton(cancel)}
-                activeOpacity={0.78}
-              >
-                <Text
-                  style={[styles.cancelText, !primary && styles.cancelTextOnly]}
-                >
-                  {cancel.label}
-                </Text>
-              </TouchableOpacity>
-            )}
-          </View>
+            <View
+              style={[
+                styles.actions,
+                config.buttons.length > 2 && styles.actionsStacked,
+              ]}
+            >
+              {config.buttons.map((button, index) => {
+                const appearance = buttonAppearance(
+                  button,
+                  config.buttons.length,
+                );
 
-          {cancel && (
-            <Text style={styles.dismissHint}>Tap outside to dismiss</Text>
-          )}
+                return (
+                  <Pressable
+                    accessibilityLabel={button.label}
+                    accessibilityRole="button"
+                    key={`${button.label}-${index}`}
+                    onPress={() => handleButton(button)}
+                    style={({ pressed }) => [
+                      styles.button,
+                      config.buttons.length <= 2 && styles.buttonInRow,
+                      appearance === "primary" && styles.primaryButton,
+                      appearance === "secondary" && styles.secondaryButton,
+                      appearance === "destructive" && styles.destructiveButton,
+                      pressed &&
+                        appearance === "primary" &&
+                        styles.primaryButtonPressed,
+                      pressed &&
+                        appearance === "secondary" &&
+                        styles.secondaryButtonPressed,
+                      pressed &&
+                        appearance === "destructive" &&
+                        styles.destructiveButtonPressed,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.buttonText,
+                        appearance === "secondary"
+                          ? styles.secondaryButtonText
+                          : styles.filledButtonText,
+                      ]}
+                    >
+                      {button.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            {!cancel ? (
+              <Text style={styles.requiredNote}>
+                Choose an action to continue.
+              </Text>
+            ) : null}
+          </ScrollView>
         </View>
-      </Animated.View>
+      </View>
     </Modal>
   );
 });
@@ -283,119 +242,129 @@ export function useGameAlert() {
 }
 
 const styles = StyleSheet.create({
+  modalRoot: {
+    flex: 1,
+    justifyContent: "flex-end",
+  },
   backdrop: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: Colors.overlay,
   },
-  positioner: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 0,
-    alignItems: "center",
-    paddingHorizontal: Spacing.lg,
-    paddingBottom: Spacing.xl,
-  },
-  card: {
+  sheet: {
     width: "100%",
-    maxWidth: 520,
+    maxWidth: 560,
+    maxHeight: "82%",
+    alignSelf: "center",
+    overflow: "hidden",
     backgroundColor: Colors.panel,
-    borderRadius: Radius.xl,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderTopWidth: 5,
-    padding: Spacing.lg,
-    ...Shadow.floating,
+    borderTopLeftRadius: Radius.lg,
+    borderTopRightRadius: Radius.lg,
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
   },
-  heading: {
+  content: {
+    paddingTop: Spacing.lg,
+    paddingHorizontal: Spacing.lg,
+  },
+  typeRow: {
+    minHeight: 36,
     flexDirection: "row",
     alignItems: "center",
-    gap: Spacing.md,
+    gap: Spacing.sm,
     marginBottom: Spacing.md,
   },
-  icon: {
-    width: 48,
-    height: 48,
-    borderRadius: Radius.md,
+  iconBox: {
+    width: 36,
+    height: 36,
     alignItems: "center",
     justifyContent: "center",
+    backgroundColor: Colors.skyDim,
+    borderRadius: Radius.sm,
   },
-  headingCopy: {
+  iconBoxWarning: {
+    backgroundColor: "#F1E8E7",
+  },
+  typeLabel: {
     flex: 1,
-    minWidth: 0,
+    color: Colors.skyDark,
+    fontSize: Typography.size.label,
+    fontWeight: Typography.weight.semibold,
+    lineHeight: Typography.lineHeight.label,
   },
-  eyebrow: {
-    fontSize: 8,
-    fontWeight: Typography.weight.bold,
-    letterSpacing: 1.2,
+  typeWarning: {
+    color: Colors.red,
   },
   title: {
     color: Colors.text,
-    fontSize: 19,
-    lineHeight: 24,
+    fontSize: Typography.size.title,
     fontWeight: Typography.weight.bold,
-    marginTop: Spacing.xxs,
+    lineHeight: Typography.lineHeight.title,
   },
   message: {
+    marginTop: Spacing.sm,
     color: Colors.muted,
-    fontSize: 13,
-    lineHeight: 20,
-    marginBottom: Spacing.lg,
+    fontSize: Typography.size.body,
+    lineHeight: Typography.lineHeight.body,
   },
   actions: {
+    flexDirection: "row",
     gap: Spacing.sm,
+    marginTop: Spacing.xl,
+    paddingTop: Spacing.lg,
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
+  },
+  actionsStacked: {
+    flexDirection: "column",
+  },
+  button: {
+    minHeight: 48,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    borderRadius: Radius.md,
+  },
+  buttonInRow: {
+    flex: 1,
   },
   primaryButton: {
-    minHeight: MIN_TOUCH + 4,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: Spacing.sm,
-    borderRadius: Radius.md,
-    paddingHorizontal: Spacing.md,
-  },
-  primaryText: {
-    color: Colors.textOnColor,
-    fontSize: 14,
-    fontWeight: Typography.weight.bold,
-  },
-  secondaryButton: {
-    minHeight: MIN_TOUCH,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: Palette.blueSoft,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: "rgba(23,105,170,0.20)",
-    paddingHorizontal: Spacing.md,
-  },
-  secondaryText: {
-    color: Colors.skyDark,
-    fontSize: 13,
-    fontWeight: Typography.weight.bold,
-  },
-  cancelButton: {
-    minHeight: MIN_TOUCH,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: Radius.md,
-    paddingHorizontal: Spacing.md,
-  },
-  cancelButtonOnly: {
     backgroundColor: Colors.sky,
   },
-  cancelText: {
-    color: Colors.muted,
-    fontSize: 13,
-    fontWeight: Typography.weight.bold,
+  primaryButtonPressed: {
+    backgroundColor: Colors.skyDark,
   },
-  cancelTextOnly: {
+  secondaryButton: {
+    backgroundColor: Colors.panel,
+    borderWidth: 1,
+    borderColor: Colors.borderSection,
+  },
+  secondaryButtonPressed: {
+    backgroundColor: Colors.skyDim,
+  },
+  destructiveButton: {
+    backgroundColor: Colors.red,
+  },
+  destructiveButtonPressed: {
+    opacity: 0.82,
+  },
+  buttonText: {
+    fontSize: Typography.size.label,
+    fontWeight: Typography.weight.semibold,
+    lineHeight: Typography.lineHeight.label,
+    textAlign: "center",
+  },
+  filledButtonText: {
     color: Colors.textOnColor,
   },
-  dismissHint: {
+  secondaryButtonText: {
+    color: Colors.text,
+  },
+  requiredNote: {
+    marginTop: Spacing.md,
     color: Colors.dim,
-    fontSize: 9,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
     textAlign: "center",
-    marginTop: Spacing.sm,
   },
 });

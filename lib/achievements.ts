@@ -1,16 +1,18 @@
 /**
- * lib/achievements.ts
+ * FlightCraft achievement catalog.
  *
- * WorldWide Rush-style achievements.
- *
- * Focus:
- *   - Fast wins
- *   - Passenger flow
- *   - Demand slot clearing
- *   - Network expansion
- *   - Smooth operations
- *   - Simple, satisfying milestones
+ * IDs are permanent because they are stored in saved games and mapped to
+ * Google Play Games. Titles and goals may be clarified, but IDs must not be
+ * renamed or reused for an unrelated accomplishment.
  */
+
+import {
+  ACHIEVEMENTS as PLAY_GAMES_ACHIEVEMENTS,
+  type AchievementId as PlayGamesAchievementId,
+} from "@/constants/playGames";
+
+export type CatalogAchievementId =
+  PlayGamesAchievementId | "all_hubs_50" | "all_hubs_80";
 
 export type AchievementCategory =
   | "pioneer"
@@ -23,7 +25,7 @@ export type AchievementCategory =
   | "prestige";
 
 export interface Achievement {
-  id: string;
+  id: CatalogAchievementId;
   title: string;
   desc: string;
   flavor: string;
@@ -34,53 +36,38 @@ export interface Achievement {
   check: (s: AchievementState) => boolean;
 }
 
+export function isPlayGamesAchievementId(
+  id: CatalogAchievementId,
+): id is PlayGamesAchievementId {
+  return Object.prototype.hasOwnProperty.call(PLAY_GAMES_ACHIEVEMENTS, id);
+}
+
 export interface AchievementState {
   day: number;
   cash: number;
-  loan: number;
   netWorth: number;
   activeRoutes: number;
   totalRoutes: number;
   hubs: number;
   ownedPlanes: number;
-  reputation: number;
   totalPaxToday: number;
   totalPaxAllTime: number;
   maxTrust: number;
   avgTrust: number;
   continents: Set<string>;
   countries: Set<string>;
-  regions: Set<string>;
   hasConnecting: boolean;
   hasLongHaul: boolean;
   hasUltraLong: boolean;
-  hasUltraUltra: boolean;
   debtFree: boolean;
   allHubsFull: boolean;
-  maxCrowding: string;
-  homeToWorld: boolean;
-  labourCorridor: boolean;
-  diasporaRoute: boolean;
-  intraAsiaRoute: boolean;
-  intraEuropeRoute: boolean;
+  maxCrowding: "normal" | "busy" | "overcrowded" | "crisis";
   transAtlantic: boolean;
   transPacific: boolean;
   planesFamilies: Set<string>;
   speed3Active: boolean;
   missionsCompleted: number;
   missionsToday: number;
-  allMissionsToday: boolean;
-  routeStreak: number;
-  hubsOnDiffCont: boolean;
-  longestRoute: number;
-  mostTrustedHub: number;
-  hasRouteToEvery: boolean;
-
-  // legacy fields — kept for type compat
-  phHub: boolean;
-  phMidEastRoute: boolean;
-  phEuropeRoute: boolean;
-  phAmericaRoute: boolean;
 }
 
 export const ACHIEVEMENTS: Achievement[] = [
@@ -89,7 +76,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "first_takeoff",
     title: "First Takeoff",
     desc: "Create your first active route.",
-    flavor: "The map just came alive.",
+    flavor: "Your first route is now operating.",
     category: "pioneer",
     icon: "airplane-outline",
     points: 10,
@@ -99,7 +86,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "first_passengers",
     title: "First Passengers",
     desc: "Carry passengers for the first time.",
-    flavor: "A full seat is better than an empty promise.",
+    flavor: "Your airline carried its first passengers.",
     category: "pioneer",
     icon: "people-outline",
     points: 10,
@@ -109,7 +96,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "first_hub",
     title: "First Hub",
     desc: "Purchase your first airport hub.",
-    flavor: "One airport. Endless routes.",
+    flavor: "Your first hub is open.",
     category: "pioneer",
     icon: "location-outline",
     points: 10,
@@ -119,7 +106,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "first_plane",
     title: "First Plane",
     desc: "Buy your first aircraft.",
-    flavor: "Now you can actually move people.",
+    flavor: "Your first aircraft joined the fleet.",
     category: "pioneer",
     icon: "construct-outline",
     points: 10,
@@ -129,7 +116,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "three_routes",
     title: "Route Starter",
     desc: "Have 3 active routes.",
-    flavor: "Three lines on the map. Now it feels like a network.",
+    flavor: "Your airline now operates 3 routes.",
     category: "pioneer",
     icon: "git-network-outline",
     points: 15,
@@ -139,7 +126,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "second_hub",
     title: "Second Hub",
     desc: "Own 2 airport hubs.",
-    flavor: "One hub starts the game. Two hubs start the network.",
+    flavor: "Your second hub is open.",
     category: "pioneer",
     icon: "add-circle-outline",
     points: 20,
@@ -151,7 +138,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "pax_100_day",
     title: "Moving People",
     desc: "Carry 100 passengers in one day.",
-    flavor: "The flow begins.",
+    flavor: "You carried 100 passengers in one day.",
     category: "passenger",
     icon: "people-outline",
     points: 20,
@@ -161,7 +148,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "pax_500_day",
     title: "Busy Board",
     desc: "Carry 500 passengers in one day.",
-    flavor: "The departure board is working hard.",
+    flavor: "You carried 500 passengers in one day.",
     category: "passenger",
     icon: "people",
     points: 35,
@@ -169,9 +156,9 @@ export const ACHIEVEMENTS: Achievement[] = [
   },
   {
     id: "pax_1000_day",
-    title: "Passenger Rush",
+    title: "1,000 Passengers",
     desc: "Carry 1,000 passengers in one day.",
-    flavor: "Now that is a rush.",
+    flavor: "You carried 1,000 passengers in one day.",
     category: "passenger",
     icon: "walk-outline",
     points: 50,
@@ -181,7 +168,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "pax_2500_day",
     title: "Terminal Surge",
     desc: "Carry 2,500 passengers in one day.",
-    flavor: "Every gate is moving.",
+    flavor: "You carried 2,500 passengers in one day.",
     category: "passenger",
     icon: "people-circle-outline",
     points: 80,
@@ -190,9 +177,9 @@ export const ACHIEVEMENTS: Achievement[] = [
   },
   {
     id: "pax_5000_day",
-    title: "Sky River",
+    title: "5,000 Passengers",
     desc: "Carry 5,000 passengers in one day.",
-    flavor: "Passengers are flowing like water.",
+    flavor: "You carried 5,000 passengers in one day.",
     category: "passenger",
     icon: "people-circle",
     points: 120,
@@ -203,7 +190,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "pax_10k_all_time",
     title: "10K Journeys",
     desc: "Carry 10,000 passengers total.",
-    flavor: "Ten thousand little victories.",
+    flavor: "Your airline has carried 10,000 passengers.",
     category: "passenger",
     icon: "accessibility-outline",
     points: 60,
@@ -213,7 +200,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "pax_100k_all_time",
     title: "People Mover",
     desc: "Carry 100,000 passengers total.",
-    flavor: "Your network is part of their lives now.",
+    flavor: "Your airline has carried 100,000 passengers.",
     category: "passenger",
     icon: "accessibility",
     points: 140,
@@ -226,7 +213,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "routes_5",
     title: "Five Lines",
     desc: "Have 5 active routes.",
-    flavor: "The map is starting to glow.",
+    flavor: "Your airline now operates 5 routes.",
     category: "network",
     icon: "map-outline",
     points: 25,
@@ -236,7 +223,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "routes_10",
     title: "Route Web",
     desc: "Have 10 active routes.",
-    flavor: "Passengers have choices now.",
+    flavor: "Your airline now operates 10 routes.",
     category: "network",
     icon: "git-network-outline",
     points: 45,
@@ -246,7 +233,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "routes_20",
     title: "Flight Grid",
     desc: "Have 20 active routes.",
-    flavor: "This is no longer a few flights. This is a system.",
+    flavor: "Your airline now operates 20 routes.",
     category: "network",
     icon: "apps-outline",
     points: 80,
@@ -256,7 +243,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "routes_35",
     title: "Global Mesh",
     desc: "Have 35 active routes.",
-    flavor: "Your route map looks alive.",
+    flavor: "Your airline now operates 35 routes.",
     category: "network",
     icon: "planet-outline",
     points: 125,
@@ -267,7 +254,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "hubs_5",
     title: "Hub Chain",
     desc: "Own 5 hubs.",
-    flavor: "Five anchors for your growing airline.",
+    flavor: "Your network now includes 5 hubs.",
     category: "network",
     icon: "business-outline",
     points: 60,
@@ -277,7 +264,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "hubs_10",
     title: "Airport Empire",
     desc: "Own 10 hubs.",
-    flavor: "Your logo belongs on the terminal wall.",
+    flavor: "Your network now includes 10 hubs.",
     category: "network",
     icon: "business",
     points: 110,
@@ -288,7 +275,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "countries_5",
     title: "Across Borders",
     desc: "Serve 5 countries.",
-    flavor: "The world is opening up.",
+    flavor: "Your routes now serve 5 countries.",
     category: "network",
     icon: "flag-outline",
     points: 35,
@@ -298,7 +285,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "countries_15",
     title: "Many Flags",
     desc: "Serve 15 countries.",
-    flavor: "Every new flag means a new market.",
+    flavor: "Your routes now serve 15 countries.",
     category: "network",
     icon: "earth-outline",
     points: 80,
@@ -309,7 +296,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "two_continents",
     title: "Two Continents",
     desc: "Operate routes across 2 continents.",
-    flavor: "The network crossed the water.",
+    flavor: "Your routes now operate across 2 continents.",
     category: "network",
     icon: "globe-outline",
     points: 40,
@@ -319,7 +306,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "five_continents",
     title: "World Map",
     desc: "Operate routes across 5 continents.",
-    flavor: "The whole map is yours to solve.",
+    flavor: "Your routes now operate across 5 continents.",
     category: "network",
     icon: "planet-outline",
     points: 130,
@@ -332,7 +319,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "connecting_route",
     title: "One Stop Wonder",
     desc: "Create a connecting route.",
-    flavor: "Sometimes the best path bends.",
+    flavor: "Your first one-stop route is operating.",
     category: "network",
     icon: "git-branch-outline",
     points: 25,
@@ -342,7 +329,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "long_haul",
     title: "Long Line",
     desc: "Operate a long-haul route.",
-    flavor: "That line stretches far.",
+    flavor: "Your first long-haul route is operating.",
     category: "network",
     icon: "navigate-outline",
     points: 35,
@@ -352,7 +339,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "ultra_long",
     title: "Ocean Runner",
     desc: "Operate a route longer than 6,000nm.",
-    flavor: "A long blue line across the world.",
+    flavor: "You opened a route longer than 6,000 nautical miles.",
     category: "network",
     icon: "infinite-outline",
     points: 90,
@@ -363,7 +350,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "trans_atlantic",
     title: "Atlantic Link",
     desc: "Operate a route between North America and Europe.",
-    flavor: "Classic corridor. Big money.",
+    flavor: "Your network now crosses the Atlantic.",
     category: "network",
     icon: "swap-horizontal-outline",
     points: 60,
@@ -373,7 +360,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "trans_pacific",
     title: "Pacific Jump",
     desc: "Operate a route between the Americas and Asia/Oceania.",
-    flavor: "That is a serious flight.",
+    flavor: "Your network now crosses the Pacific.",
     category: "network",
     icon: "swap-horizontal",
     points: 70,
@@ -385,7 +372,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "planes_3",
     title: "Small Fleet",
     desc: "Own 3 aircraft.",
-    flavor: "Now you can serve more than one rush.",
+    flavor: "Your fleet now contains 3 aircraft.",
     category: "fleet",
     icon: "albums-outline",
     points: 25,
@@ -395,7 +382,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "planes_10",
     title: "Fleet Flow",
     desc: "Own 10 aircraft.",
-    flavor: "Enough planes to keep the board moving.",
+    flavor: "Your fleet now contains 10 aircraft.",
     category: "fleet",
     icon: "albums",
     points: 60,
@@ -405,7 +392,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "planes_25",
     title: "Sky Conveyor",
     desc: "Own 25 aircraft.",
-    flavor: "The skies are becoming your conveyor belt.",
+    flavor: "Your fleet now contains 25 aircraft.",
     category: "fleet",
     icon: "layers",
     points: 110,
@@ -416,7 +403,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "mixed_fleet",
     title: "Mixed Fleet",
     desc: "Own planes from 2 manufacturer families.",
-    flavor: "Different planes for different jobs.",
+    flavor: "Your fleet includes 2 manufacturer families.",
     category: "fleet",
     icon: "layers-outline",
     points: 30,
@@ -426,7 +413,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "all_families",
     title: "Collector Fleet",
     desc: "Own planes from 4 manufacturer families.",
-    flavor: "You did not choose a favorite. You bought them all.",
+    flavor: "Your fleet includes all 4 manufacturer families.",
     category: "fleet",
     icon: "apps-outline",
     points: 90,
@@ -439,7 +426,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "trust_80",
     title: "Trusted Flow",
     desc: "Reach 80% trust at any hub.",
-    flavor: "Passengers know your planes will come.",
+    flavor: "One of your hubs reached 80% trust.",
     category: "operations",
     icon: "heart-outline",
     points: 35,
@@ -449,7 +436,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "trust_100",
     title: "Perfect Hub",
     desc: "Reach 100% trust at any hub.",
-    flavor: "No hesitation. They fly with you.",
+    flavor: "One of your hubs reached 100% trust.",
     category: "operations",
     icon: "heart",
     points: 60,
@@ -458,8 +445,8 @@ export const ACHIEVEMENTS: Achievement[] = [
   {
     id: "all_hubs_50",
     title: "Stable Network",
-    desc: "Have all hubs average 50%+ trust.",
-    flavor: "Not perfect, but dependable.",
+    desc: "Reach 50% average trust across at least 3 hubs.",
+    flavor: "Average trust across your hubs reached 50%.",
     category: "operations",
     icon: "star-half-outline",
     points: 45,
@@ -467,9 +454,9 @@ export const ACHIEVEMENTS: Achievement[] = [
   },
   {
     id: "all_hubs_80",
-    title: "Smooth Network",
-    desc: "Have all hubs average 80%+ trust.",
-    flavor: "The whole system is humming.",
+    title: "Trusted Network",
+    desc: "Reach 80% average trust across at least 3 hubs.",
+    flavor: "Average trust across your hubs reached 80%.",
     category: "operations",
     icon: "star-outline",
     points: 90,
@@ -479,8 +466,8 @@ export const ACHIEVEMENTS: Achievement[] = [
   {
     id: "no_crowding_day",
     title: "No Backlog",
-    desc: "Keep crowding normal after day 10.",
-    flavor: "No angry queues. Beautiful.",
+    desc: "Finish a day after day 10 with normal crowding at every hub.",
+    flavor: "Every hub finished the day with normal crowding.",
     category: "operations",
     icon: "checkmark-done-outline",
     points: 45,
@@ -488,40 +475,40 @@ export const ACHIEVEMENTS: Achievement[] = [
   },
   {
     id: "all_hubs_full",
-    title: "Full Board",
-    desc: "Have all hubs filled with active demand slots.",
-    flavor: "Every airport wants something from you.",
+    title: "Full Opportunity Board",
+    desc: "After day 10, fill every opportunity slot across at least 3 hubs.",
+    flavor: "Every hub opportunity slot is available for planning.",
     category: "operations",
     icon: "grid-outline",
     points: 55,
-    check: (s) => s.allHubsFull,
+    check: (s) => s.day >= 10 && s.hubs >= 3 && s.allHubsFull,
   },
   {
     id: "route_streak_5",
-    title: "Combo x5",
-    desc: "Reach a route streak of 5.",
-    flavor: "One after another. That is the rush.",
+    title: "Route Builder",
+    desc: "Open 5 routes in total.",
+    flavor: "You have opened 5 routes.",
     category: "operations",
     icon: "flash-outline",
     points: 40,
-    check: (s) => s.routeStreak >= 5,
+    check: (s) => s.totalRoutes >= 5,
   },
   {
     id: "route_streak_15",
-    title: "Combo x15",
-    desc: "Reach a route streak of 15.",
-    flavor: "You are not stopping. You are chaining.",
+    title: "Network Builder",
+    desc: "Open 15 routes in total.",
+    flavor: "You have opened 15 routes.",
     category: "operations",
     icon: "flash",
     points: 100,
-    check: (s) => s.routeStreak >= 15,
+    check: (s) => s.totalRoutes >= 15,
     hidden: true,
   },
   {
     id: "speed_mode",
     title: "Fast Forward",
     desc: "Run 3× speed with 10+ active routes.",
-    flavor: "The map is moving fast now.",
+    flavor: "You operated 10 routes at 3x speed.",
     category: "operations",
     icon: "play-forward-outline",
     points: 35,
@@ -531,29 +518,29 @@ export const ACHIEVEMENTS: Achievement[] = [
   // ── FINANCIAL ───────────────────────────────────────────────────
   {
     id: "cash_100k",
-    title: "First Stack",
-    desc: "Hold $100K cash.",
-    flavor: "Enough to make the next move.",
+    title: "Positive Position",
+    desc: "Reach a financial position of $100K.",
+    flavor: "Cash now exceeds debt by $100K.",
     category: "financial",
     icon: "cash-outline",
     points: 20,
-    check: (s) => s.cash >= 100_000,
+    check: (s) => s.netWorth >= 100_000,
   },
   {
     id: "first_million",
     title: "First Million",
-    desc: "Hold $1M cash.",
-    flavor: "Now the upgrades feel possible.",
+    desc: "Reach a financial position of $1M.",
+    flavor: "Cash now exceeds debt by $1M.",
     category: "financial",
     icon: "cash",
     points: 45,
-    check: (s) => s.cash >= 1_000_000,
+    check: (s) => s.netWorth >= 1_000_000,
   },
   {
     id: "ten_million",
     title: "Money Runway",
     desc: "Hold $10M cash.",
-    flavor: "That is a long runway.",
+    flavor: "Your cash reserve reached $10M.",
     category: "financial",
     icon: "bar-chart-outline",
     points: 80,
@@ -564,7 +551,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "debt_free",
     title: "Debt Free",
     desc: "Pay off all loans.",
-    flavor: "No bank owns your sky.",
+    flavor: "Your outstanding loan is fully repaid.",
     category: "financial",
     icon: "shield-checkmark-outline",
     points: 45,
@@ -572,9 +559,9 @@ export const ACHIEVEMENTS: Achievement[] = [
   },
   {
     id: "net_worth_10m",
-    title: "Airline Value",
-    desc: "Reach $10M net worth.",
-    flavor: "The company is becoming real.",
+    title: "$10M Financial Position",
+    desc: "Reach a financial position of $10M.",
+    flavor: "Your financial position reached $10M.",
     category: "financial",
     icon: "trending-up-outline",
     points: 70,
@@ -582,9 +569,9 @@ export const ACHIEVEMENTS: Achievement[] = [
   },
   {
     id: "tycoon",
-    title: "Sky Tycoon",
-    desc: "Reach $100M net worth.",
-    flavor: "The rush became an empire.",
+    title: "$100M Financial Position",
+    desc: "Reach a financial position of $100M.",
+    flavor: "Your financial position reached $100M.",
     category: "financial",
     icon: "diamond-outline",
     points: 160,
@@ -597,7 +584,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "first_mission",
     title: "Contract Done",
     desc: "Complete your first mission.",
-    flavor: "Objective cleared.",
+    flavor: "You completed your first mission.",
     category: "missions",
     icon: "checkmark-circle-outline",
     points: 15,
@@ -607,7 +594,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "missions_10",
     title: "Contract Runner",
     desc: "Complete 10 missions.",
-    flavor: "You are getting good at clearing the board.",
+    flavor: "You have completed 10 missions.",
     category: "missions",
     icon: "checkbox-outline",
     points: 40,
@@ -615,9 +602,9 @@ export const ACHIEVEMENTS: Achievement[] = [
   },
   {
     id: "missions_30",
-    title: "Rush Operator",
+    title: "Mission Operator",
     desc: "Complete 30 missions.",
-    flavor: "The objective board fears you.",
+    flavor: "You have completed 30 missions.",
     category: "missions",
     icon: "trophy-outline",
     points: 80,
@@ -626,23 +613,23 @@ export const ACHIEVEMENTS: Achievement[] = [
   },
   {
     id: "perfect_day",
-    title: "Perfect Day",
+    title: "Mission Sweep",
     desc: "Complete all 3 missions in one day.",
-    flavor: "Three objectives. Three clears.",
+    flavor: "You completed all 3 daily missions.",
     category: "missions",
     icon: "ribbon-outline",
     points: 50,
-    check: (s) => s.allMissionsToday,
+    check: (s) => s.missionsToday >= 3,
   },
   {
     id: "mission_sweep",
-    title: "Daily Sweep",
-    desc: "Complete 3 missions today.",
-    flavor: "Clean board. Clean profit.",
+    title: "Productive Day",
+    desc: "Complete at least 2 missions in one day.",
+    flavor: "You completed 2 missions in one day.",
     category: "missions",
     icon: "checkmark-done-circle-outline",
     points: 45,
-    check: (s) => s.missionsToday >= 3,
+    check: (s) => s.missionsToday >= 2,
   },
 
   // ── PRESTIGE ────────────────────────────────────────────────────
@@ -650,7 +637,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "day_30",
     title: "First Month",
     desc: "Reach day 30.",
-    flavor: "Thirty days of building the flow.",
+    flavor: "Your airline has operated for 30 days.",
     category: "prestige",
     icon: "calendar-outline",
     points: 40,
@@ -660,7 +647,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "day_100",
     title: "Century Operator",
     desc: "Reach day 100.",
-    flavor: "One hundred days. The map remembers you.",
+    flavor: "Your airline has operated for 100 days.",
     category: "prestige",
     icon: "trophy-outline",
     points: 90,
@@ -668,9 +655,9 @@ export const ACHIEVEMENTS: Achievement[] = [
   },
   {
     id: "day_365",
-    title: "One Year Rush",
+    title: "One Year",
     desc: "Reach day 365.",
-    flavor: "A full year of flights, slots, and decisions.",
+    flavor: "Your airline has operated for one full year.",
     category: "prestige",
     icon: "star-outline",
     points: 200,
@@ -681,7 +668,7 @@ export const ACHIEVEMENTS: Achievement[] = [
     id: "speed_builder",
     title: "Fast Builder",
     desc: "Reach 15 active routes by day 50.",
-    flavor: "You built fast and never looked back.",
+    flavor: "You reached 15 active routes by day 50.",
     category: "prestige",
     icon: "rocket-outline",
     points: 100,

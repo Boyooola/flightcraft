@@ -1,51 +1,403 @@
 /**
  * components/map/RouteLayer.tsx
  *
- * Route arcs + animated plane icons.
+ * Active route lines, scheduled service, and moving aircraft.
  *
- * Multi-plane safe:
- * - Multiple active routes can share the same demand_id.
- * - Each plane can still animate independently.
- * - Passenger delivery is capped against the live demand in store.
- * - Revenue popup is display-only (gross estimate). Actual cash credited by useRevenueTick at end of day.
+ * Passenger rules:
+ * - A market is allocated across complete player and rival itineraries once
+ *   per deterministic choice calculation.
+ * - Aircraft board only the passengers who prefer the player's airline.
+ * - Rivals never take another batch of passengers at day-end.
+ * - Multiple aircraft may serve the same market without exceeding demand.
+ * - Scheduled operations use route distance and aircraft speed.
+ * - Aircraft positions use that same schedule, so the map never shows fake
+ *   arrivals that do not carry passengers or incur operating cost.
  */
 
-import { Colors, Palette } from "@/constants/theme";
-import { computePlayerMarketShare } from "@/lib/AIAirline";
+import { Colors } from "@/constants/theme";
+import { aiServesCorridor, type AIAirline } from "@/lib/AIAirline";
 import { hubCrowdingLevel } from "@/lib/demands";
-import { boardPassengers } from "@/lib/passengerFlow";
-import { calcRouteRevenue } from "@/lib/revenue";
+import {
+  buildItinerariesForMarket,
+  createDirectServiceOffering,
+  playerRouteToServiceOffering,
+} from "@/lib/itineraryEngine";
+import {
+  allocatePassengerChoice,
+  preferredPassengersForAirline,
+} from "@/lib/passengerChoice";
+import { boardPassengers, resolvePassengerFlow } from "@/lib/passengerFlow";
+import {
+  createPassengerMarket,
+  type PassengerMarket,
+} from "@/lib/passengerMarkets";
+import { calcRouteRevenue, dailyFlights } from "@/lib/revenue";
 import { getSeasonalMultiplier } from "@/lib/seasons";
-import type { Airport, Route } from "@/store";
+import type { Airport, Demand, Route } from "@/store";
 import { useDay, useDayProgress, useGameStore, useRoutes } from "@/store";
 import MapboxGL from "@rnmapbox/maps";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
-const ARC_STEPS = 40;
-const ANIM_INTERVAL_MS = 60;
-const LEG_DURATION_MS = 9000;
+type Coordinate = [number, number];
 
-function greatCircleArc(
-  lng1: number,
-  lat1: number,
-  lng2: number,
-  lat2: number,
-  steps = ARC_STEPS,
-): [number, number][] {
-  const pts: [number, number][] = [];
+interface MarketAllocation {
+  playerPreferredPassengers: number;
+  rivalCarriedPassengers: number;
+}
 
-  for (let i = 0; i <= steps; i++) {
-    const t = i / steps;
-    const lng = lng1 + (lng2 - lng1) * t;
-    const lat = lat1 + (lat2 - lat1) * t;
+interface RouteOperationProgress {
+  day: number;
+  scheduleKey: string;
+  completedCycles: number;
+}
 
-    const span = Math.abs(lng2 - lng1);
-    const arc = Math.sin(t * Math.PI) * span * 0.12;
+function passengerCount(value: number | null | undefined): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.floor(value))
+    : 0;
+}
 
-    pts.push([lng, lat + arc]);
+function demandToPassengerMarket(params: {
+  demand: Demand;
+  gameSeed: string;
+  gameDay: number;
+}): PassengerMarket {
+  const generated = createPassengerMarket({
+    gameSeed: params.gameSeed,
+    origin: params.demand.origin,
+    destination: params.demand.dest,
+    generatedDay: params.gameDay,
+  });
+
+  return {
+    ...generated,
+    id: params.demand.id,
+    distanceNm: params.demand.dist_nm,
+    haul: params.demand.haul,
+    baselineDailyDemand: passengerCount(params.demand.base_pax_day),
+    businessShare: params.demand.business_pct ?? generated.businessShare,
+    leisureShare: params.demand.leisure_pct ?? generated.leisureShare,
+  };
+}
+
+/**
+ * Calculates the fixed preference split for one market and game day. Rival
+ * capacity represents the competitor's complete daily schedule, not one
+ * animated aircraft, so rival-preferred travelers can be settled immediately.
+ */
+function allocateMarketPassengers(params: {
+  demand: Demand;
+  routes: Route[];
+  rivals: AIAirline[];
+  playerAirlineId: string;
+  playerTrust: number;
+  gameSeed: string;
+  gameDay: number;
+}): MarketAllocation {
+  const market = demandToPassengerMarket({
+    demand: params.demand,
+    gameSeed: params.gameSeed,
+    gameDay: params.gameDay,
+  });
+  const playerOfferings = params.routes
+    .filter((route) => route.active && route.demand.id === params.demand.id)
+    .map((route) =>
+      playerRouteToServiceOffering({
+        route,
+        airlineId: params.playerAirlineId,
+      }),
+    );
+  const rivalOfferings = params.rivals
+    .filter((rival) =>
+      aiServesCorridor(
+        rival,
+        params.demand.origin.iata,
+        params.demand.dest.iata,
+      ),
+    )
+    .map((rival) => {
+      const dailyCapacity = Math.max(1, market.baselineDailyDemand);
+
+      return createDirectServiceOffering({
+        id: `rival-service:${rival.id}:${market.id}`,
+        routeId: `rival-route:${rival.id}:${market.id}`,
+        airlineId: rival.id,
+        operatorKind: "rival",
+        originIata: market.originIata,
+        destinationIata: market.destinationIata,
+        distanceNm: market.distanceNm,
+        aircraft: {
+          id: `rival-schedule:${rival.id}:${market.id}`,
+          modelId: "rival-daily-schedule",
+          modelName: "Rival daily schedule",
+          rangeNm: Math.max(1, market.distanceNm),
+          seatCapacity: dailyCapacity,
+        },
+        availableSeats: dailyCapacity,
+        priceStrategy: "standard",
+      });
+    });
+  const itineraryResult = buildItinerariesForMarket({
+    market,
+    offerings: [...playerOfferings, ...rivalOfferings],
+  });
+  const choice = allocatePassengerChoice({
+    gameSeed: params.gameSeed,
+    market,
+    dailyDemand: {
+      gameDay: params.gameDay,
+      todayDemand: market.baselineDailyDemand,
+    },
+    itineraries: itineraryResult.itineraries,
+    airlineProfiles: [
+      {
+        airlineId: params.playerAirlineId,
+        trust: params.playerTrust,
+      },
+      ...params.rivals.map((rival) => ({
+        airlineId: rival.id,
+        trust: rival.trust,
+      })),
+    ],
+  });
+  const flow = resolvePassengerFlow({
+    choice,
+    itineraries: itineraryResult.itineraries,
+  });
+
+  return {
+    playerPreferredPassengers: preferredPassengersForAirline({
+      airlineId: params.playerAirlineId,
+      result: choice,
+    }),
+    rivalCarriedPassengers: flow.airlines
+      .filter((airline) => airline.operatorKind === "rival")
+      .reduce((total, airline) => total + airline.carriedPassengers, 0),
+  };
+}
+
+function routeDistanceNm(route: Route): number {
+  return Math.max(1, route.total_dist_nm ?? route.demand.dist_nm);
+}
+
+function plannedDailyCycles(route: Route): number {
+  return dailyFlights(
+    routeDistanceNm(route),
+    Math.max(1, route.plane.plane_model.speed_kts),
+  );
+}
+
+/**
+ * Places rotations through the day at the midpoint of equal time windows.
+ * The final arrival therefore settles before the clock advances to tomorrow.
+ */
+function completedCyclesAtProgress(route: Route, dayProgress: number): number {
+  const cycles = plannedDailyCycles(route);
+  const progress = clamp(dayProgress, 0, 1);
+
+  return Math.min(cycles, Math.floor(progress * cycles + 0.5 + Number.EPSILON));
+}
+
+function routeScheduleKey(route: Route): string {
+  return [
+    route.plane.id,
+    routeDistanceNm(route),
+    route.plane.plane_model.speed_kts,
+  ].join(":");
+}
+
+/** Settles one scheduled service cycle. */
+function settleRouteCycle(params: {
+  route: Route;
+  gameDay: number;
+  dayProgress: number;
+  revenueMultiplier: number;
+  allocationCache: Record<string, MarketAllocation>;
+}) {
+  let state = useGameStore.getState();
+  const airline = state.airline;
+  if (!airline) return;
+
+  const liveDemand =
+    state.demands.find((demand) => demand.id === params.route.demand.id) ??
+    params.route.demand;
+  const hub = state.hubs.find(
+    (item) => item.airport.iata === params.route.hub_iata,
+  );
+  const allocationKey = `${params.gameDay}:${liveDemand.id}`;
+  const allocation =
+    params.allocationCache[allocationKey] ??
+    allocateMarketPassengers({
+      demand: liveDemand,
+      routes: state.routes,
+      rivals: state.aiAirlines,
+      playerAirlineId: airline.id,
+      playerTrust: hub?.trust ?? 0,
+      gameSeed: airline.seed,
+      gameDay: params.gameDay,
+    });
+  params.allocationCache[allocationKey] = allocation;
+
+  const rivalAlreadyCarried = passengerCount(liveDemand.ai_stolen_pax);
+  const rivalToRecord = Math.max(
+    0,
+    allocation.rivalCarriedPassengers - rivalAlreadyCarried,
+  );
+  if (rivalToRecord > 0) {
+    state.addPaxDelivered(liveDemand.id, 0, rivalToRecord);
+    state = useGameStore.getState();
   }
 
-  return pts;
+  const refreshedDemand =
+    state.demands.find((demand) => demand.id === liveDemand.id) ?? liveDemand;
+  const livePlane =
+    state.ownedPlanes.find((plane) => plane.id === params.route.plane.id) ??
+    params.route.plane;
+  const playerPreferenceRemaining = Math.max(
+    0,
+    allocation.playerPreferredPassengers -
+      passengerCount(refreshedDemand.delivered_pax_today),
+  );
+  const deliveredPax = Math.min(
+    playerPreferenceRemaining,
+    boardPassengers({
+      demand: refreshedDemand,
+      planeCapacity: livePlane.plane_model.pax_capacity,
+      dayProgress: params.dayProgress,
+    }),
+  );
+
+  if (deliveredPax > 0) {
+    state.addPaxDelivered(liveDemand.id, deliveredPax, 0);
+    state = useGameStore.getState();
+  }
+
+  const seasonalMultiplier = getSeasonalMultiplier(
+    params.gameDay,
+    liveDemand.dest.country,
+    liveDemand.dest.continent,
+  );
+  const condition = livePlane.condition ?? 100;
+  const conditionMultiplier =
+    condition <= 15 ? 0.7 : condition <= 40 ? 0.85 : 1;
+  const crowding = hub
+    ? hubCrowdingLevel(params.route.hub_iata, state.demands, hub.airport)
+    : null;
+  const congestionMultiplier =
+    crowding?.level === "crisis"
+      ? 0.8
+      : crowding?.level === "overcrowded"
+        ? 0.9
+        : 1;
+  const result = calcRouteRevenue({
+    distNm: routeDistanceNm(params.route),
+    speedKts: livePlane.plane_model.speed_kts,
+    trustPct: hub?.trust ?? 0,
+    boardedPax: deliveredPax,
+    seatCapacity: livePlane.plane_model.pax_capacity,
+    costPerSector: livePlane.plane_model.cost_per_sector ?? 500,
+    fuelPerNm: livePlane.plane_model.fuel_per_nm ?? 2,
+    priceStrategy: params.route.price_strategy ?? "standard",
+    priceElasticity: refreshedDemand.price_elasticity ?? 1,
+    crowdMultiplier:
+      params.revenueMultiplier * seasonalMultiplier * conditionMultiplier,
+    congestionMultiplier,
+    businessPct: refreshedDemand.business_pct ?? 0.25,
+    leisurePct: refreshedDemand.leisure_pct ?? 0.75,
+  });
+
+  state.addRouteEarning(params.route.id, result.net);
+}
+
+function degreesToRadians(value: number): number {
+  return (value * Math.PI) / 180;
+}
+
+function radiansToDegrees(value: number): number {
+  return (value * 180) / Math.PI;
+}
+
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+function shortestLongitudeDelta(from: number, to: number): number {
+  return ((((to - from) % 360) + 540) % 360) - 180;
+}
+
+function fallbackArc(
+  from: Coordinate,
+  to: Coordinate,
+  steps: number,
+): Coordinate[] {
+  const longitudeDelta = shortestLongitudeDelta(from[0], to[0]);
+
+  return Array.from({ length: steps + 1 }, (_, index) => {
+    const progress = index / steps;
+    return [
+      from[0] + longitudeDelta * progress,
+      from[1] + (to[1] - from[1]) * progress,
+    ];
+  });
+}
+
+function greatCircleArc(from: Coordinate, to: Coordinate): Coordinate[] {
+  const fromLongitude = degreesToRadians(from[0]);
+  const fromLatitude = degreesToRadians(from[1]);
+  const toLongitude = degreesToRadians(to[0]);
+  const toLatitude = degreesToRadians(to[1]);
+
+  const fromVector = [
+    Math.cos(fromLatitude) * Math.cos(fromLongitude),
+    Math.cos(fromLatitude) * Math.sin(fromLongitude),
+    Math.sin(fromLatitude),
+  ];
+  const toVector = [
+    Math.cos(toLatitude) * Math.cos(toLongitude),
+    Math.cos(toLatitude) * Math.sin(toLongitude),
+    Math.sin(toLatitude),
+  ];
+  const dot = clamp(
+    fromVector[0] * toVector[0] +
+      fromVector[1] * toVector[1] +
+      fromVector[2] * toVector[2],
+    -1,
+    1,
+  );
+  const angle = Math.acos(dot);
+  const steps = Math.max(
+    12,
+    Math.min(72, Math.ceil(radiansToDegrees(angle) / 3)),
+  );
+  const sineAngle = Math.sin(angle);
+
+  if (angle < 0.000001 || Math.abs(sineAngle) < 0.000001) {
+    return fallbackArc(from, to, steps);
+  }
+
+  const points: Coordinate[] = [];
+  let previousLongitude = from[0];
+
+  for (let index = 0; index <= steps; index++) {
+    const progress = index / steps;
+    const fromWeight = Math.sin((1 - progress) * angle) / sineAngle;
+    const toWeight = Math.sin(progress * angle) / sineAngle;
+    const x = fromWeight * fromVector[0] + toWeight * toVector[0];
+    const y = fromWeight * fromVector[1] + toWeight * toVector[1];
+    const z = fromWeight * fromVector[2] + toWeight * toVector[2];
+    const magnitude = Math.sqrt(x * x + y * y + z * z) || 1;
+
+    let longitude = radiansToDegrees(Math.atan2(y, x));
+    const latitude = radiansToDegrees(Math.asin(clamp(z / magnitude, -1, 1)));
+
+    while (longitude - previousLongitude > 180) longitude -= 360;
+    while (longitude - previousLongitude < -180) longitude += 360;
+
+    points.push([longitude, latitude]);
+    previousLongitude = longitude;
+  }
+
+  return points;
 }
 
 function bearing(
@@ -64,37 +416,28 @@ function bearing(
   return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
 }
 
-function buildRoutePoints(
-  route: Route,
-  airports: Airport[],
-): [number, number][] {
+function buildRoutePoints(route: Route, airports: Airport[]): Coordinate[] {
   const via = route.via_iata
     ? airports.find((airport) => airport.iata === route.via_iata)
     : null;
 
   if (via) {
     const leg1 = greatCircleArc(
-      route.demand.origin.lng,
-      route.demand.origin.lat,
-      via.lng,
-      via.lat,
+      [route.demand.origin.lng, route.demand.origin.lat],
+      [via.lng, via.lat],
     );
 
     const leg2 = greatCircleArc(
-      via.lng,
-      via.lat,
-      route.demand.dest.lng,
-      route.demand.dest.lat,
+      [via.lng, via.lat],
+      [route.demand.dest.lng, route.demand.dest.lat],
     );
 
     return [...leg1, ...leg2.slice(1)];
   }
 
   return greatCircleArc(
-    route.demand.origin.lng,
-    route.demand.origin.lat,
-    route.demand.dest.lng,
-    route.demand.dest.lat,
+    [route.demand.origin.lng, route.demand.origin.lat],
+    [route.demand.dest.lng, route.demand.dest.lat],
   );
 }
 
@@ -105,394 +448,212 @@ interface PlaneState {
   rotation: number;
 }
 
-interface RevenuePop {
-  id: string;
-  lng: number;
-  lat: number;
-  amount: number;
-  opacity: number;
-  offsetY: number;
+function planeStateAtProgress(params: {
+  route: Route;
+  points: Coordinate[];
+  dayProgress: number;
+}): PlaneState {
+  const { route, points } = params;
+
+  if (points.length < 2) {
+    return {
+      routeId: route.id,
+      lng: route.demand.origin.lng,
+      lat: route.demand.origin.lat,
+      rotation: 0,
+    };
+  }
+
+  // Each service cycle has an outbound and return leg. The aircraft reaches
+  // the destination at the midpoint, exactly when that cycle is settled.
+  const cycles = plannedDailyCycles(route);
+  const rawPhase = (clamp(params.dayProgress, 0, 1) * cycles * 2) % 2;
+  const outbound = rawPhase <= 1;
+  const routeProgress = outbound ? rawPhase : 2 - rawPhase;
+  const finalPointIndex = points.length - 1;
+  const exactPoint = routeProgress * finalPointIndex;
+  const segmentIndex = Math.max(
+    0,
+    Math.min(finalPointIndex - 1, Math.floor(exactPoint)),
+  );
+  const segmentProgress = exactPoint - segmentIndex;
+  const segmentStart = points[segmentIndex];
+  const segmentEnd = points[segmentIndex + 1];
+
+  return {
+    routeId: route.id,
+    lng: segmentStart[0] + (segmentEnd[0] - segmentStart[0]) * segmentProgress,
+    lat: segmentStart[1] + (segmentEnd[1] - segmentStart[1]) * segmentProgress,
+    rotation: outbound
+      ? bearing(segmentStart, segmentEnd)
+      : bearing(segmentEnd, segmentStart),
+  };
 }
 
 export default function RouteLayer({
-  airlineColor,
-  speed = 1,
   paused = false,
 }: {
-  airlineColor: string;
   speed?: number;
   paused?: boolean;
 }) {
   const routes = useRoutes();
   const day = useDay();
-  const airports = useGameStore((s) => s.airports);
   const dayProgress = useDayProgress();
+  const airports = useGameStore((s) => s.airports);
+  const ownedPlanes = useGameStore((s) => s.ownedPlanes);
 
-  const [planes, setPlanes] = useState<PlaneState[]>([]);
-  const [revPops, setRevPops] = useState<RevenuePop[]>([]);
-
-  const phaseRef = useRef<Record<string, number>>({});
-  const lastRawRef = useRef<Record<string, number>>({});
+  const allocationCacheRef = useRef<Record<string, MarketAllocation>>({});
+  const allocationDayRef = useRef(day);
+  const operationProgressRef = useRef<Record<string, RouteOperationProgress>>(
+    {},
+  );
 
   const active = useMemo(
     () => routes.filter((route) => route.active),
     [routes],
   );
+  const routePointsById = useMemo(
+    () =>
+      new Map(
+        active.map((route) => [route.id, buildRoutePoints(route, airports)]),
+      ),
+    [active, airports],
+  );
 
   useEffect(() => {
-    if (active.length === 0) {
-      setPlanes([]);
-      return;
-    }
+    const snapshot = useGameStore.getState();
+    const airline = snapshot.airline;
+    if (!airline) return;
 
-    const routePoints: Record<string, [number, number][]> = {};
+    const operationDay = airline.day;
+    const liveRoutes = snapshot.routes.filter((route) => route.active);
+    const activeIds = new Set(liveRoutes.map((route) => route.id));
 
-    active.forEach((route, index) => {
-      routePoints[route.id] = buildRoutePoints(route, airports);
-
-      if (phaseRef.current[route.id] === undefined) {
-        phaseRef.current[route.id] = index / Math.max(1, active.length);
+    Object.keys(operationProgressRef.current).forEach((routeId) => {
+      if (!activeIds.has(routeId)) {
+        delete operationProgressRef.current[routeId];
       }
     });
 
-    const tick = () => {
-      if (paused) return;
+    if (allocationDayRef.current !== operationDay) {
+      allocationDayRef.current = operationDay;
+      allocationCacheRef.current = {};
+    }
 
-      const now = Date.now();
-      const scaledMs = LEG_DURATION_MS / Math.max(1, speed);
+    const choice = snapshot.activeChoiceConsequence;
+    const choiceMultiplier =
+      choice?.revenueMultiplier != null &&
+      choice.revenueMultiplierEndsDay != null &&
+      operationDay < choice.revenueMultiplierEndsDay
+        ? choice.revenueMultiplier
+        : 1;
+    const revenueMultiplier =
+      (snapshot.dailyEvent?.revenueMultiplier ?? 1) * choiceMultiplier;
 
-      // Read event/wave multipliers from store directly — hooks can't be
-      // called inside setInterval callbacks, only at component render time.
-      const {
-        dailyEvent,
-        activeChoiceConsequence,
-        demands,
-        hubs,
-        addPaxDelivered,
-        addRouteEarning,
-      } = useGameStore.getState();
+    liveRoutes.forEach((route) => {
+      const completedCycles = completedCyclesAtProgress(
+        route,
+        snapshot.dayProgress,
+      );
+      const scheduleKey = routeScheduleKey(route);
+      const progress = operationProgressRef.current[route.id];
 
-      const choiceMultiplier =
-        activeChoiceConsequence?.revenueMultiplier != null &&
-        activeChoiceConsequence.revenueMultiplierEndsDay != null &&
-        day < activeChoiceConsequence.revenueMultiplierEndsDay
-          ? activeChoiceConsequence.revenueMultiplier
-          : 1;
-
-      // A demand wave is represented by dailyEvent, so applying both
-      // dailyEvent and activeDemandWave here would count it twice.
-      const globalRevMul =
-        (dailyEvent?.revenueMultiplier ?? 1.0) * choiceMultiplier;
-
-      // Per-hub crowding multiplier — computed once per tick, applied per route
-      const hubCrowdMul = new Map<string, number>();
-      hubs.forEach((hub) => {
-        const crowding = hubCrowdingLevel(
-          hub.airport.iata,
-          demands,
-          hub.airport,
-        );
-        const mul =
-          crowding?.level === "crisis"
-            ? 0.8
-            : crowding?.level === "overcrowded"
-              ? 0.9
-              : 1.0;
-        hubCrowdMul.set(hub.airport.iata, mul);
-      });
-
-      const newPlanes: PlaneState[] = active.map((route) => {
-        const pts = routePoints[route.id];
-
-        if (!pts || pts.length < 2) {
-          return {
-            routeId: route.id,
-            lng: route.demand.origin.lng,
-            lat: route.demand.origin.lat,
-            rotation: 0,
-          };
-        }
-
-        const total = pts.length - 1;
-        const phase = phaseRef.current[route.id] ?? 0;
-
-        const raw = (now / scaledMs + phase) % 2;
-        const outbound = raw <= 1;
-        const progress = outbound ? raw : 2 - raw;
-
-        const idx = Math.floor(progress * total);
-        const safeIdx = Math.max(0, Math.min(total - 1, idx));
-        const nextIdx = outbound
-          ? Math.min(total, safeIdx + 1)
-          : Math.max(0, safeIdx - 1);
-
-        const [lng, lat] = pts[safeIdx];
-        const rotation = bearing(
-          pts[safeIdx],
-          pts[Math.max(0, Math.min(total, nextIdx))],
-        );
-
-        const lastRaw = lastRawRef.current[route.id];
-
-        if (lastRaw !== undefined) {
-          const justArrivedAtDest = lastRaw < 1 && raw >= 1;
-
-          if (justArrivedAtDest) {
-            // Read demand directly from store — not from React state snapshot —
-            // so delivered_pax_today reflects other planes that already boarded
-            // this rotation cycle (prevents stale state race condition)
-            const liveDemand =
-              useGameStore
-                .getState()
-                .demands.find((d) => d.id === route.demand.id) ?? route.demand;
-
-            // Demand is shared by every plane assigned to this corridor.
-            // Stop only after the shared demand is actually clear; using one
-            // plane's capacity here prevented additional planes from boarding.
-            const alreadyCleared =
-              (liveDemand.delivered_pax_today ?? 0) >=
-              (liveDemand.base_pax_day ?? 0);
-
-            if (!alreadyCleared) {
-              const deliveredPax = boardPassengers({
-                demand: liveDemand,
-                planeCapacity: route.plane.plane_model.pax_capacity,
-                dayProgress,
-                loadFactorMin: 0.65,
-                loadFactorMax: 1,
-              });
-
-              const aiAirlines = useGameStore.getState().aiAirlines;
-
-              if (deliveredPax > 0) {
-                const hub = hubs.find((h) => h.airport.iata === route.hub_iata);
-
-                const share = computePlayerMarketShare(
-                  hub?.trust ?? 0,
-                  aiAirlines,
-                  liveDemand.origin.iata,
-                  liveDemand.dest.iata,
-                );
-
-                // Math.round instead of Math.floor — prevents last pax
-                // always being lost when share < 1.0 and deliveredPax = 1.
-                // e.g. floor(1 * 0.6) = 0 (wrong), round(1 * 0.6) = 1 (correct).
-                // Also clamp effective to min 1 when boarding happened —
-                // a plane that boarded passengers always delivers at least 1.
-                const effective = Math.max(
-                  1,
-                  Math.round(deliveredPax * share),
-                );
-                const lost = Math.max(0, deliveredPax - effective);
-                if (effective > 0) {
-                  addPaxDelivered(liveDemand.id, effective, lost);
-                }
-
-                // Seasonal multiplier — continent-first, country override
-                const seasonalMul = getSeasonalMultiplier(
-                  day,
-                  liveDemand.dest?.country,
-                  liveDemand.dest?.continent,
-                );
-
-                // Condition penalty — worn planes earn less
-                const condition = route.plane.condition ?? 100;
-                const conditionMul =
-                  condition <= 15
-                    ? 0.7 // critical — -30%
-                    : condition <= 40
-                      ? 0.85 // worn     — -15%
-                      : 1.0; // good     — no penalty
-
-                // Compute net revenue for this rotation
-                const distNm = route.total_dist_nm ?? liveDemand.dist_nm;
-                const crowdMul =
-                  globalRevMul *
-                  seasonalMul *
-                  conditionMul *
-                  (hubCrowdMul.get(route.hub_iata) ?? 1.0);
-
-                const res = calcRouteRevenue({
-                  distNm,
-                  speedKts: route.plane.plane_model.speed_kts,
-                  trustPct: hub?.trust ?? 0,
-                  boardedPax: effective,
-                  seatCapacity: route.plane.plane_model.pax_capacity,
-                  costPerSector: route.plane.plane_model.cost_per_sector ?? 500,
-                  fuelPerNm: route.plane.plane_model.fuel_per_nm ?? 2.0,
-                  priceStrategy: route.price_strategy ?? "standard",
-                  priceElasticity: liveDemand.price_elasticity ?? 1,
-                  crowdMultiplier: crowdMul,
-                  congestionMultiplier: 1,
-                  businessPct: liveDemand.business_pct ?? 0.25,
-                  leisurePct: liveDemand.leisure_pct ?? 0.75,
-                });
-
-                // Accumulate net earnings per route — realtime, read by RoutesSheet/AirportSheet
-                addRouteEarning(route.id, res.net);
-
-                // Display-only popup — shows gross earned this rotation
-                const popupAmount = res.net;
-
-                const popId = `pop-${route.id}-${Date.now()}`;
-
-                setRevPops((prev) => [
-                  ...prev,
-                  {
-                    id: popId,
-                    lng: liveDemand.dest.lng,
-                    lat: liveDemand.dest.lat,
-                    amount: popupAmount,
-                    opacity: 1,
-                    offsetY: 0,
-                  },
-                ]);
-
-                let frame = 0;
-                const totalFrames = 45;
-
-                const fadeInterval = setInterval(() => {
-                  frame++;
-                  const t = frame / totalFrames;
-
-                  if (t >= 1) {
-                    clearInterval(fadeInterval);
-                    setRevPops((prev) =>
-                      prev.filter((pop) => pop.id !== popId),
-                    );
-                    return;
-                  }
-
-                  setRevPops((prev) =>
-                    prev.map((pop) =>
-                      pop.id === popId
-                        ? {
-                            ...pop,
-                            opacity: 1 - t,
-                            offsetY: t * 40,
-                          }
-                        : pop,
-                    ),
-                  );
-                }, 33);
-              }
-            } // end !alreadyCleared
-          }
-        }
-
-        lastRawRef.current[route.id] = raw;
-
-        return {
-          routeId: route.id,
-          lng,
-          lat,
-          rotation,
+      if (!progress || progress.scheduleKey !== scheduleKey) {
+        // Opening or reassigning a route never replays service cycles that
+        // occurred before that route existed.
+        operationProgressRef.current[route.id] = {
+          day: operationDay,
+          scheduleKey,
+          completedCycles,
         };
-      }) as PlaneState[];
+        return;
+      }
 
-      setPlanes(newPlanes);
-    };
+      if (progress.day !== operationDay) {
+        progress.day = operationDay;
+        progress.completedCycles = 0;
+      }
 
-    const id = setInterval(tick, ANIM_INTERVAL_MS);
-    return () => clearInterval(id);
-  }, [active, airports, day, dayProgress, speed, paused]);
+      while (progress.completedCycles < completedCycles) {
+        // Reserve this cycle before store updates trigger another render.
+        progress.completedCycles++;
+        settleRouteCycle({
+          route,
+          gameDay: operationDay,
+          dayProgress: snapshot.dayProgress,
+          revenueMultiplier,
+          allocationCache: allocationCacheRef.current,
+        });
+      }
+    });
+  }, [day, dayProgress, routes]);
 
-  if (active.length === 0) return null;
+  const planes = useMemo(
+    () =>
+      active.map((route) =>
+        planeStateAtProgress({
+          route,
+          points: routePointsById.get(route.id) ?? [],
+          dayProgress,
+        }),
+      ),
+    [active, dayProgress, routePointsById],
+  );
 
-  const lineFeatures: GeoJSON.Feature[] = [];
-  const viaPoints: GeoJSON.Feature[] = [];
-
-  active.forEach((route) => {
-    const via = route.via_iata
-      ? airports.find((airport) => airport.iata === route.via_iata)
-      : null;
-
-    if (via) {
-      lineFeatures.push({
-        type: "Feature",
-        id: `${route.id}-leg1`,
-        geometry: {
-          type: "LineString",
-          coordinates: greatCircleArc(
-            route.demand.origin.lng,
-            route.demand.origin.lat,
-            via.lng,
-            via.lat,
-          ),
-        },
-        properties: { routeId: route.id },
-      });
-
-      lineFeatures.push({
-        type: "Feature",
-        id: `${route.id}-leg2`,
-        geometry: {
-          type: "LineString",
-          coordinates: greatCircleArc(
-            via.lng,
-            via.lat,
-            route.demand.dest.lng,
-            route.demand.dest.lat,
-          ),
-        },
-        properties: { routeId: route.id },
-      });
-
-      viaPoints.push({
-        type: "Feature",
-        id: `${route.id}-via`,
-        geometry: {
-          type: "Point",
-          coordinates: [via.lng, via.lat],
-        },
-        properties: {
-          iata: via.iata,
-        },
-      });
-    } else {
-      lineFeatures.push({
+  const currentConditionByPlaneId = useMemo(
+    () => new Map(ownedPlanes.map((plane) => [plane.id, plane.condition])),
+    [ownedPlanes],
+  );
+  const conditionByRouteId = useMemo(
+    () =>
+      new Map(
+        active.map((route) => [
+          route.id,
+          currentConditionByPlaneId.get(route.plane.id) ??
+            route.plane.condition ??
+            100,
+        ]),
+      ),
+    [active, currentConditionByPlaneId],
+  );
+  const lineGeoJSON = useMemo<GeoJSON.FeatureCollection<GeoJSON.LineString>>(
+    () => ({
+      type: "FeatureCollection",
+      features: active.map((route) => ({
         type: "Feature",
         id: route.id,
         geometry: {
           type: "LineString",
-          coordinates: greatCircleArc(
-            route.demand.origin.lng,
-            route.demand.origin.lat,
-            route.demand.dest.lng,
-            route.demand.dest.lat,
-          ),
+          coordinates: routePointsById.get(route.id) ?? [],
         },
         properties: {
           routeId: route.id,
+          condition: conditionByRouteId.get(route.id) ?? 100,
         },
-      });
-    }
-  });
+      })),
+    }),
+    [active, conditionByRouteId, routePointsById],
+  );
+  const planeGeoJSON = useMemo<GeoJSON.FeatureCollection<GeoJSON.Point>>(
+    () => ({
+      type: "FeatureCollection",
+      features: planes.map((plane) => ({
+        type: "Feature",
+        id: `plane-${plane.routeId}`,
+        geometry: {
+          type: "Point",
+          coordinates: [plane.lng, plane.lat],
+        },
+        properties: {
+          rotation: plane.rotation,
+          condition: conditionByRouteId.get(plane.routeId) ?? 100,
+        },
+      })),
+    }),
+    [conditionByRouteId, planes],
+  );
 
-  const lineGeoJSON: GeoJSON.FeatureCollection = {
-    type: "FeatureCollection",
-    features: lineFeatures,
-  };
-
-  const viaGeoJSON: GeoJSON.FeatureCollection = {
-    type: "FeatureCollection",
-    features: viaPoints,
-  };
-
-  const planeGeoJSON: GeoJSON.FeatureCollection = {
-    type: "FeatureCollection",
-    features: planes.map((plane) => ({
-      type: "Feature",
-      id: `plane-${plane.routeId}`,
-      geometry: {
-        type: "Point",
-        coordinates: [plane.lng, plane.lat],
-      },
-      properties: {
-        rotation: plane.rotation,
-      },
-    })),
-  };
+  if (active.length === 0) return null;
 
   return (
     <>
@@ -506,13 +667,13 @@ export default function RouteLayer({
               ["linear"],
               ["zoom"],
               1,
+              2.8,
+              6,
               4,
-              6,
-              6,
               10,
-              8,
+              5.2,
             ],
-            lineOpacity: paused ? 0.65 : 0.92,
+            lineOpacity: paused ? 0.45 : 0.78,
             lineCap: "round",
             lineJoin: "round",
           }}
@@ -521,20 +682,29 @@ export default function RouteLayer({
         <MapboxGL.LineLayer
           id="route-line"
           style={{
-            lineColor: airlineColor,
+            lineColor: paused
+              ? Colors.muted
+              : [
+                  "case",
+                  ["<=", ["get", "condition"], 15],
+                  Colors.red,
+                  ["<=", ["get", "condition"], 40],
+                  Colors.amber,
+                  Colors.sky,
+                ],
             lineWidth: [
               "interpolate",
               ["linear"],
               ["zoom"],
               1,
-              1.4,
+              1.2,
               6,
-              2.4,
+              2,
               10,
-              3.2,
+              2.6,
             ],
-            lineOpacity: paused ? 0.45 : 0.9,
-            lineDasharray: paused ? [1, 1.6] : [3, 1.5],
+            lineOpacity: paused ? 0.5 : 0.86,
+            lineDasharray: paused ? [1, 1.5] : undefined,
             lineCap: "round",
             lineJoin: "round",
           }}
@@ -553,144 +723,30 @@ export default function RouteLayer({
                 ["linear"],
                 ["zoom"],
                 1,
-                1.1,
+                0.9,
                 5,
-                1.65,
+                1.35,
                 10,
-                2.2,
+                1.8,
               ],
-              iconColor: Colors.text,
+              iconColor: paused
+                ? Colors.muted
+                : [
+                    "case",
+                    ["<=", ["get", "condition"], 15],
+                    Colors.red,
+                    ["<=", ["get", "condition"], 40],
+                    Colors.amber,
+                    Colors.skyDark,
+                  ],
               iconHaloColor: Colors.surface,
-              iconHaloWidth: 1.5,
-              iconOpacity: paused ? 0.62 : 1,
+              iconHaloWidth: 1.25,
+              iconOpacity: paused ? 0.58 : 1,
               iconRotate: ["get", "rotation"],
               iconRotationAlignment: "map",
               iconAllowOverlap: true,
               iconIgnorePlacement: true,
               iconPitchAlignment: "map",
-            }}
-          />
-        </MapboxGL.ShapeSource>
-      )}
-
-      {revPops.length > 0 &&
-        (() => {
-          const popsGeoJSON: GeoJSON.FeatureCollection = {
-            type: "FeatureCollection",
-            features: revPops.map((pop) => ({
-              type: "Feature",
-              id: pop.id,
-              geometry: {
-                type: "Point",
-                coordinates: [pop.lng, pop.lat],
-              },
-              properties: {
-                label:
-                  pop.amount >= 0
-                    ? `+${
-                        pop.amount >= 1000
-                          ? `$${Math.round(pop.amount / 1000)}K`
-                          : `$${pop.amount}`
-                      }`
-                    : `-${
-                        Math.abs(pop.amount) >= 1000
-                          ? `$${Math.round(Math.abs(pop.amount) / 1000)}K`
-                          : `$${Math.abs(pop.amount)}`
-                      }`,
-                opacity: pop.opacity,
-                offsetY: -pop.offsetY,
-                color: pop.amount >= 0 ? Colors.green : Colors.red,
-              },
-            })),
-          };
-
-          return (
-            <MapboxGL.ShapeSource id="revenue-pops-source" shape={popsGeoJSON}>
-              <MapboxGL.SymbolLayer
-                id="revenue-pops-layer"
-                existing={false}
-                style={{
-                  textField: ["get", "label"],
-                  textSize: 13,
-                  textColor: ["get", "color"],
-                  textHaloColor: Colors.surface,
-                  textHaloWidth: 2.5,
-                  textHaloBlur: 0.5,
-                  textOpacity: ["get", "opacity"],
-                  textOffset: [0, 1.2],
-                  textAnchor: "bottom",
-                  textFont: ["DIN Offc Pro Bold", "Arial Unicode MS Bold"],
-                  symbolSortKey: 1,
-                  textAllowOverlap: true,
-                  textIgnorePlacement: true,
-                }}
-              />
-            </MapboxGL.ShapeSource>
-          );
-        })()}
-
-      {viaPoints.length > 0 && (
-        <MapboxGL.ShapeSource id="via-stops-source" shape={viaGeoJSON}>
-          <MapboxGL.CircleLayer
-            id="via-stop-ring"
-            existing={false}
-            style={{
-              circleRadius: [
-                "interpolate",
-                ["linear"],
-                ["zoom"],
-                1,
-                5,
-                5,
-                9,
-                10,
-                14,
-              ],
-              circleColor: Palette.violetSoft,
-              circleOpacity: 0.9,
-              circleStrokeColor: Colors.purple,
-              circleStrokeWidth: 2,
-              circleStrokeOpacity: 0.9,
-              circlePitchAlignment: "map",
-            }}
-          />
-
-          <MapboxGL.CircleLayer
-            id="via-stop-dot"
-            existing={false}
-            style={{
-              circleRadius: [
-                "interpolate",
-                ["linear"],
-                ["zoom"],
-                1,
-                2.5,
-                5,
-                4.5,
-                10,
-                7,
-              ],
-              circleColor: Colors.purple,
-              circleOpacity: 1,
-              circlePitchAlignment: "map",
-            }}
-          />
-
-          <MapboxGL.SymbolLayer
-            id="via-stop-label"
-            existing={false}
-            minZoomLevel={5}
-            style={{
-              textField: ["get", "iata"],
-              textSize: 10,
-              textOffset: [0, 1.4],
-              textAnchor: "top",
-              textColor: Colors.purple,
-              textOpacity: 0.95,
-              textHaloColor: Colors.surface,
-              textHaloWidth: 2,
-              textHaloBlur: 0.5,
-              textAllowOverlap: false,
             }}
           />
         </MapboxGL.ShapeSource>

@@ -7,8 +7,8 @@ import { Spacing } from "@/constants/theme";
 import { Platform, StatusBar, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-const TOP_COMMAND_ROW_HEIGHT = 56;
-const TOP_OPERATIONS_STRIP_HEIGHT = 48;
+const TOP_OPERATIONS_ROW_HEIGHT = 52;
+const TOP_DISPATCH_ROW_HEIGHT = 30;
 const BOTTOM_BRAND_RAIL_HEIGHT = 3;
 const BOTTOM_NAVIGATION_HEIGHT = 67;
 const ANDROID_STATUS_BAR_FALLBACK = 24;
@@ -21,11 +21,7 @@ const ANDROID_STATUS_BAR_FALLBACK = 24;
  */
 export const GAME_SHELL_METRICS = {
   hudContentHeight:
-    Spacing.xs +
-    TOP_COMMAND_ROW_HEIGHT +
-    Spacing.sm +
-    TOP_OPERATIONS_STRIP_HEIGHT +
-    Spacing.md,
+    Spacing.xs + TOP_OPERATIONS_ROW_HEIGHT + TOP_DISPATCH_ROW_HEIGHT,
   tabContentHeight: BOTTOM_BRAND_RAIL_HEIGHT + BOTTOM_NAVIGATION_HEIGHT,
   minimumBottomPadding: Spacing.sm,
 } as const;
@@ -33,11 +29,7 @@ export const GAME_SHELL_METRICS = {
 function resolveTopInset(safeAreaTop: number) {
   if (Platform.OS !== "android") return safeAreaTop;
 
-  return (
-    StatusBar.currentHeight ||
-    safeAreaTop ||
-    ANDROID_STATUS_BAR_FALLBACK
-  );
+  return StatusBar.currentHeight || safeAreaTop || ANDROID_STATUS_BAR_FALLBACK;
 }
 
 function calculateLayout(
@@ -50,10 +42,7 @@ function calculateLayout(
   const tabBarHeight =
     GAME_SHELL_METRICS.tabContentHeight +
     Math.max(safeAreaBottom, GAME_SHELL_METRICS.minimumBottomPadding);
-  const availableHeight = Math.max(
-    0,
-    windowHeight - hudHeight - tabBarHeight,
-  );
+  const availableHeight = Math.max(0, windowHeight - hudHeight - tabBarHeight);
 
   return { hudHeight, tabBarHeight, availableHeight };
 }
@@ -62,9 +51,7 @@ function calculateLayout(
 export function useHudHeight(): number {
   const insets = useSafeAreaInsets();
 
-  return (
-    resolveTopInset(insets.top) + GAME_SHELL_METRICS.hudContentHeight
-  );
+  return resolveTopInset(insets.top) + GAME_SHELL_METRICS.hudContentHeight;
 }
 
 /** Full height of the bottom navigation, including its safe-area padding. */

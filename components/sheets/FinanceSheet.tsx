@@ -1,15 +1,15 @@
+import { AirlineBrandMark } from "@/components/airline-identity";
 import {
   Colors,
   MIN_TOUCH,
-  Palette,
   Radius,
-  Shadow,
   Spacing,
   Typography,
 } from "@/constants/theme";
 import { useTabBarHeight } from "@/hooks/useSheetLayout";
-import { dailyInterest, fmtCash, fmtCashShort } from "@/lib/revenue";
-import type { Route } from "@/store";
+import { DEFAULT_AIRLINE_LOGO_ID, getAirlinePalette } from "@/lib/airlineBrand";
+import { dailyInterest, fmtCash } from "@/lib/revenue";
+import type { LedgerEntry, Route } from "@/store";
 import {
   useAirline,
   useCash,
@@ -17,779 +17,579 @@ import {
   useGameStore,
   useLedger,
   useLoan,
-  useOwnedPlanes,
   useRouteEarnings,
   useRoutes,
 } from "@/store";
-import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { Ionicons } from "@expo/vector-icons";
 import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import { useMemo } from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
-function CashBar({ data, color }: { data: number[]; color: string }) {
-  if (data.length === 0 || !data.some((v) => v !== 0)) return null;
+function signedCash(value: number): string {
+  if (Math.abs(value) < 0.5) return "$0";
+  return value > 0 ? `+${fmtCash(value)}` : fmtCash(value);
+}
 
-  const max = Math.max(...data.map((v) => Math.abs(v)), 1);
-
+function SectionHeader({ title, detail }: { title: string; detail?: string }) {
   return (
-    <View style={cb.wrap}>
-      {data.map((v, i) => {
-        const positive = v >= 0;
-        const h = Math.max(4, Math.round((Math.abs(v) / max) * 54));
-        return (
-          <View key={i} style={cb.col}>
-            <View
-              style={[
-                cb.bar,
-                {
-                  height: h,
-                  backgroundColor: positive ? color : Colors.red,
-                  opacity: 0.35 + (i / data.length) * 0.65,
-                },
-              ]}
-            />
-          </View>
-        );
-      })}
+    <View style={styles.sectionHeader}>
+      <Text style={styles.sectionTitle}>{title}</Text>
+      {detail ? <Text style={styles.sectionDetail}>{detail}</Text> : null}
     </View>
   );
 }
 
-function RouteRewardRow({ route, reward }: { route: Route; reward: number }) {
-  return (
-    <View style={rr.row}>
-      <View style={rr.left}>
-        <Text style={rr.route}>
-          {route.demand.origin.iata}
-          {route.via_iata ? ` → ${route.via_iata}` : ""}
-          {` → ${route.demand.dest.iata}`}
-        </Text>
-        <Text style={rr.meta}>
-          {route.plane.plane_model.nickname} ·{" "}
-          {route.via_iata ? "Connecting" : "Direct"}
-        </Text>
-      </View>
-
-      <View style={rr.rewardPill}>
-        <Ionicons name="cash-outline" size={12} color={Colors.green} />
-        <Text
-          style={[
-            rr.reward,
-            { color: reward >= 0 ? Colors.green : Colors.red },
-          ]}
-        >
-          {fmtCash(reward)}
-        </Text>
-      </View>
-    </View>
-  );
-}
-
-function LedgerRow({
-  entry,
+function FinancialRow({
+  label,
+  value,
+  valueColor = Colors.text,
+  strong = false,
+  last = false,
 }: {
-  entry: { day: number; label: string; amount: number; type: string };
+  label: string;
+  value: string;
+  valueColor?: string;
+  strong?: boolean;
+  last?: boolean;
 }) {
-  const positive = entry.amount >= 0;
-
-  const icon =
-    entry.type === "event"
-      ? "flash-outline"
-      : entry.type === "revenue"
-        ? "airplane"
-        : entry.type === "interest"
-          ? "percent"
-          : entry.type === "purchase"
-            ? "cart-outline"
-            : "cash-outline";
-
   return (
-    <View style={lr.row}>
-      <View
+    <View style={[styles.financialRow, last && styles.lastRow]}>
+      <Text style={[styles.rowLabel, strong && styles.strongText]}>
+        {label}
+      </Text>
+      <Text
+        numberOfLines={1}
         style={[
-          lr.icon,
-          {
-            backgroundColor: positive ? Colors.green + "16" : Colors.red + "16",
-          },
+          styles.rowValue,
+          strong && styles.strongText,
+          { color: valueColor },
         ]}
       >
-        {entry.type === "interest" ? (
-          <MaterialCommunityIcons
-            name={icon as any}
-            size={13}
-            color={positive ? Colors.green : Colors.red}
-          />
-        ) : (
-          <Ionicons
-            name={icon as any}
-            size={13}
-            color={positive ? Colors.green : Colors.red}
-          />
-        )}
-      </View>
-
-      <View style={lr.body}>
-        <Text style={lr.label} numberOfLines={1}>
-          {entry.label}
-        </Text>
-        <Text style={lr.day}>Day {entry.day}</Text>
-      </View>
-
-      <Text
-        style={[lr.amount, { color: positive ? Colors.green : Colors.red }]}
-      >
-        {fmtCashShort(entry.amount)}
+        {value}
       </Text>
     </View>
   );
 }
 
-function StatCard({
-  label,
-  value,
-  color,
-  sub,
+function routeLabel(route: Route): string {
+  const origin = route.demand.origin.iata;
+  const destination = route.demand.dest.iata;
+  return route.via_iata
+    ? `${origin} → ${route.via_iata} → ${destination}`
+    : `${origin} → ${destination}`;
+}
+
+function RouteResultRow({
+  route,
+  result,
+  last,
 }: {
-  label: string;
-  value: string;
-  color: string;
-  sub?: string;
+  route: Route;
+  result: number;
+  last: boolean;
 }) {
+  const resultColor =
+    result > 0 ? Colors.green : result < 0 ? Colors.red : Colors.muted;
+
   return (
-    <View style={sc.card}>
-      <Text style={sc.label}>{label}</Text>
-      <Text style={[sc.value, { color }]}>{value}</Text>
-      {sub && <Text style={sc.sub}>{sub}</Text>}
+    <View style={[styles.routeRow, last && styles.lastRow]}>
+      <View style={styles.routeCopy}>
+        <Text style={styles.routeName}>{routeLabel(route)}</Text>
+        <Text numberOfLines={1} style={styles.routeMeta}>
+          {route.plane.plane_model.nickname} ·{" "}
+          {route.active ? "Active" : "Paused"}
+        </Text>
+      </View>
+      <View style={styles.routeResult}>
+        <Text style={[styles.routeValue, { color: resultColor }]}>
+          {signedCash(result)}
+        </Text>
+        <Text style={styles.routeResultLabel}>Today net</Text>
+      </View>
+    </View>
+  );
+}
+
+function LedgerRow({ entry, last }: { entry: LedgerEntry; last: boolean }) {
+  const amountColor =
+    entry.amount > 0
+      ? Colors.green
+      : entry.amount < 0
+        ? Colors.red
+        : Colors.muted;
+
+  return (
+    <View style={[styles.ledgerRow, last && styles.lastRow]}>
+      <View style={styles.ledgerCopy}>
+        <Text numberOfLines={1} style={styles.ledgerLabel}>
+          {entry.label}
+        </Text>
+        <Text style={styles.ledgerDay}>Day {entry.day}</Text>
+      </View>
+      <Text style={[styles.ledgerAmount, { color: amountColor }]}>
+        {signedCash(entry.amount)}
+      </Text>
     </View>
   );
 }
 
 export default function FinanceSheet() {
   const airline = useAirline();
-  const ledger = useLedger();
-  const routes = useRoutes();
   const cash = useCash();
   const loan = useLoan();
   const day = useDay();
-  const ownedPlanes = useOwnedPlanes();
-  const tabBarH = useTabBarHeight();
+  const routes = useRoutes();
   const routeEarnings = useRouteEarnings();
-  const closeSheet = useGameStore((s) => s.closeSheet);
-  const openSheet = useGameStore((s) => s.openSheet);
+  const ledger = useLedger();
+  const tabBarHeight = useTabBarHeight();
+  const closeSheet = useGameStore((state) => state.closeSheet);
+  const openSheet = useGameStore((state) => state.openSheet);
 
-  const color = airline?.color ?? Colors.sky;
+  const defaultPalette = getAirlinePalette("aviation-blue");
+  const airlineName = airline?.name ?? "Your airline";
+  const airlineCode = airline?.airline_code ?? "AIR";
+  const airlineLogoId = airline?.logo_id ?? DEFAULT_AIRLINE_LOGO_ID;
+  const airlinePrimaryColor = airline?.color ?? defaultPalette.primary;
+  const airlineSecondaryColor =
+    airline?.secondary_color ?? defaultPalette.secondary;
+  const interestRate = airline?.loan_rate ?? 5;
+  const projectedInterest = dailyInterest(loan, interestRate);
 
-  const diffRates: Record<string, number> = { easy: 3, normal: 5, hard: 9 };
-  const rate = diffRates[airline?.difficulty ?? "normal"] ?? 5;
-  const interest = dailyInterest(loan, rate);
-
-  const routeRewards = useMemo(() => {
-    return routes
-      .filter((r) => r.active)
-      .map((r) => {
-        return {
-          route: r,
-          reward: routeEarnings[r.id] ?? 0, // gross only — costs don't actually deduct cash
-        };
-      })
-      .sort((a, b) => b.reward - a.reward);
-  }, [routes, routeEarnings]);
+  const routeResults = useMemo(
+    () =>
+      routes
+        .filter((route) => route.active)
+        .map((route) => ({
+          route,
+          result: routeEarnings[route.id] ?? 0,
+        }))
+        .sort((a, b) => b.result - a.result),
+    [routeEarnings, routes],
+  );
 
   const recentLedger = useMemo(
-    () =>
-      [...ledger]
-        .sort((a, b) => b.day - a.day || b.id.localeCompare(a.id))
-        .slice(0, 30),
+    () => [...ledger].sort((a, b) => b.day - a.day).slice(0, 12),
     [ledger],
   );
 
-  const cashBars = useMemo(() => {
-    const byDay: Record<number, number> = {};
-    ledger.forEach((e) => {
-      byDay[e.day] = (byDay[e.day] ?? 0) + e.amount;
-    });
-    return Array.from({ length: 18 }, (_, i) => {
-      const d = Math.max(1, day - 17 + i);
-      return byDay[d] ?? 0;
-    });
-  }, [ledger, day]);
-
-  const totalRouteReward = routeRewards.reduce((sum, r) => sum + r.reward, 0);
-
-  const activeRoutes = routes.filter((r) => r.active);
-  const activePlaneIds = new Set(activeRoutes.map((r) => r.plane.id));
-  const idlePlanes = ownedPlanes.filter((p) => !activePlaneIds.has(p.id));
-  const maintenanceCost = idlePlanes.reduce((sum, p) => {
-    // Idle maintenance: 15% of daily operating cost at min utilization
-    const dailyOps =
-      (p.plane_model.cost_per_sector ?? 500) * 2 +
-      (p.plane_model.fuel_per_nm ?? 2) * 500;
-    return sum + Math.round(dailyOps * 0.15);
-  }, 0);
-  const dailyNet = totalRouteReward - interest - maintenanceCost;
-  const netWorth = cash - loan;
-  const bestRoute =
-    routeRewards.length > 0 && routeRewards[0].reward >= 0
-      ? routeRewards[0]
-      : null;
+  const routeOperatingResult = routeResults.reduce(
+    (total, item) => total + item.result,
+    0,
+  );
+  const projectedDayResult = routeOperatingResult - projectedInterest;
+  const netPosition = cash - loan;
+  const resultColor =
+    projectedDayResult > 0
+      ? Colors.green
+      : projectedDayResult < 0
+        ? Colors.red
+        : Colors.muted;
 
   return (
     <BottomSheetScrollView
-      style={s.root}
+      style={styles.root}
       contentContainerStyle={[
-        s.content,
-        { paddingBottom: tabBarH + Spacing.xxl },
+        styles.content,
+        { paddingBottom: tabBarHeight + Spacing.xxl },
       ]}
       showsVerticalScrollIndicator={false}
     >
-      <View style={s.header}>
-        <View
-          style={[
-            s.headerMark,
-            { borderColor: color, backgroundColor: color + "14" },
-          ]}
-        >
-          <Ionicons name="stats-chart-outline" size={20} color={color} />
-        </View>
-        <View style={s.headerCopy}>
-          <Text style={s.kicker}>FINANCIAL CONTROL</Text>
-          <Text style={s.title}>Airline Finances</Text>
-          <Text style={s.subtitle}>Day {day} · cash flow and performance</Text>
+      <View style={styles.header}>
+        <AirlineBrandMark
+          accessibilityLabel={`${airlineName} identity`}
+          logoId={airlineLogoId}
+          primary={airlinePrimaryColor}
+          secondary={airlineSecondaryColor}
+          size={42}
+          variant="leaderboard"
+        />
+        <View style={styles.headerCopy}>
+          <Text style={styles.title}>Finance</Text>
+          <Text numberOfLines={1} style={styles.subtitle}>
+            {airlineName} · {airlineCode} · Day {day} operating statement
+          </Text>
         </View>
         <TouchableOpacity
-          accessibilityLabel="Close airline finances"
+          accessibilityLabel="Close finance"
           accessibilityRole="button"
+          activeOpacity={0.7}
           onPress={closeSheet}
-          style={s.closeButton}
+          style={styles.closeButton}
         >
           <Ionicons name="close" size={22} color={Colors.text} />
         </TouchableOpacity>
       </View>
 
-      <View style={s.quickActions}>
-        <TouchableOpacity
-          accessibilityLabel="Open bank"
-          accessibilityRole="button"
-          style={s.quickButton}
-          onPress={() => openSheet("bank")}
-        >
-          <View style={[s.quickIcon, { backgroundColor: Palette.orangeSoft }]}>
-            <MaterialCommunityIcons
-              name="bank-outline"
-              size={17}
-              color={Colors.amber}
-            />
-          </View>
-          <View style={s.quickCopy}>
-            <Text style={s.quickTitle}>Bank</Text>
-            <Text style={s.quickSubtitle}>Loans and repayments</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={16} color={Colors.muted} />
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          accessibilityLabel="Open airline rankings"
-          accessibilityRole="button"
-          style={s.quickButton}
-          onPress={() => openSheet("leaderboard")}
-        >
-          <View style={[s.quickIcon, { backgroundColor: Colors.skyDim }]}>
-            <MaterialCommunityIcons
-              name="trophy-outline"
-              size={17}
-              color={Colors.sky}
-            />
-          </View>
-          <View style={s.quickCopy}>
-            <Text style={s.quickTitle}>Rankings</Text>
-            <Text style={s.quickSubtitle}>Compare airline value</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={16} color={Colors.muted} />
-        </TouchableOpacity>
-      </View>
-
-      <View style={[s.hero, dailyNet >= 0 ? s.heroPositive : s.heroNegative]}>
-        <Text style={s.heroLabel}>TODAY&apos;S RESULT</Text>
-        <Text
-          style={[
-            s.heroValue,
-            { color: dailyNet >= 0 ? Colors.green : Colors.red },
-          ]}
-        >
-          {fmtCash(dailyNet)}
+      <View style={styles.resultSection}>
+        <Text style={styles.resultLabel}>Projected result today</Text>
+        <Text style={[styles.resultValue, { color: resultColor }]}>
+          {signedCash(projectedDayResult)}
         </Text>
+        <Text style={styles.resultHelp}>
+          Route earnings so far, less today&apos;s projected loan interest.
+        </Text>
+      </View>
 
-        <View style={s.heroBreakdown}>
-          <View style={s.heroLine}>
-            <Ionicons name="airplane" size={12} color={Colors.green} />
-            <Text style={s.heroLineLabel}>Routes</Text>
-            <Text
-              style={[
-                s.heroLineValue,
-                { color: totalRouteReward >= 0 ? Colors.green : Colors.red },
-              ]}
-            >
-              {fmtCash(totalRouteReward)}
-            </Text>
-          </View>
-
-          {interest > 0 && (
-            <View style={s.heroLine}>
-              <MaterialCommunityIcons
-                name="percent"
-                size={12}
-                color={Colors.red}
-              />
-              <Text style={s.heroLineLabel}>Loan interest</Text>
-              <Text style={[s.heroLineValue, { color: Colors.red }]}>
-                -{fmtCash(interest)}
-              </Text>
-            </View>
-          )}
-
-          {maintenanceCost > 0 && (
-            <View style={s.heroLine}>
-              <Ionicons
-                name="construct-outline"
-                size={12}
-                color={Colors.amber}
-              />
-              <Text style={s.heroLineLabel}>Idle aircraft upkeep</Text>
-              <Text style={[s.heroLineValue, { color: Colors.red }]}>
-                -{fmtCash(maintenanceCost)}
-              </Text>
-            </View>
-          )}
+      <View style={styles.section}>
+        <SectionHeader title="Position" />
+        <View style={styles.dataTable}>
+          <FinancialRow label="Available cash" value={fmtCash(cash)} />
+          <FinancialRow
+            label="Outstanding loan"
+            value={fmtCash(loan)}
+            valueColor={loan > 0 ? Colors.red : Colors.muted}
+          />
+          <FinancialRow
+            label="Net position"
+            value={signedCash(netPosition)}
+            valueColor={netPosition >= 0 ? Colors.green : Colors.red}
+            strong
+            last
+          />
         </View>
       </View>
 
-      <View style={s.statsRow}>
-        <StatCard
-          label="Cash"
-          value={fmtCash(cash)}
-          color={cash < 100_000 ? Colors.red : Colors.green}
-        />
-        <StatCard
-          label="Net worth"
-          value={fmtCashShort(netWorth)}
-          color={netWorth >= 0 ? Colors.green : Colors.red}
-        />
-        <StatCard
-          label="Loan"
-          value={fmtCash(loan)}
-          color={loan > 0 ? Colors.red : Colors.dim}
-          sub={loan > 0 ? `${fmtCash(interest)}/day` : "clear"}
-        />
+      <View style={styles.section}>
+        <SectionHeader title="Today" />
+        <View style={styles.dataTable}>
+          <FinancialRow
+            label="Route operating result"
+            value={signedCash(routeOperatingResult)}
+            valueColor={routeOperatingResult >= 0 ? Colors.green : Colors.red}
+          />
+          <FinancialRow
+            label="Projected loan interest"
+            value={
+              projectedInterest > 0 ? `-${fmtCash(projectedInterest)}` : "$0"
+            }
+            valueColor={projectedInterest > 0 ? Colors.red : Colors.muted}
+          />
+          <FinancialRow
+            label="Projected day result"
+            value={signedCash(projectedDayResult)}
+            valueColor={resultColor}
+            strong
+            last
+          />
+        </View>
       </View>
 
-      {cashBars.some((v) => v !== 0) && (
-        <View style={s.section}>
-          <View style={s.sectionHead}>
-            <Text style={s.sectionTitle}>Cash flow</Text>
-            <Text style={s.sectionHint}>last 18 days</Text>
-          </View>
-          <CashBar data={cashBars} color={color} />
+      <TouchableOpacity
+        accessibilityHint="Opens borrowing and repayment controls"
+        accessibilityLabel="Open bank"
+        accessibilityRole="button"
+        activeOpacity={0.7}
+        onPress={() => openSheet("bank")}
+        style={styles.bankRow}
+      >
+        <Ionicons name="business-outline" size={24} color={Colors.skyDark} />
+        <View style={styles.bankCopy}>
+          <Text style={styles.bankTitle}>Bank</Text>
+          <Text style={styles.bankMeta}>
+            {interestRate}% annual rate · {fmtCash(projectedInterest)} interest
+            per day
+          </Text>
         </View>
-      )}
+        <Ionicons name="chevron-forward" size={20} color={Colors.muted} />
+      </TouchableOpacity>
 
-      {bestRoute && (
-        <View style={[s.bestCard, { borderColor: color + "44" }]}>
-          <View style={s.bestIcon}>
-            <Ionicons name="trophy-outline" size={18} color={color} />
+      <View style={styles.section}>
+        <SectionHeader
+          title="Route results"
+          detail={`${routeResults.length} active ${routeResults.length === 1 ? "market" : "markets"}`}
+        />
+        {routeResults.length > 0 ? (
+          <View style={styles.routeList}>
+            {routeResults.map((item, index) => (
+              <RouteResultRow
+                key={item.route.id}
+                route={item.route}
+                result={item.result}
+                last={index === routeResults.length - 1}
+              />
+            ))}
           </View>
-          <View style={{ flex: 1 }}>
-            <Text style={s.bestTitle}>Best cash route</Text>
-            <Text style={s.bestRoute}>
-              {bestRoute.route.demand.origin.iata}
-              {bestRoute.route.via_iata ? ` → ${bestRoute.route.via_iata}` : ""}
-              {` → ${bestRoute.route.demand.dest.iata}`}
+        ) : (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyTitle}>No route results yet</Text>
+            <Text style={styles.emptyText}>
+              Open a route and assign an aircraft to begin earning revenue.
             </Text>
           </View>
-          <Text
-            style={[
-              s.bestCash,
-              { color: bestRoute.reward >= 0 ? Colors.green : Colors.red },
-            ]}
-          >
-            {fmtCash(bestRoute.reward)}
-          </Text>
-        </View>
-      )}
+        )}
+      </View>
 
-      {routeRewards.length > 0 ? (
-        <View style={s.section}>
-          <View style={s.sectionHead}>
-            <Text style={s.sectionTitle}>Routes</Text>
-            <Text style={s.sectionHint}>{routeRewards.length} active</Text>
+      {recentLedger.length > 0 ? (
+        <View style={styles.section}>
+          <SectionHeader title="Recent activity" detail="Latest 12 entries" />
+          <View style={styles.ledgerList}>
+            {recentLedger.map((entry, index) => (
+              <LedgerRow
+                key={entry.id}
+                entry={entry}
+                last={index === recentLedger.length - 1}
+              />
+            ))}
           </View>
-
-          {routeRewards.map(({ route, reward }) => (
-            <RouteRewardRow key={route.id} route={route} reward={reward} />
-          ))}
         </View>
-      ) : (
-        <View style={s.empty}>
-          <View style={s.emptyIcon}>
-            <MaterialCommunityIcons
-              name="routes"
-              size={28}
-              color={Colors.sky}
-            />
-          </View>
-          <Text style={s.emptyTitle}>No route revenue yet</Text>
-          <Text style={s.emptySub}>
-            Open a hub, create a route, and assign a plane to start earning.
-          </Text>
-        </View>
-      )}
-
-      {recentLedger.length > 0 && (
-        <View style={s.section}>
-          <View style={s.sectionHead}>
-            <Text style={s.sectionTitle}>Recent activity</Text>
-            <Text style={s.sectionHint}>latest 30</Text>
-          </View>
-
-          {recentLedger.map((entry) => (
-            <LedgerRow key={entry.id} entry={entry} />
-          ))}
-        </View>
-      )}
-
-      <View style={{ height: 50 }} />
+      ) : null}
     </BottomSheetScrollView>
   );
 }
 
-const cb = StyleSheet.create({
-  wrap: {
-    height: 62,
-    flexDirection: "row",
-    alignItems: "flex-end",
-    gap: 3,
-    paddingTop: 6,
-  },
-  col: {
+const styles = StyleSheet.create({
+  root: {
     flex: 1,
-    alignItems: "center",
-    justifyContent: "flex-end",
+    backgroundColor: Colors.surface,
   },
-  bar: {
-    width: "100%",
-    borderRadius: 3,
+  content: {
+    backgroundColor: Colors.surface,
   },
-});
-
-const rr = StyleSheet.create({
-  row: {
-    flexDirection: "row",
-    alignItems: "center",
-    padding: Spacing.md,
-    marginBottom: Spacing.sm,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: Radius.lg,
-    backgroundColor: Colors.panel,
-    gap: Spacing.sm,
-    ...Shadow.card,
-  },
-  left: { flex: 1, gap: 2 },
-  route: {
-    fontFamily: Typography.mono,
-    fontSize: 12,
-    color: Colors.skyDark,
-    fontWeight: "700",
-    letterSpacing: 0.4,
-  },
-  meta: {
-    fontSize: 10,
-    color: Colors.muted,
-  },
-  rewardPill: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    borderRadius: Radius.full,
-    backgroundColor: Palette.greenSoft,
-    paddingHorizontal: 9,
-    paddingVertical: 5,
-  },
-  reward: {
-    fontFamily: Typography.mono,
-    fontSize: 12,
-    color: Colors.green,
-    fontWeight: "700",
-  },
-});
-
-const lr = StyleSheet.create({
-  row: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.sm,
-    padding: Spacing.sm,
-    marginBottom: Spacing.xs,
-    borderRadius: Radius.md,
-    backgroundColor: Colors.panel,
-  },
-  icon: {
-    width: 30,
-    height: 30,
-    borderRadius: 9,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  body: { flex: 1, minWidth: 0 },
-  label: { fontSize: 12, color: Colors.text },
-  day: { fontSize: 9, color: Colors.muted, marginTop: 1 },
-  amount: { fontFamily: Typography.mono, fontSize: 12, fontWeight: "700" },
-});
-
-const sc = StyleSheet.create({
-  card: {
-    flex: 1,
-    backgroundColor: Colors.panel,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    padding: Spacing.md,
-    alignItems: "center",
-    gap: 3,
-    ...Shadow.card,
-  },
-  label: {
-    fontFamily: Typography.mono,
-    fontSize: 8,
-    color: Colors.muted,
-    letterSpacing: 1.4,
-  },
-  value: {
-    fontFamily: Typography.mono,
-    fontSize: 15,
-    fontWeight: "700",
-  },
-  sub: {
-    fontSize: 9,
-    color: Colors.muted,
-    textAlign: "center",
-  },
-});
-
-const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: Colors.surface },
-  content: { paddingBottom: Spacing.xxl },
-
   header: {
+    minHeight: 68,
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.sm,
-    paddingBottom: Spacing.md,
     gap: Spacing.md,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
   },
-  headerMark: {
-    width: MIN_TOUCH,
-    height: MIN_TOUCH,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderRadius: Radius.md,
-  },
-  headerCopy: { flex: 1 },
-  kicker: {
-    color: Colors.skyDark,
-    fontFamily: Typography.mono,
-    fontSize: 8,
-    letterSpacing: 1.3,
+  headerCopy: {
+    flex: 1,
+    minWidth: 0,
   },
   title: {
-    fontFamily: Typography.display,
-    fontSize: 28,
-    lineHeight: 31,
-    letterSpacing: 0.4,
     color: Colors.text,
+    fontSize: Typography.size.title,
+    lineHeight: Typography.lineHeight.title,
+    fontWeight: Typography.weight.bold,
   },
   subtitle: {
-    fontSize: 10,
+    marginTop: Spacing.xxs,
     color: Colors.muted,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
   },
   closeButton: {
     width: MIN_TOUCH,
     height: MIN_TOUCH,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: Radius.full,
-    backgroundColor: Colors.inset,
-  },
-  quickActions: {
-    flexDirection: "row",
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.md,
-    gap: Spacing.sm,
-  },
-  quickButton: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.sm,
-    minHeight: 54,
-    padding: Spacing.sm,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.panel,
-    ...Shadow.card,
-  },
-  quickIcon: {
-    width: 34,
-    height: 34,
-    alignItems: "center",
-    justifyContent: "center",
     borderRadius: Radius.md,
   },
-  quickCopy: { flex: 1, minWidth: 0 },
-  quickTitle: { color: Colors.text, fontSize: 11, fontWeight: "700" },
-  quickSubtitle: { color: Colors.muted, fontSize: 8, marginTop: 2 },
-
-  hero: {
+  resultSection: {
     marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.md,
-    borderRadius: Radius.xl,
-    borderWidth: 1,
-    padding: Spacing.lg,
-    ...Shadow.card,
+    paddingVertical: Spacing.xl,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSection,
   },
-  heroPositive: {
-    borderColor: Colors.green,
-    backgroundColor: Palette.greenSoft,
-  },
-  heroNegative: { borderColor: Colors.red, backgroundColor: Palette.redSoft },
-  heroLabel: {
-    fontFamily: Typography.mono,
-    fontSize: 9,
+  resultLabel: {
     color: Colors.muted,
-    letterSpacing: 2,
+    fontSize: Typography.size.body,
+    lineHeight: Typography.lineHeight.body,
   },
-  heroValue: {
+  resultValue: {
+    marginTop: Spacing.xs,
     fontFamily: Typography.mono,
-    fontSize: 30,
-    fontWeight: "700",
-    marginTop: 4,
+    fontSize: Typography.size.display,
+    lineHeight: Typography.lineHeight.display,
+    fontWeight: Typography.weight.bold,
   },
-  heroBreakdown: {
+  resultHelp: {
     marginTop: Spacing.sm,
-    gap: 6,
-  },
-  heroLine: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 7,
-  },
-  heroLineLabel: {
-    flex: 1,
-    fontSize: 11,
     color: Colors.muted,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.body,
   },
-  heroLineValue: {
-    fontFamily: Typography.mono,
-    fontSize: 11,
-    fontWeight: "700",
-  },
-
-  statsRow: {
-    flexDirection: "row",
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.md,
-    gap: Spacing.sm,
-  },
-
   section: {
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.lg,
+    marginTop: Spacing.xl,
+    paddingHorizontal: Spacing.lg,
   },
-  sectionHead: {
+  sectionHeader: {
+    minHeight: 38,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    marginBottom: Spacing.sm,
+    gap: Spacing.md,
   },
   sectionTitle: {
-    fontFamily: Typography.mono,
-    fontSize: 9,
-    color: Colors.skyDark,
-    letterSpacing: 2.2,
-    fontWeight: "700",
+    color: Colors.text,
+    fontSize: 18,
+    lineHeight: 24,
+    fontWeight: Typography.weight.bold,
   },
-  sectionHint: {
-    fontSize: 9,
+  sectionDetail: {
+    flexShrink: 1,
     color: Colors.muted,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+    textAlign: "right",
   },
-
-  bestCard: {
+  dataTable: {
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSection,
+  },
+  financialRow: {
+    minHeight: 52,
     flexDirection: "row",
     alignItems: "center",
-    gap: Spacing.sm,
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.md,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    backgroundColor: Colors.panel,
-    padding: Spacing.md,
-    ...Shadow.card,
+    justifyContent: "space-between",
+    gap: Spacing.lg,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
   },
-  bestIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: Colors.skyDim,
+  lastRow: {
+    borderBottomWidth: 0,
   },
-  bestTitle: {
-    fontSize: 10,
+  rowLabel: {
+    flex: 1,
     color: Colors.muted,
-    marginBottom: 2,
+    fontSize: Typography.size.body,
+    lineHeight: Typography.lineHeight.body,
   },
-  bestRoute: {
-    fontFamily: Typography.mono,
-    fontSize: 12,
+  rowValue: {
+    flexShrink: 0,
     color: Colors.text,
-    fontWeight: "700",
-  },
-  bestCash: {
     fontFamily: Typography.mono,
-    fontSize: 14,
-    fontWeight: "700",
+    fontSize: Typography.size.body,
+    lineHeight: Typography.lineHeight.body,
+    textAlign: "right",
   },
-
-  empty: {
-    alignItems: "center",
-    padding: Spacing.xxl,
-    gap: Spacing.sm,
+  strongText: {
+    color: Colors.text,
+    fontWeight: Typography.weight.bold,
+  },
+  bankRow: {
+    minHeight: 70,
+    marginTop: Spacing.xl,
     marginHorizontal: Spacing.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: Radius.xl,
-    backgroundColor: Colors.panel,
-    ...Shadow.card,
-  },
-  emptyIcon: {
-    width: 58,
-    height: 58,
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    borderRadius: Radius.full,
-    backgroundColor: Colors.skyDim,
+    gap: Spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSection,
+  },
+  bankCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  bankTitle: {
+    color: Colors.text,
+    fontSize: Typography.size.body,
+    lineHeight: Typography.lineHeight.body,
+    fontWeight: Typography.weight.bold,
+  },
+  bankMeta: {
+    marginTop: Spacing.xxs,
+    color: Colors.muted,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+  },
+  routeList: {
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSection,
+  },
+  routeRow: {
+    minHeight: 74,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+  },
+  routeCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  routeName: {
+    color: Colors.text,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.body,
+    lineHeight: Typography.lineHeight.body,
+    fontWeight: Typography.weight.bold,
+  },
+  routeMeta: {
+    marginTop: Spacing.xxs,
+    color: Colors.muted,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+  },
+  routeResult: {
+    flexShrink: 0,
+    alignItems: "flex-end",
+  },
+  routeValue: {
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.body,
+    lineHeight: Typography.lineHeight.body,
+    fontWeight: Typography.weight.bold,
+  },
+  routeResultLabel: {
+    marginTop: Spacing.xxs,
+    color: Colors.muted,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
+  },
+  emptyState: {
+    paddingVertical: Spacing.xl,
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSection,
   },
   emptyTitle: {
-    fontSize: 15,
     color: Colors.text,
-    fontWeight: "700",
+    fontSize: Typography.size.body,
+    lineHeight: Typography.lineHeight.body,
+    fontWeight: Typography.weight.semibold,
   },
-  emptySub: {
-    fontSize: 12,
+  emptyText: {
+    marginTop: Spacing.xs,
     color: Colors.muted,
-    textAlign: "center",
-    lineHeight: 18,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.body,
+  },
+  ledgerList: {
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSection,
+  },
+  ledgerRow: {
+    minHeight: 58,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+  },
+  ledgerCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  ledgerLabel: {
+    color: Colors.text,
+    fontSize: Typography.size.body,
+    lineHeight: Typography.lineHeight.body,
+  },
+  ledgerDay: {
+    color: Colors.muted,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
+  },
+  ledgerAmount: {
+    flexShrink: 0,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.body,
+    lineHeight: Typography.lineHeight.body,
+    fontWeight: Typography.weight.semibold,
   },
 });

@@ -1,14 +1,21 @@
 /**
- * components/ui/LoadingScreen.tsx
+ * Loading and map-readiness status.
  *
- * FlightCraft loading screen — clean and minimal.
+ * This is an operations manifest, not a promotional splash screen. It reports
+ * real loader state and never invents progress while the game is working.
  */
 
-import { Colors, Spacing } from "@/constants/theme";
+import { Colors, Radius, Spacing, Typography } from "@/constants/theme";
 import type { LoadStep } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
-import { useEffect, useRef } from "react";
-import { Animated, StyleSheet, Text, View } from "react-native";
+import { Image } from "expo-image";
+import {
+  ActivityIndicator,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 interface LoadingScreenProps {
@@ -18,257 +25,423 @@ interface LoadingScreenProps {
   overlay?: boolean;
 }
 
+function stepPresentation(status: LoadStep["status"]) {
+  switch (status) {
+    case "done":
+      return {
+        icon: "checkmark" as const,
+        color: Colors.green,
+        label: "Ready",
+      };
+    case "loading":
+      return {
+        icon: "sync-outline" as const,
+        color: Colors.sky,
+        label: "In progress",
+      };
+    case "error":
+      return {
+        icon: "alert" as const,
+        color: Colors.red,
+        label: "Check failed",
+      };
+    default:
+      return {
+        icon: "remove" as const,
+        color: Colors.dim,
+        label: "Waiting",
+      };
+  }
+}
+
+function systemName(label: string) {
+  const cleanLabel = label.replace(/^loading\s+/i, "").trim();
+  return cleanLabel.charAt(0).toUpperCase() + cleanLabel.slice(1);
+}
+
 export default function LoadingScreen({
   steps,
   message,
   error,
-  overlay,
+  overlay = false,
 }: LoadingScreenProps) {
   const insets = useSafeAreaInsets();
-  const fade = useRef(new Animated.Value(0)).current;
-  const rise = useRef(new Animated.Value(20)).current;
-  const planeBob = useRef(new Animated.Value(0)).current;
-  const barWidth = useRef(new Animated.Value(0)).current;
-
-  const done = steps?.filter((s) => s.status === "done").length ?? 0;
-  const total = steps?.length ?? 1;
-  const pct = Math.round((done / total) * 100);
-
-  const hasError = !!error || steps?.some((s) => s.status === "error");
-  const accentColor = hasError ? Colors.red : Colors.sky;
-
-  const currentStep = steps?.find((s) => s.status === "loading");
+  const completedSteps =
+    steps?.filter((step) => step.status === "done").length ?? 0;
+  const totalSteps = steps?.length ?? 0;
+  const progress =
+    totalSteps > 0 ? Math.round((completedSteps / totalSteps) * 100) : 0;
+  const failedStep = steps?.find((step) => step.status === "error");
+  const activeStep = steps?.find((step) => step.status === "loading");
+  const hasError = Boolean(error || failedStep);
+  const allStepsReady = totalSteps > 0 && completedSteps === totalSteps;
   const statusText = hasError
-    ? (error ??
-      steps?.find((s) => s.status === "error")?.error ??
-      "Something went wrong")
-    : (currentStep?.label ?? message ?? "Getting ready…");
-
-  // Fade + rise on mount
-  useEffect(() => {
-    Animated.parallel([
-      Animated.timing(fade, {
-        toValue: 1,
-        duration: 400,
-        useNativeDriver: true,
-      }),
-      Animated.timing(rise, {
-        toValue: 0,
-        duration: 400,
-        useNativeDriver: true,
-      }),
-    ]).start();
-  }, []);
-
-  // Plane gentle bob
-  useEffect(() => {
-    const anim = Animated.loop(
-      Animated.sequence([
-        Animated.timing(planeBob, {
-          toValue: -6,
-          duration: 900,
-          useNativeDriver: true,
-        }),
-        Animated.timing(planeBob, {
-          toValue: 0,
-          duration: 900,
-          useNativeDriver: true,
-        }),
-      ]),
-    );
-    anim.start();
-    return () => anim.stop();
-  }, []);
-
-  // Animate progress bar width
-  useEffect(() => {
-    Animated.timing(barWidth, {
-      toValue: pct,
-      duration: 300,
-      useNativeDriver: false,
-    }).start();
-  }, [pct]);
+    ? (error ?? failedStep?.error ?? "Unable to finish loading game data.")
+    : (activeStep?.label ??
+      message ??
+      (allStepsReady
+        ? "Opening the operations map"
+        : "Preparing your airline"));
+  const progressWidth = `${progress}%` as const;
 
   return (
-    <Animated.View
-      style={[
-        s.root,
-        overlay && s.overlay,
-        {
-          paddingTop: insets.top + Spacing.xxl,
-          paddingBottom: insets.bottom + Spacing.xl,
-          opacity: fade,
-        },
-      ]}
-    >
-      <Animated.View style={[s.content, { transform: [{ translateY: rise }] }]}>
-        {/* Plane icon */}
-        <Animated.View
-          style={[
-            s.iconWrap,
-            {
-              borderColor: accentColor + "33",
-              transform: [{ translateY: planeBob }],
-            },
-          ]}
-        >
-          <Ionicons
-            name={hasError ? "warning-outline" : "airplane"}
-            size={36}
-            color={accentColor}
+    <View style={[styles.root, overlay && styles.overlay]}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.content,
+          {
+            paddingTop: insets.top + Spacing.lg,
+            paddingBottom: insets.bottom + Spacing.xl,
+          },
+        ]}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.productHeader}>
+          <Image
+            accessibilityLabel="FlightCraft app icon"
+            contentFit="cover"
+            source={require("../../assets/images/icon.png")}
+            style={styles.appIcon}
           />
-        </Animated.View>
-
-        {/* Wordmark */}
-        <Text style={s.wordmark}>Flightcraft</Text>
-        <Text style={[s.tagline, { color: accentColor }]}>Airline Tycoon</Text>
-
-        {/* Progress area */}
-        <View style={s.progressArea}>
-          {/* Status text + percentage */}
-          <View style={s.statusRow}>
-            <Text
-              style={[s.statusTxt, hasError && { color: Colors.red }]}
-              numberOfLines={1}
-            >
-              {statusText}
-            </Text>
-            <Text style={[s.pct, { color: accentColor }]}>{pct}%</Text>
+          <View style={styles.productCopy}>
+            <Text style={styles.productName}>FlightCraft</Text>
+            <Text style={styles.productContext}>Operations startup</Text>
           </View>
-
-          {/* Progress bar */}
-          <View style={s.track}>
-            <Animated.View
-              style={[
-                s.fill,
-                {
-                  backgroundColor: accentColor,
-                  width: barWidth.interpolate({
-                    inputRange: [0, 100],
-                    outputRange: ["0%", "100%"],
-                  }),
-                },
-              ]}
+          {!hasError ? (
+            <ActivityIndicator
+              accessibilityLabel="Loading"
+              color={Colors.sky}
+              size="small"
             />
-          </View>
-
-          {/* Step dots — compact, no labels */}
-          {!!steps && steps.length > 0 && (
-            <View style={s.dots}>
-              {steps.map((step) => {
-                const dotColor =
-                  step.status === "done"
-                    ? Colors.green
-                    : step.status === "loading"
-                      ? Colors.sky
-                      : step.status === "error"
-                        ? Colors.red
-                        : Colors.dim + "44";
-                return (
-                  <View
-                    key={step.key}
-                    style={[s.dot, { backgroundColor: dotColor }]}
-                  />
-                );
-              })}
-            </View>
-          )}
+          ) : null}
         </View>
-      </Animated.View>
-    </Animated.View>
+
+        <View
+          accessibilityLiveRegion={hasError ? "assertive" : "polite"}
+          accessibilityRole={hasError ? "alert" : "summary"}
+          style={styles.statusBlock}
+        >
+          <Text accessibilityRole="header" style={styles.title}>
+            {hasError ? "Startup interrupted" : "Preparing operations"}
+          </Text>
+          <Text style={[styles.statusText, hasError && styles.statusTextError]}>
+            {statusText}
+          </Text>
+        </View>
+
+        {totalSteps > 0 ? (
+          <View style={styles.progressSection}>
+            <View style={styles.progressHeader}>
+              <Text style={styles.progressLabel}>
+                {completedSteps} of {totalSteps} systems ready
+              </Text>
+              <Text style={styles.progressValue}>{progress}%</Text>
+            </View>
+            <View
+              accessibilityLabel={`${completedSteps} of ${totalSteps} systems ready`}
+              accessibilityRole="progressbar"
+              accessibilityValue={{ min: 0, max: 100, now: progress }}
+              style={styles.progressTrack}
+            >
+              <View
+                style={[
+                  styles.progressFill,
+                  hasError && styles.progressFillError,
+                  { width: progressWidth },
+                ]}
+              />
+            </View>
+          </View>
+        ) : !hasError ? (
+          <View style={styles.indeterminateStatus}>
+            <ActivityIndicator color={Colors.sky} size="small" />
+            <Text style={styles.indeterminateText}>{statusText}</Text>
+          </View>
+        ) : null}
+
+        {steps && steps.length > 0 ? (
+          <View style={styles.manifest}>
+            <View style={styles.manifestHeader}>
+              <Text style={styles.manifestTitle}>Startup manifest</Text>
+              <Text style={styles.manifestColumn}>Status</Text>
+            </View>
+
+            {steps.map((step, index) => {
+              const presentation = stepPresentation(step.status);
+              const name = systemName(step.label);
+
+              return (
+                <View
+                  accessibilityLabel={`${name}. ${presentation.label}`}
+                  key={step.key}
+                  style={styles.stepRow}
+                >
+                  <Text style={styles.stepNumber}>
+                    {String(index + 1).padStart(2, "0")}
+                  </Text>
+                  <View
+                    style={[
+                      styles.stepIndicator,
+                      { borderColor: presentation.color },
+                    ]}
+                  >
+                    {step.status === "loading" ? (
+                      <ActivityIndicator
+                        color={presentation.color}
+                        size="small"
+                      />
+                    ) : (
+                      <Ionicons
+                        name={presentation.icon}
+                        size={14}
+                        color={presentation.color}
+                      />
+                    )}
+                  </View>
+                  <View style={styles.stepCopy}>
+                    <Text
+                      numberOfLines={1}
+                      style={[
+                        styles.stepLabel,
+                        step.status === "error" && styles.stepLabelError,
+                      ]}
+                    >
+                      {name}
+                    </Text>
+                    {step.status === "error" && step.error ? (
+                      <Text numberOfLines={2} style={styles.stepError}>
+                        {step.error}
+                      </Text>
+                    ) : null}
+                  </View>
+                  <Text
+                    style={[styles.stepState, { color: presentation.color }]}
+                  >
+                    {presentation.label}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+        ) : null}
+
+        <View style={styles.footerNote}>
+          <Ionicons
+            name={hasError ? "refresh-outline" : "phone-portrait-outline"}
+            size={17}
+            color={hasError ? Colors.red : Colors.dim}
+          />
+          <Text
+            style={[styles.footerNoteText, hasError && styles.footerNoteError]}
+          >
+            {hasError
+              ? "Close and reopen FlightCraft to retry startup."
+              : "Keep FlightCraft open until startup is complete."}
+          </Text>
+        </View>
+      </ScrollView>
+    </View>
   );
 }
 
-const s = StyleSheet.create({
+const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: Colors.bg,
-    alignItems: "center",
-    justifyContent: "center",
-    padding: Spacing.xl,
+    backgroundColor: Colors.surface,
   },
   overlay: {
     ...StyleSheet.absoluteFillObject,
     zIndex: 10,
-    flex: undefined,
   },
   content: {
+    flexGrow: 1,
     width: "100%",
-    maxWidth: 320,
-    alignItems: "center",
-    gap: Spacing.sm,
-  },
-
-  // Icon
-  iconWrap: {
-    width: 80,
-    height: 80,
-    borderRadius: 24,
-    borderWidth: 1,
-    backgroundColor: "rgba(56,189,248,0.07)",
-    alignItems: "center",
+    maxWidth: 560,
+    alignSelf: "center",
     justifyContent: "center",
-    marginBottom: Spacing.md,
+    paddingHorizontal: Spacing.lg,
   },
-
-  // Wordmark
-  wordmark: {
-    fontSize: 30,
+  productHeader: {
+    minHeight: 50,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.md,
+    marginBottom: Spacing.xxxl,
+  },
+  appIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: Radius.lg,
+  },
+  productCopy: {
+    flex: 1,
+    gap: Spacing.xxs,
+  },
+  productName: {
     color: Colors.text,
-    fontWeight: "900",
-    letterSpacing: -0.5,
+    fontSize: Typography.size.body,
+    fontWeight: Typography.weight.bold,
+    lineHeight: Typography.lineHeight.body,
   },
-  tagline: {
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 2,
-    opacity: 0.7,
-    marginBottom: Spacing.xl,
-    textTransform: "uppercase" as const,
+  productContext: {
+    color: Colors.muted,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
   },
-
-  // Progress
-  progressArea: {
-    width: "100%",
+  statusBlock: {
     gap: Spacing.sm,
+    marginBottom: Spacing.xl,
   },
-  statusRow: {
+  title: {
+    color: Colors.text,
+    fontSize: Typography.size.display,
+    fontWeight: Typography.weight.bold,
+    lineHeight: Typography.lineHeight.display,
+  },
+  statusText: {
+    color: Colors.muted,
+    fontSize: Typography.size.body,
+    lineHeight: Typography.lineHeight.body,
+  },
+  statusTextError: {
+    color: Colors.red,
+  },
+  progressSection: {
+    gap: Spacing.sm,
+    marginBottom: Spacing.xl,
+  },
+  progressHeader: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    gap: Spacing.md,
+  },
+  progressLabel: {
+    color: Colors.text,
+    fontSize: Typography.size.label,
+    fontWeight: Typography.weight.semibold,
+    lineHeight: Typography.lineHeight.label,
+  },
+  progressValue: {
+    color: Colors.skyDark,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+  },
+  progressTrack: {
+    height: 5,
+    overflow: "hidden",
+    backgroundColor: Colors.border,
+    borderRadius: Radius.sm,
+  },
+  progressFill: {
+    height: 5,
+    backgroundColor: Colors.sky,
+  },
+  progressFillError: {
+    backgroundColor: Colors.red,
+  },
+  indeterminateStatus: {
+    minHeight: 44,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+    marginBottom: Spacing.xl,
+  },
+  indeterminateText: {
+    flex: 1,
+    color: Colors.muted,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+  },
+  manifest: {
+    marginBottom: Spacing.xl,
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderSection,
+  },
+  manifestHeader: {
+    minHeight: 40,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: Spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderSection,
+  },
+  manifestTitle: {
+    color: Colors.text,
+    fontSize: Typography.size.label,
+    fontWeight: Typography.weight.bold,
+    lineHeight: Typography.lineHeight.label,
+  },
+  manifestColumn: {
+    color: Colors.dim,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
+  },
+  stepRow: {
+    minHeight: 54,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+    paddingVertical: Spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  stepNumber: {
+    width: 22,
+    color: Colors.dim,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
+  },
+  stepIndicator: {
+    width: 26,
+    height: 26,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderRadius: Radius.full,
+  },
+  stepCopy: {
+    flex: 1,
+    gap: Spacing.xxs,
+  },
+  stepLabel: {
+    color: Colors.text,
+    fontSize: Typography.size.label,
+    lineHeight: Typography.lineHeight.label,
+  },
+  stepLabelError: {
+    color: Colors.red,
+    fontWeight: Typography.weight.semibold,
+  },
+  stepError: {
+    color: Colors.red,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
+  },
+  stepState: {
+    flexShrink: 0,
+    fontFamily: Typography.mono,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
+  },
+  footerNote: {
+    minHeight: 44,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
     gap: Spacing.sm,
   },
-  statusTxt: {
-    flex: 1,
-    fontSize: 11,
-    color: Colors.muted,
-    fontWeight: "600",
+  footerNoteText: {
+    color: Colors.dim,
+    fontSize: Typography.size.caption,
+    lineHeight: Typography.lineHeight.caption,
+    textAlign: "center",
   },
-  pct: {
-    fontSize: 11,
-    fontWeight: "900",
-  },
-  track: {
-    height: 4,
-    backgroundColor: "rgba(255,255,255,.07)",
-    borderRadius: 999,
-    overflow: "hidden",
-  },
-  fill: {
-    height: "100%" as any,
-    borderRadius: 999,
-  },
-
-  // Step dots
-  dots: {
-    flexDirection: "row",
-    gap: 5,
-    justifyContent: "center",
-    marginTop: Spacing.xs ?? 4,
-  },
-  dot: {
-    width: 6,
-    height: 6,
-    borderRadius: 999,
+  footerNoteError: {
+    color: Colors.red,
   },
 });

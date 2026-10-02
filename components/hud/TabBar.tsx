@@ -1,87 +1,65 @@
 /**
- * Primary game navigation and route-creation action.
+ * Primary game navigation and map actions.
+ *
+ * Navigation stays flat and predictable. Route creation and settings remain
+ * available from a compact map toolbar instead of a floating center button.
  */
 
-import {
-  Colors,
-  MIN_TOUCH,
-  Palette,
-  Radius,
-  Shadow,
-  Spacing,
-  Typography,
-} from "@/constants/theme";
+import { Colors, Spacing, Typography } from "@/constants/theme";
 import { useHaptics } from "@/hooks/useHaptics";
 import type { ActiveSheet } from "@/store";
-import {
-  useActiveSheet,
-  useAirline,
-  useDailyMissions,
-  useGameStore,
-  useOwnedPlanes,
-  useRouteCount,
-  useRouteCreationActive,
-  useRoutes,
-} from "@/store";
+import { useActiveSheet, useGameStore, useRouteCreationActive } from "@/store";
 import { Ionicons } from "@expo/vector-icons";
-import { useEffect, useRef } from "react";
-import {
-  Animated,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from "react-native";
+import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-type TabId = Exclude<ActiveSheet, null>;
+type SheetTabId = Extract<ActiveSheet, "routes" | "fleet" | "finance">;
+type NavigationId = "map" | SheetTabId;
+type IconName = keyof typeof Ionicons.glyphMap;
 
 interface TabDefinition {
-  id: TabId;
+  id: NavigationId;
   label: string;
   accessibilityLabel: string;
-  icon: keyof typeof Ionicons.glyphMap;
+  icon: IconName;
+  activeIcon: IconName;
 }
 
-const LEFT_TABS: TabDefinition[] = [
+const TABS: TabDefinition[] = [
+  {
+    id: "map",
+    label: "Map",
+    accessibilityLabel: "Return to the airline map",
+    icon: "map-outline",
+    activeIcon: "map",
+  },
   {
     id: "routes",
     label: "Routes",
     accessibilityLabel: "Open route operations",
-    icon: "map-outline",
+    icon: "git-network-outline",
+    activeIcon: "git-network",
   },
   {
     id: "fleet",
     label: "Fleet",
     accessibilityLabel: "Open aircraft fleet",
     icon: "airplane-outline",
+    activeIcon: "airplane",
   },
-];
-
-const RIGHT_TABS: TabDefinition[] = [
   {
     id: "finance",
     label: "Finance",
     accessibilityLabel: "Open airline finances",
-    icon: "wallet-outline",
-  },
-  {
-    id: "settings",
-    label: "More",
-    accessibilityLabel: "Open game menu",
-    icon: "grid-outline",
+    icon: "bar-chart-outline",
+    activeIcon: "bar-chart",
   },
 ];
 
 export default function TabBar() {
   const insets = useSafeAreaInsets();
   const activeSheet = useActiveSheet();
-  const airline = useAirline();
-  const routeCount = useRouteCount();
   const isCreating = useRouteCreationActive();
-  const dailyMissions = useDailyMissions();
-  const ownedPlanes = useOwnedPlanes();
-  const routes = useRoutes();
   const haptics = useHaptics();
 
   const openSheet = useGameStore((state) => state.openSheet);
@@ -89,49 +67,24 @@ export default function TabBar() {
   const startCreation = useGameStore((state) => state.startRouteCreation);
   const clearCreation = useGameStore((state) => state.clearRouteCreation);
 
-  const airlineColor = airline?.color ?? Colors.sky;
-  const busyPlaneIds = new Set(
-    routes.filter((route) => route.active).map((route) => route.plane.id),
-  );
-  const idleCount = ownedPlanes.filter(
-    (plane) => !busyPlaneIds.has(plane.id),
-  ).length;
-  const pendingMissions = dailyMissions.filter(
-    (mission) => !mission.completed,
-  ).length;
-  const allMissionsDone = pendingMissions === 0 && dailyMissions.length > 0;
+  const activeTab: NavigationId =
+    activeSheet === "routes" ||
+    activeSheet === "fleet" ||
+    activeSheet === "finance"
+      ? activeSheet
+      : "map";
+  const showMapActions = activeSheet === null;
 
-  const actionPulse = useRef(new Animated.Value(1)).current;
-
-  useEffect(() => {
-    if (!isCreating) {
-      actionPulse.setValue(1);
-      return;
-    }
-
-    const animation = Animated.loop(
-      Animated.sequence([
-        Animated.timing(actionPulse, {
-          toValue: 1.06,
-          duration: 520,
-          useNativeDriver: true,
-        }),
-        Animated.timing(actionPulse, {
-          toValue: 1,
-          duration: 520,
-          useNativeDriver: true,
-        }),
-      ]),
-    );
-
-    animation.start();
-    return () => animation.stop();
-  }, [actionPulse, isCreating]);
-
-  const handleTab = (id: TabId) => {
+  const handleTab = (id: NavigationId) => {
     haptics.tap();
 
     if (isCreating) clearCreation();
+
+    if (id === "map") {
+      closeSheet();
+      return;
+    }
+
     if (activeSheet === id) closeSheet();
     else openSheet(id);
   };
@@ -148,57 +101,10 @@ export default function TabBar() {
     startCreation();
   };
 
-  const openMissions = () => {
-    haptics.confirm();
+  const openSettings = () => {
+    haptics.tap();
     if (isCreating) clearCreation();
-    openSheet("missions");
-  };
-
-  const renderTab = ({
-    id,
-    label,
-    accessibilityLabel,
-    icon,
-  }: TabDefinition) => {
-    const active = activeSheet === id && !isCreating;
-    const routesBadge = id === "routes" && routeCount > 0 && !isCreating;
-    const idleBadge = id === "fleet" && idleCount > 0 && !isCreating;
-
-    return (
-      <TouchableOpacity
-        key={id}
-        accessibilityLabel={accessibilityLabel}
-        accessibilityRole="button"
-        accessibilityState={{ selected: active }}
-        style={styles.tab}
-        onPress={() => handleTab(id)}
-        activeOpacity={0.68}
-      >
-        <View style={[styles.iconContainer, active && styles.iconContainerActive]}>
-          <Ionicons
-            name={active ? icon.replace("-outline", "") as typeof icon : icon}
-            size={21}
-            color={active ? Colors.sky : Colors.muted}
-          />
-
-          {routesBadge ? (
-            <View style={[styles.badge, styles.routeBadge]}>
-              <Text style={styles.badgeTextLight}>{routeCount}</Text>
-            </View>
-          ) : null}
-
-          {idleBadge ? (
-            <View style={[styles.badge, styles.idleBadge]}>
-              <Text style={styles.badgeTextDark}>{idleCount}</Text>
-            </View>
-          ) : null}
-        </View>
-
-        <Text style={[styles.tabLabel, active && styles.tabLabelActive]}>
-          {label}
-        </Text>
-      </TouchableOpacity>
-    );
+    openSheet("settings");
   };
 
   return (
@@ -208,72 +114,67 @@ export default function TabBar() {
         { paddingBottom: Math.max(insets.bottom, Spacing.sm) },
       ]}
     >
-      <View style={styles.brandRail}>
-        <View
-          style={[styles.brandRailAccent, { backgroundColor: airlineColor }]}
-        />
-      </View>
+      {showMapActions ? (
+        <View style={styles.mapActions}>
+          {!isCreating ? (
+            <TouchableOpacity
+              accessibilityLabel="Open game settings"
+              accessibilityRole="button"
+              activeOpacity={0.65}
+              onPress={openSettings}
+              style={styles.settingsButton}
+            >
+              <Ionicons name="settings-outline" size={20} color={Colors.text} />
+            </TouchableOpacity>
+          ) : null}
+
+          <TouchableOpacity
+            accessibilityLabel={
+              isCreating ? "Cancel route creation" : "Create a new route"
+            }
+            accessibilityRole="button"
+            activeOpacity={0.72}
+            onPress={handleRouteAction}
+            style={[styles.routeAction, isCreating && styles.routeActionCancel]}
+          >
+            <Ionicons
+              name={isCreating ? "close" : "add"}
+              size={20}
+              color={Colors.textOnColor}
+            />
+            <Text style={styles.routeActionLabel}>
+              {isCreating ? "Cancel route" : "New route"}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
 
       <View style={styles.navigation}>
-        {LEFT_TABS.map(renderTab)}
+        {TABS.map((tab) => {
+          const active = activeTab === tab.id;
 
-        <View style={styles.routeActionSlot}>
-          <Animated.View style={{ transform: [{ scale: actionPulse }] }}>
+          return (
             <TouchableOpacity
-              accessibilityHint="Long press to open missions"
-              accessibilityLabel={
-                isCreating ? "Cancel route creation" : "Create a new route"
-              }
+              key={tab.id}
+              accessibilityLabel={tab.accessibilityLabel}
               accessibilityRole="button"
-              style={[
-                styles.routeAction,
-                isCreating && styles.routeActionCancel,
-              ]}
-              onPress={handleRouteAction}
-              onLongPress={openMissions}
-              delayLongPress={400}
-              activeOpacity={0.76}
+              accessibilityState={{ selected: active }}
+              activeOpacity={0.65}
+              onPress={() => handleTab(tab.id)}
+              style={styles.tab}
             >
+              {active ? <View style={styles.activeIndicator} /> : null}
               <Ionicons
-                name={isCreating ? "close" : "add"}
-                size={27}
-                color={Colors.textOnColor}
+                name={active ? tab.activeIcon : tab.icon}
+                size={21}
+                color={active ? Colors.sky : Colors.muted}
               />
-
-              {!isCreating && dailyMissions.length > 0 ? (
-                <View
-                  style={[
-                    styles.missionBadge,
-                    allMissionsDone
-                      ? styles.missionBadgeComplete
-                      : styles.missionBadgePending,
-                  ]}
-                >
-                  <Text
-                    style={
-                      allMissionsDone
-                        ? styles.badgeTextLight
-                        : styles.badgeTextDark
-                    }
-                  >
-                    {allMissionsDone ? "✓" : pendingMissions}
-                  </Text>
-                </View>
-              ) : null}
+              <Text style={[styles.tabLabel, active && styles.tabLabelActive]}>
+                {tab.label}
+              </Text>
             </TouchableOpacity>
-          </Animated.View>
-
-          <Text
-            style={[
-              styles.routeActionLabel,
-              isCreating && styles.routeActionLabelCancel,
-            ]}
-          >
-            {isCreating ? "Cancel" : "New Route"}
-          </Text>
-        </View>
-
-        {RIGHT_TABS.map(renderTab)}
+          );
+        })}
       </View>
     </View>
   );
@@ -288,136 +189,76 @@ const styles = StyleSheet.create({
     zIndex: 20,
     backgroundColor: Colors.surface,
     borderTopWidth: 1,
-    borderTopColor: Colors.border,
-    shadowColor: Shadow.card.shadowColor,
-    shadowOffset: { width: 0, height: -2 },
-    shadowOpacity: Shadow.card.shadowOpacity,
-    shadowRadius: Shadow.card.shadowRadius,
-    elevation: Shadow.card.elevation,
+    borderTopColor: Colors.borderSection,
   },
-  brandRail: {
-    height: 3,
-    overflow: "hidden",
-    backgroundColor: Colors.skyDim,
-  },
-  brandRailAccent: {
-    width: "28%",
-    height: "100%",
-  },
-  navigation: {
-    minHeight: 67,
-    flexDirection: "row",
-    alignItems: "flex-start",
-    paddingTop: Spacing.xs,
-    paddingHorizontal: Spacing.xs,
-  },
-  tab: {
-    minHeight: MIN_TOUCH + 12,
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 2,
-    paddingVertical: 2,
-  },
-  iconContainer: {
-    width: 46,
-    height: 36,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: Radius.md,
-  },
-  iconContainerActive: {
-    backgroundColor: Palette.blueSoft,
-  },
-  tabLabel: {
-    color: Colors.muted,
-    fontFamily: Typography.mono,
-    fontSize: 8,
-    fontWeight: "700",
-    letterSpacing: 0.25,
-  },
-  tabLabelActive: {
-    color: Colors.skyDark,
-  },
-  badge: {
+  mapActions: {
     position: "absolute",
-    top: 0,
-    right: 1,
-    minWidth: 17,
-    height: 17,
+    top: -52,
+    right: Spacing.md,
+    height: 44,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+  },
+  settingsButton: {
+    width: 44,
+    height: 44,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 4,
-    borderWidth: 2,
-    borderColor: Colors.surface,
-    borderRadius: Radius.full,
-  },
-  routeBadge: {
-    backgroundColor: Colors.sky,
-  },
-  idleBadge: {
-    backgroundColor: Colors.amber,
-  },
-  badgeTextLight: {
-    color: Colors.textOnColor,
-    fontFamily: Typography.mono,
-    fontSize: 8,
-    fontWeight: "700",
-  },
-  badgeTextDark: {
-    color: Colors.text,
-    fontFamily: Typography.mono,
-    fontSize: 8,
-    fontWeight: "700",
-  },
-  routeActionSlot: {
-    width: 76,
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 3,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.borderSection,
+    borderRadius: 5,
   },
   routeAction: {
-    width: 54,
-    height: 54,
-    marginTop: -18,
+    minWidth: 122,
+    height: 44,
+    flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
+    gap: Spacing.sm,
+    paddingHorizontal: Spacing.md,
     backgroundColor: Colors.sky,
-    borderWidth: 3,
-    borderColor: Colors.surface,
-    borderRadius: Radius.full,
-    ...Shadow.floating,
+    borderRadius: 5,
   },
   routeActionCancel: {
     backgroundColor: Colors.red,
   },
   routeActionLabel: {
-    color: Colors.skyDark,
-    fontFamily: Typography.mono,
-    fontSize: 8,
-    fontWeight: "700",
-    letterSpacing: 0.25,
+    color: Colors.textOnColor,
+    fontSize: 13,
+    fontWeight: Typography.weight.semibold,
+    lineHeight: 18,
   },
-  routeActionLabelCancel: {
-    color: Colors.red,
+  navigation: {
+    height: 70,
+    flexDirection: "row",
+    alignItems: "stretch",
+    paddingHorizontal: Spacing.xs,
   },
-  missionBadge: {
-    position: "absolute",
-    top: -4,
-    right: -4,
-    minWidth: 20,
-    height: 20,
+  tab: {
+    position: "relative",
+    flex: 1,
+    minWidth: 44,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 4,
-    borderWidth: 2,
-    borderColor: Colors.surface,
-    borderRadius: Radius.full,
+    gap: Spacing.xxs,
   },
-  missionBadgeComplete: {
-    backgroundColor: Colors.green,
+  activeIndicator: {
+    position: "absolute",
+    top: 0,
+    width: 28,
+    height: 2,
+    backgroundColor: Colors.sky,
   },
-  missionBadgePending: {
-    backgroundColor: Colors.amber,
+  tabLabel: {
+    color: Colors.muted,
+    fontSize: 11,
+    fontWeight: Typography.weight.medium,
+    lineHeight: 15,
+  },
+  tabLabelActive: {
+    color: Colors.skyDark,
+    fontWeight: Typography.weight.semibold,
   },
 });
